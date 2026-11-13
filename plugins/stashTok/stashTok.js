@@ -620,10 +620,10 @@
               }
             }
             if (video.paused) {
-              video.play().then(() => setPlaying(true)).catch(() => {});
+              playGuarded(video);
               window.setTimeout(() => {
                 const nowActive = stage.querySelector(".stk-video.stk-active");
-                if (nowActive && nowActive.paused) nowActive.play().catch(() => {});
+                if (nowActive && nowActive.paused) playGuarded(nowActive);
               }, 220);
             } else {
               setPlaying(true);
@@ -658,7 +658,7 @@
             /* ignore */
           }
         }
-        video.play().catch(() => setPlaying(false));
+        playGuarded(video);
       };
       video.addEventListener("loadedmetadata", onLoaded);
       video.addEventListener("canplay", onLoaded);
@@ -730,6 +730,21 @@
 
     /* ---- zoom ------------------------------------------------------ */
 
+    const playGuarded = useCallback((video) => {
+      if (!video) return;
+      const started = video.play();
+      if (started && started.catch) {
+        started.then(() => setPlaying(true)).catch(() => {
+          // autoplay-with-sound was refused: keep the video moving, muted
+          video.muted = true;
+          setMuted(true);
+          video.play().then(() => setPlaying(true)).catch(() => setPlaying(false));
+        });
+      } else {
+        setPlaying(true);
+      }
+    }, []);
+
     const applyTransform = useCallback(() => {
       const video = videoRef.current;
       if (!video) return;
@@ -760,7 +775,7 @@
       const video = videoRef.current;
       if (!video) return;
       video.currentTime = item && item.startAt ? item.startAt : 0;
-      video.play().catch(() => {});
+      playGuarded(video);
     }, [item]);
 
     const goNext = useCallback(() => {
@@ -967,29 +982,32 @@
       gesture.current = null;
 
       if (g.mode === "press" && !g.moved) {
-        const now = performance.now();
-        if (lastTapAt.current && now - lastTapAt.current < 280) {
-          window.clearTimeout(tapTimer.current);
-          lastTapAt.current = 0;
-          if (tf.current.s > 1.02) resetZoom();
-          else toggleFill();
+        const video = videoRef.current;
+        if (!video) return;
+        if (tf.current.s > 1.02) {
+          resetZoom();
           return;
         }
-        lastTapAt.current = now;
-        window.clearTimeout(tapTimer.current);
-        tapTimer.current = window.setTimeout(() => {
-          const video = videoRef.current;
-          if (video) {
-            if (video.paused) {
-              video.play().catch(() => {});
-              setPlaying(true);
-            } else {
-              video.pause();
-              setPlaying(false);
-            }
+        const now = performance.now();
+        const isDouble = lastTapAt.current && now - lastTapAt.current < 280;
+        lastTapAt.current = isDouble ? 0 : now;
+        if (isDouble) {
+          // second tap: undo the toggle the first tap applied, then fill the frame
+          if (video.paused) playGuarded(video);
+          else {
+            video.pause();
+            setPlaying(false);
           }
-          lastTapAt.current = 0;
-        }, 240);
+          toggleFill();
+          return;
+        }
+        // toggle immediately: waiting for a double-tap timer puts play() outside
+        // the user gesture, and the browser then refuses to start playback
+        if (video.paused) playGuarded(video);
+        else {
+          video.pause();
+          setPlaying(false);
+        }
         return;
       }
 
