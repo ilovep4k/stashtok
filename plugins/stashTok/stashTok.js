@@ -29,7 +29,7 @@
   const PAGE_SIZE = 8;
   const HOLD_MS = 380;
   const SWIPE_PX = 70;
-  const MAX_ZOOM = 4;
+  const MAX_ZOOM = 8;
   const HEART_POP_MS = 700;
 
   /* ------------------------------------------------------------------ */
@@ -516,7 +516,6 @@
     const [ready, setReady] = useState(false);
     const [streamFallback, setStreamFallback] = useState(false);
     const [failCount, setFailCount] = useState(0);
-    const [fill, setFill] = useState(() => window.localStorage.getItem("stashTok.fill") === "1");
     const [rotation, setRotation] = useState(0);
     const [speed, setSpeed] = useState(() => Number(window.localStorage.getItem("stashTok.speed")) || 1);
     const [muted, setMuted] = useState(cfg.autoplayMuted);
@@ -700,14 +699,31 @@
       }
     }, [speed, index]);
 
+    /** the scale at which the video covers the stage, i.e. a pinch-fill */
+    function coverScale() {
+      const video = videoRef.current;
+      const stage = stageRef.current;
+      if (!video || !stage) return 1;
+      const vw = video.videoWidth || 16;
+      const vh = video.videoHeight || 9;
+      const ew = stage.clientWidth || 1;
+      const eh = stage.clientHeight || 1;
+      const videoAspect = vw / vh;
+      const stageAspect = ew / eh;
+      const contentW = stageAspect > videoAspect ? eh * videoAspect : ew;
+      const contentH = stageAspect > videoAspect ? eh : ew / videoAspect;
+      return Math.max(ew / contentW, eh / contentH);
+    }
+
     function toggleFill() {
-      const next = !fill;
-      setFill(next);
-      try {
-        window.localStorage.setItem("stashTok.fill", next ? "1" : "0");
-      } catch (e) {
-        /* ignore */
+      if (tf.current.s > 1.02) {
+        resetZoom();
+        return;
       }
+      const target = clamp(coverScale(), 1, MAX_ZOOM);
+      tf.current = { s: target, x: 0, y: 0 };
+      applyTransform();
+      buzz(6);
     }
 
     function rotate(delta) {
@@ -1128,7 +1144,7 @@
 
     return h(
       "div",
-      { className: "stash-tok stk-embedded" + (hud ? "" : " stk-hud-hidden") + (fill ? " stk-fill" : "") },
+      { className: "stash-tok stk-embedded" + (hud ? "" : " stk-hud-hidden") },
       h(
         "div",
         {
@@ -1200,7 +1216,7 @@
                   inset: 0,
                   width: "100%",
                   height: "100%",
-                  objectFit: fill ? "cover" : "contain",
+                  objectFit: "contain",
                   opacity: active ? 1 : 0,
                   pointerEvents: active ? "auto" : "none",
                   zIndex: active ? 2 : 1,
