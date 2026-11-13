@@ -519,7 +519,7 @@
     return {
       source: raw.source === "markers" ? "markers" : "scenes",
       heartRating: Number(raw.heartRating) || 80,
-      blurBackdrop: raw.blurBackdrop !== false,
+      blurBackdrop: raw.blurBackdrop === true,
       showMarkerTicks: raw.showMarkerTicks !== false,
       holdSpeed: clamp(Number(raw.holdSpeed) || 2, 1, 8),
       autoplayMuted: raw.autoplayMuted !== false,
@@ -1098,9 +1098,27 @@
       }
 
       if (g.mode === "swipe") {
-        if (dragY < -SWIPE_PX) goNext();
-        else if (dragY > SWIPE_PX) goPrev();
-        setDragY(0);
+        const wrap = wrapRef.current;
+        const stageEl = stageRef.current;
+        const height = stageEl ? stageEl.getBoundingClientRect().height : 0;
+        const direction = dragY < -SWIPE_PX ? 1 : dragY > SWIPE_PX ? -1 : 0;
+        if (!direction || !wrap || !height) {
+          setDragY(0);
+          if (wrap) wrap.style.transition = "";
+        } else {
+          // slide the strip all the way out, then swap underneath it
+          wrap.style.transition = "transform 180ms ease-out";
+          setDragY(direction > 0 ? -height : height);
+          window.setTimeout(() => {
+            if (direction > 0) goNext();
+            else goPrev();
+            wrap.style.transition = "none";
+            setDragY(0);
+            requestAnimationFrame(() => {
+              wrap.style.transition = "";
+            });
+          }, 180);
+        }
       }
       if (g.mode === "seek") setScrubbing(false);
       if (g.mode === "pan") poke();
@@ -1283,7 +1301,9 @@
                 style: {
                   // inline so a stale CSS cache can never stack the layers vertically
                   position: "absolute",
-                  inset: 0,
+                  left: 0,
+                  right: 0,
+                  top: (at - index) * 100 + "%",
                   width: "100%",
                   height: "100%",
                   objectFit: "contain",
@@ -3014,7 +3034,7 @@
 
     return h(
       "div",
-      { className: "stash-tok-wrap", ref: shellRef },
+      { className: "stash-tok-wrap" + (locked ? " stk-locked" : ""), ref: shellRef },
       h(
         "div",
         { style: { position: "fixed", inset: 0, zIndex: 9000, display: "flex", flexDirection: "column", background: "#000" } },

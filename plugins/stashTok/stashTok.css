@@ -960,7 +960,8 @@
 .stk-lock-cover {
   position: absolute;
   inset: 0;
-  z-index: 950;
+  /* the feed root itself sits at z-index 9000, so the curtain must beat it */
+  z-index: 99990;
   background: #000;
   visibility: hidden;
   opacity: 0;
@@ -970,7 +971,7 @@
 .stk-lock {
   position: absolute;
   inset: 0;
-  z-index: 960;
+  z-index: 100000;
   background: #000;
   display: flex;
   flex-direction: column;
@@ -1000,3 +1001,10 @@
   border: 1px solid #2a2a2a;
   color: #fff;
 }
+
+/* always black behind the feed, like TikTok / Reels / Shorts */
+.stash-tok-wrap, .stash-tok, .stk-stage, .stk-embedded { background: #000 !important; }
+.stk-backdrop { display: none !important; }
+
+/* when the privacy lock is up, the player must not paint at all */
+.stk-locked .stk-stage { visibility: hidden !important; }
