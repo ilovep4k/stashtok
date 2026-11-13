@@ -1010,3 +1010,21 @@
 
 /* when the privacy lock is up, the player must not paint at all */
 .stk-locked .stk-stage { visibility: hidden !important; }
+
+/* sort / density controls read as controls, not as a fourth tab */
+.stk-tabs .stk-sort-pill,
+.stk-sort-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  font-size: 12px;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+.stk-sort-pill svg { opacity: 0.85; }

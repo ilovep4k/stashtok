@@ -51,6 +51,7 @@
     x: "M6 6l12 12M18 6 6 18",
     plus: "M12 5v14M5 12h14",
     chevron: "M9 6l6 6-6 6",
+    sort: "M7 4v16M4 17l3 3 3-3M17 20V4M14 7l3-3 3 3",
     sparkle: "M12 3.5 13.8 9l5.7 1.8L13.8 13 12 18.5 10.2 13 4.5 10.8 10.2 9 12 3.5z",
     rotate: "M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4",
   };
@@ -1297,7 +1298,6 @@
                     },
                 className: "stk-video" + (active ? " stk-active" : ""),
                 src: active && streamFallback ? source.signed : source.plain,
-                poster: rel(entry.scene.paths && entry.scene.paths.screenshot),
                 playsInline: true,
                 autoPlay: active,
                 muted: active ? muted : true,
@@ -2025,10 +2025,16 @@
         h("button", { className: tab === "scenes" ? "stk-active" : "", onClick: () => setTab("scenes") }, `Scenes ${performer.scene_count}`),
         h("button", { className: tab === "markers" ? "stk-active" : "", onClick: () => setTab("markers") }, markerCount ? `Markers ${markerCount}` : "Markers"),
         h("button", { className: tab === "images" ? "stk-active" : "", onClick: () => setTab("images") }, `Images ${performer.image_count || 0}`),
-        h("button", { className: "stk-sort-btn", onClick: () => setSortOpen(!sortOpen) }, sortLabel),
         h(
           "button",
-          { className: "stk-sort-btn", onClick: () => setDensity(density === 3 ? 5 : 3) },
+          { className: "stk-sort-btn stk-sort-pill", onClick: () => setSortOpen(!sortOpen) },
+          h(Icon, { name: "sort", size: 13 }),
+          sortLabel,
+          " ▾"
+        ),
+        h(
+          "button",
+          { className: "stk-sort-btn stk-sort-pill", onClick: () => setDensity(density === 3 ? 5 : 3) },
           density === 3 ? "▦" : "▥"
         )
       ),
@@ -2045,6 +2051,11 @@
                 className: key === sort ? "stk-sort-on" : "",
                 onClick: () => {
                   setSort(key);
+                  try {
+                    window.localStorage.setItem("stashTok.perfSort", key);
+                  } catch (e) {
+                    /* ignore */
+                  }
                   setSortOpen(false);
                 },
               },
@@ -2221,6 +2232,11 @@
                 className: key === sort ? "stk-sort-on" : "",
                 onClick: () => {
                   setSort(key);
+                  try {
+                    window.localStorage.setItem("stashTok.perfSort", key);
+                  } catch (e) {
+                    /* ignore */
+                  }
                   setSortOpen(false);
                 },
               },
