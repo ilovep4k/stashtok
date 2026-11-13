@@ -52,6 +52,7 @@
     plus: "M12 5v14M5 12h14",
     chevron: "M9 6l6 6-6 6",
     sparkle: "M12 3.5 13.8 9l5.7 1.8L13.8 13 12 18.5 10.2 13 4.5 10.8 10.2 9 12 3.5z",
+    rotate: "M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4",
   };
 
   function Icon({ name, size = 22, className = "" }) {
@@ -404,10 +405,9 @@
     return {
       source: raw.source === "markers" ? "markers" : "scenes",
       heartRating: Number(raw.heartRating) || 80,
-      stopAtMarkerEnd: raw.stopAtMarkerEnd === true,
       blurBackdrop: raw.blurBackdrop !== false,
       showMarkerTicks: raw.showMarkerTicks !== false,
-      holdSpeed: clamp(Number(raw.holdSpeed) || 3, 1, 8),
+      holdSpeed: clamp(Number(raw.holdSpeed) || 2, 1, 8),
       autoplayMuted: raw.autoplayMuted !== false,
       doubleTapHeart: raw.doubleTapHeart !== false,
       minDuration: raw.minDuration == null ? 30 : Number(raw.minDuration),
@@ -449,6 +449,9 @@
     const [ready, setReady] = useState(false);
     const [streamFallback, setStreamFallback] = useState(false);
     const [failCount, setFailCount] = useState(0);
+    const [fill, setFill] = useState(() => window.localStorage.getItem("stashTok.fill") === "1");
+    const [rotation, setRotation] = useState(0);
+    const [speed, setSpeed] = useState(() => Number(window.localStorage.getItem("stashTok.speed")) || 1);
     const [muted, setMuted] = useState(cfg.autoplayMuted);
     const [hud, setHud] = useState(true);
     const [hudTick, setHudTick] = useState(0);
@@ -578,6 +581,31 @@
       if (video) video.muted = muted;
     }, [muted]);
 
+    useEffect(() => {
+      const video = videoRef.current;
+      if (video && !rateBadge) video.playbackRate = speed;
+      try {
+        window.localStorage.setItem("stashTok.speed", String(speed));
+      } catch (e) {
+        /* ignore */
+      }
+    }, [speed, index]);
+
+    function toggleFill() {
+      const next = !fill;
+      setFill(next);
+      try {
+        window.localStorage.setItem("stashTok.fill", next ? "1" : "0");
+      } catch (e) {
+        /* ignore */
+      }
+    }
+
+    function rotate(delta) {
+      setRotation((value) => (value + delta + 360) % 360);
+      buzz(8);
+    }
+
     /* ---- hud auto hide --------------------------------------------- */
 
     const poke = useCallback(() => {
@@ -618,6 +646,13 @@
     }, [applyTransform]);
 
     /* ---- navigation ------------------------------------------------ */
+
+    const loopCurrent = useCallback(() => {
+      const video = videoRef.current;
+      if (!video) return;
+      video.currentTime = item && item.startAt ? item.startAt : 0;
+      video.play().catch(() => {});
+    }, [item]);
 
     const goNext = useCallback(() => {
       resetZoom();
@@ -666,7 +701,7 @@
         cancelAnimationFrame(rafRef.current);
         rafRef.current = 0;
       }
-      if (video) video.playbackRate = 1;
+      if (video) video.playbackRate = speed;
       setRateBadge("");
     }, []);
 
@@ -675,21 +710,10 @@
         const video = videoRef.current;
         if (!video) return;
         poke();
-        if (side === "right") {
+        if (side === "left" || side === "right") {
           video.playbackRate = cfg.holdSpeed;
           setRateBadge(`${cfg.holdSpeed}x`);
           buzz(8);
-        } else if (side === "left") {
-          setRateBadge("rewind");
-          buzz(8);
-          let last = performance.now();
-          const step = (now) => {
-            const dt = (now - last) / 1000;
-            last = now;
-            video.currentTime = Math.max(0, video.currentTime - dt * cfg.holdSpeed * 2);
-            rafRef.current = requestAnimationFrame(step);
-          };
-          rafRef.current = requestAnimationFrame(step);
         } else {
           setSheet("actions");
         }
@@ -836,7 +860,7 @@
           window.clearTimeout(tapTimer.current);
           lastTapAt.current = 0;
           if (tf.current.s > 1.02) resetZoom();
-          else if (cfg.doubleTapHeart) toggleHeart();
+          else toggleFill();
           return;
         }
         lastTapAt.current = now;
@@ -913,10 +937,6 @@
       if (!video) return;
       setTime(video.currentTime);
       if (!duration && video.duration) setDuration(video.duration);
-      if (item && item.endAt && cfg.stopAtMarkerEnd && video.currentTime >= item.endAt) {
-        video.pause();
-        goNext();
-      }
     };
 
     /* ---- render ---------------------------------------------------- */
@@ -969,7 +989,7 @@
 
     return h(
       "div",
-      { className: "stash-tok stk-embedded" + (hud ? "" : " stk-hud-hidden") },
+      { className: "stash-tok stk-embedded" + (hud ? "" : " stk-hud-hidden") + (fill ? " stk-fill" : "") },
       h(
         "div",
         {
@@ -993,7 +1013,10 @@
           {
             className: "stk-dragwrap" + (dragY ? " stk-dragging" : ""),
             ref: wrapRef,
-            style: { transform: dragY ? `translateY(${dragY}px)` : undefined },
+            style: {
+              transform: `translateY(${dragY || 0}px) rotate(${rotation}deg)`,
+              transition: dragY || rotation ? "none" : undefined,
+            },
           },
           h("video", {
             key: item.key + (streamFallback ? "-signed" : ""),
@@ -1012,7 +1035,7 @@
             onTimeUpdate,
             onPlay: () => setPlaying(true),
             onPause: () => setPlaying(false),
-            onEnded: goNext,
+            onEnded: loopCurrent,
             onError: () => {
               setPlaying(false);
               if (!streamFallback) {
@@ -1023,6 +1046,17 @@
               setFailCount((count) => count + 1);
               window.setTimeout(goNext, 600);
             },
+          })
+        ),
+
+        items.slice(index + 1, index + 3).map((next) =>
+          h("video", {
+            key: "pre-" + next.key,
+            className: "stk-preload",
+            src: streamSource(next.scene).plain,
+            preload: "auto",
+            muted: true,
+            playsInline: true,
           })
         ),
 
@@ -1163,11 +1197,22 @@
             {
               onClick: (event) => {
                 event.stopPropagation();
+                rotate(90);
+              },
+            },
+            h(Icon, { name: "rotate", size: 26 }),
+            h("span", null, rotation ? rotation + "°" : "Rotate")
+          ),
+          h(
+            "button",
+            {
+              onClick: (event) => {
+                event.stopPropagation();
                 setSheet("actions");
               },
             },
             h(Icon, { name: "sparkle", size: 26 }),
-            h("span", null, "More")
+            h("span", null, speed === 1 ? "More" : speed + "x")
           )
         ),
 
@@ -1233,6 +1278,8 @@
             rating,
             onRate: commitRating,
             onHeart: toggleHeart,
+            speed,
+            onSpeed: setSpeed,
             onClose: () => setSheet(null),
             onOpenPerformer,
             onOpenTag,
@@ -1315,7 +1362,7 @@
     );
   }
 
-  function Sheet({ mode, item, cfg, rating, onRate, onHeart, onClose, onOpenPerformer, onOpenTag, onDeriveFeed, onJump, onNext }) {
+  function Sheet({ mode, item, cfg, rating, onRate, onHeart, speed, onSpeed, onClose, onOpenPerformer, onOpenTag, onDeriveFeed, onJump, onNext }) {
     const scene = item.scene;
     const file = (scene.files && scene.files[0]) || {};
     const markers = scene.scene_markers || [];
@@ -1375,6 +1422,23 @@
             onKeyUp: () => onRate(draft === 0 ? null : draft),
           }),
           h("b", { style: { fontVariantNumeric: "tabular-nums", fontSize: "12px" } }, draft || "—")
+        ),
+
+        h("h4", null, "Playback speed"),
+        h(
+          "div",
+          { className: "stk-speed-row" },
+          [0.5, 0.75, 1, 1.25, 1.5, 2].map((rate) =>
+            h(
+              "button",
+              {
+                key: rate,
+                className: "stk-tagpill" + (speed === rate ? " stk-speed-on" : ""),
+                onClick: () => onSpeed(rate),
+              },
+              rate + "x"
+            )
+          )
         ),
 
         performers.length > 0 &&

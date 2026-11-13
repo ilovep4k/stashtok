@@ -16,10 +16,6 @@ settings:
     displayName: Heart rating
     description: Rating written to a scene when you heart it (0-100). Hearts and any rating you set put a scene in the Favorites feed.
     type: NUMBER
-  stopAtMarkerEnd:
-    displayName: Stop at marker end
-    description: When the item is a marker, advance to the next item when the marker ends instead of playing the rest of the scene.
-    type: BOOLEAN
   blurBackdrop:
     displayName: Blurred backdrop
     description: Fill the space around non-9:16 video with a blurred copy of the scene screenshot.
@@ -30,7 +26,7 @@ settings:
     type: BOOLEAN
   holdSpeed:
     displayName: Hold-to-fast-forward rate
-    description: Playback rate while holding the right side of the screen (1-8).
+    description: Playback rate while holding the right side of the screen (1-8, default 2).
     type: NUMBER
   autoplayMuted:
     displayName: Start muted

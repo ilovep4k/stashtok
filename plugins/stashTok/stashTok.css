@@ -838,3 +838,31 @@
     border-right: 0;
   }
 }
+
+/* no text selection, no long-press callout, no tap highlight anywhere in the app */
+.stash-tok, .stash-tok * {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.stk-stage { -webkit-tap-highlight-color: transparent; }
+
+/* double-tap fill */
+.stk-fill .stk-video { object-fit: cover; }
+
+/* hidden preloaders for the next two items */
+.stk-preload {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 2px;
+  height: 2px;
+  opacity: 0.01;
+  pointer-events: none;
+}
+
+/* playback speed chips */
+.stk-speed-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.stk-speed-on { background: #ff2d55; border-color: #ff2d55; color: #fff; }
