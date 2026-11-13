@@ -953,3 +953,5 @@
   user-select: none;
   -webkit-touch-callout: none;
 }
+
+.stk-btn-danger { border-color: #ff2d55 !important; color: #ff5f7a !important; }

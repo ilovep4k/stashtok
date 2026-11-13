@@ -28,6 +28,10 @@ settings:
     displayName: Hold-to-fast-forward rate
     description: Playback rate while holding the right side of the screen (1-8, default 2).
     type: NUMBER
+  flagTag:
+    displayName: Deletion flag tag
+    description: Tag applied when you flag a scene for deletion. Flagged scenes are hidden from feeds; review and delete them in Stash.
+    type: STRING
   randomStart:
     displayName: Start mid-scene
     description: Start long scenes at a random marker, or a random fifth of the scene when it has none, instead of at the beginning.

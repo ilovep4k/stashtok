@@ -201,6 +201,48 @@
   const BAD_EXT = ["wmv", "avi", "flv", "mpg", "mpeg", "vob", "ts", "m2ts", "rmvb", "divx", "ogv", "3gp", "asf"];
   const BAD_CODEC = ["wmv1", "wmv2", "wmv3", "vc-1", "msmpeg4", "mpeg4", "mpeg2video", "mpeg1video", "rv40", "h263", "msvideo1"];
 
+  const FLAG_TAG_FALLBACK = "stashtok-delete";
+
+  let flagTagId = null;
+
+  async function ensureFlagTag(name) {
+    if (flagTagId) return flagTagId;
+    const found = await gql(
+      `query StashTokFindFlagTag($q: String) { findTags(filter: { q: $q, per_page: 20 }) { tags { id name } } }`,
+      { q: name }
+    );
+    const exact = ((found.findTags && found.findTags.tags) || []).find(
+      (tag) => tag.name.toLowerCase() === name.toLowerCase()
+    );
+    if (exact) {
+      flagTagId = exact.id;
+      return flagTagId;
+    }
+    const created = await gql(
+      `mutation StashTokMakeFlagTag($name: String!) { tagCreate(input: { name: $name }) { id name } }`,
+      { name }
+    );
+    flagTagId = created.tagCreate.id;
+    return flagTagId;
+  }
+
+  async function flagScene(scene, cfg) {
+    const name = (cfg && cfg.flagTag) || FLAG_TAG_FALLBACK;
+    const tagId = await ensureFlagTag(name);
+    const existing = (scene.tags || []).map((tag) => tag.id);
+    await gql(
+      `mutation StashTokFlagScene($id: ID!, $tags: [ID!]) {
+        sceneUpdate(input: { id: $id, tag_ids: $tags }) { id }
+      }`,
+      { id: scene.id, tags: existing.concat([tagId]) }
+    );
+  }
+
+  function isFlagged(scene, cfg) {
+    const name = ((cfg && cfg.flagTag) || FLAG_TAG_FALLBACK).toLowerCase();
+    return (scene.tags || []).some((tag) => String(tag.name).toLowerCase() === name);
+  }
+
   function isPlayable(scene) {
     const file = (scene.files && scene.files[0]) || {};
     const path = String(file.path || (scene.paths && scene.paths.stream) || "");
@@ -334,7 +376,7 @@
     return {
       count: (data.findScenes && data.findScenes.count) || 0,
       items: scenes
-        .filter((scene) => scene.files && scene.files.length && isPlayable(scene))
+        .filter((scene) => scene.files && scene.files.length && isPlayable(scene) && !isFlagged(scene, cfg))
         .map((scene) => ({ key: "s" + scene.id, scene, startAt: pickStartAt(scene, cfg, spec), endAt: 0 })),
     };
   }
@@ -373,7 +415,14 @@
     return {
       count: (data.findSceneMarkers && data.findSceneMarkers.count) || 0,
       items: markers
-        .filter((marker) => marker.scene && marker.scene.files && marker.scene.files.length && isPlayable(marker.scene))
+        .filter(
+          (marker) =>
+            marker.scene &&
+            marker.scene.files &&
+            marker.scene.files.length &&
+            isPlayable(marker.scene) &&
+            !isFlagged(marker.scene, cfg)
+        )
         .map((marker) => ({
           key: "m" + marker.id,
           scene: marker.scene,
@@ -411,7 +460,7 @@
     return {
       count: (data2.findScenes && data2.findScenes.count) || 0,
       items: scenes
-        .filter((scene) => scene.files && scene.files.length && isPlayable(scene))
+        .filter((scene) => scene.files && scene.files.length && isPlayable(scene) && !isFlagged(scene, cfg))
         .map((scene) => ({ key: "s" + scene.id, scene, startAt: pickStartAt(scene, cfg, spec), endAt: 0 })),
     };
   }
@@ -476,6 +525,7 @@
       autoplayMuted: raw.autoplayMuted !== false,
       randomStart: raw.randomStart !== false,
       longSceneSeconds: Number(raw.longSceneSeconds) || 300,
+      flagTag: raw.flagTag || "stashtok-delete",
       doubleTapHeart: raw.doubleTapHeart !== false,
       minDuration: raw.minDuration == null ? 30 : Number(raw.minDuration),
     };
@@ -567,11 +617,20 @@
           if (reset) {
             pageRef.current = 2;
             exhaustedRef.current = result.items.length === 0;
-            const list = result.items.slice();
+            let list = result.items.slice();
             if (spec.startSceneId) {
               // open on the scene the user tapped, wherever it sits in the list
               const at = list.findIndex((entry) => String(entry.scene.id) === String(spec.startSceneId));
               if (at > 0) list.unshift(list.splice(at, 1)[0]);
+              else if (at < 0) {
+                // it may not be on page 1 at all: fetch it and lead with it
+                try {
+                  const single = await fetchSceneById({ sceneId: spec.startSceneId, startAt: spec.startAt });
+                  if (single.items.length) list.unshift(single.items[0]);
+                } catch (err) {
+                  /* fall through to the normal order */
+                }
+              }
             }
             if (reset && spec.startAt && list.length) list[0] = Object.assign({}, list[0], { startAt: spec.startAt });
             setItems(list);
@@ -724,6 +783,17 @@
       tf.current = { s: target, x: 0, y: 0 };
       applyTransform();
       buzz(6);
+    }
+
+    function flagCurrent() {
+      if (!item) return;
+      setSheet(null);
+      flagScene(item.scene, cfg)
+        .then(() => {
+          buzz(40);
+          goNext();
+        })
+        .catch(() => {});
     }
 
     function rotate(delta) {
@@ -1428,6 +1498,7 @@
             speed,
             onSpeed: setSpeed,
             onRotate: rotate,
+            onFlag: flagCurrent,
             onClose: () => setSheet(null),
             onOpenPerformer,
             onOpenTag,
@@ -1509,7 +1580,7 @@
     );
   }
 
-  function Sheet({ mode, item, cfg, rating, onRate, onHeart, speed, onSpeed, onRotate, onClose, onOpenPerformer, onOpenTag, onDeriveFeed, onJump, onNext }) {
+  function Sheet({ mode, item, cfg, rating, onRate, onHeart, speed, onSpeed, onRotate, onFlag, onClose, onOpenPerformer, onOpenTag, onDeriveFeed, onJump, onNext }) {
     const scene = item.scene;
     const file = (scene.files && scene.files[0]) || {};
     const markers = scene.scene_markers || [];
@@ -1640,6 +1711,12 @@
             { className: "stk-btn", onClick: () => onRotate(90) },
             h(Icon, { name: "rotate", size: 16 }),
             "Rotate"
+          ),
+          h(
+            "button",
+            { className: "stk-btn stk-btn-danger", onClick: onFlag },
+            h(Icon, { name: "flag", size: 16 }),
+            "Flag for deletion"
           ),
           h(
             "button",
