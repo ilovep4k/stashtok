@@ -48,6 +48,8 @@ def main() -> None:
   sha256: {digest}
 """
     (ROOT / "index.yml").write_text(index)
+    # the gh-pages publish directory is dist/, so the index must live there too
+    (DIST / "index.yml").write_text(index)
     print(f"wrote {zip_path} ({zip_path.stat().st_size} bytes)")
     print(f"sha256 {digest}")
     print("wrote index.yml")
