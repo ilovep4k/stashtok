@@ -339,6 +339,16 @@
     };
   }
 
+  async function fetchSceneById(spec) {
+    const data = await gql(
+      `query StashTokSceneById($id: ID!) { findScene(id: $id) { ${SCENE_FIELDS} } }`,
+      { id: spec.sceneId }
+    );
+    const scene = data.findScene;
+    if (!scene) return { count: 0, items: [] };
+    return { count: 1, items: [{ key: "s" + scene.id, scene, startAt: Number(spec.startAt) || 0, endAt: 0 }] };
+  }
+
   async function fetchMarkerFeed(spec, cfg, page) {
     const body = sceneFilterBody(spec, cfg);
     const sceneFilterArg = body ? `scene_filter: { ${body} }` : "";
@@ -406,7 +416,28 @@
     };
   }
 
+
+  /* ---- routing ----------------------------------------------------- */
+
+  function baseRoot() {
+    const match = window.location.pathname.match(/^(.*?\/stash-tok)(\/|$)/);
+    return match ? match[1] : "/stash-tok";
+  }
+
+  function currentRoute() {
+    return window.location.hash.replace(/^#\/?/, "");
+  }
+
+  function goTo(path, replace) {
+    const clean = String(path || "").replace(/^\/+/, "");
+    const next = clean ? "#/" + clean : "#/";
+    if (window.location.hash === next) return;
+    if (replace) window.history.replaceState({}, "", baseRoot() + next);
+    else window.location.hash = next;
+  }
+
   function fetchFeedPage(spec, cfg, page) {
+    if (spec.type === "scene") return fetchSceneById(spec);
     if (spec.type === "markers") return fetchMarkerFeed(spec, cfg, page);
     if (spec.type === "saved") return fetchSavedFilterFeed(spec, cfg, page);
     if (spec.type === "foryou" && cfg.source === "markers") {
@@ -1784,7 +1815,8 @@
     const sortLabel = (SCENE_SORTS.find((entry) => entry[0] === sort) || SCENE_SORTS[0])[1];
 
     function openScene(scene) {
-      onPlay({ sceneId: scene.id, tab: "scenes", sort });
+      onPlay({ sceneId: scene.id, tab: "scenes", sort, noPush: true });
+      goTo("scene/" + scene.id);
     }
 
     return h(
@@ -1924,9 +1956,39 @@
     const [rows, setRows] = useState(null);
     const [query, setQuery] = useState("");
     const [sort, setSort] = useState("updated_at");
-    const [tagFilter, setTagFilter] = useState([]);
-    const [tags, setTags] = useState([]);
+    const [sortOpen, setSortOpen] = useState(false);
     const [selected, setSelected] = useState(initialPerformer || null);
+    const holdTimer = useRef(0);
+    const holdFired = useRef(false);
+
+    function cancelHold() {
+      window.clearTimeout(holdTimer.current);
+    }
+
+    /** long-press a performer tile to favourite them in Stash */
+    function startPerformerHold(event, performer) {
+      cancelHold();
+      holdFired.current = false;
+      holdTimer.current = window.setTimeout(async () => {
+        holdFired.current = true;
+        const next = !performer.favorite;
+        setRows((current) =>
+          current ? current.map((row) => (row.id === performer.id ? Object.assign({}, row, { favorite: next }) : row)) : current
+        );
+        try {
+          await gql(
+            `mutation StashTokFavPerformer($id: ID!, $fav: Boolean!) {
+              performerUpdate(input: { id: $id, favorite: $fav }) { id favorite }
+            }`,
+            { id: performer.id, fav: next }
+          );
+        } catch (err) {
+          setRows((current) =>
+            current ? current.map((row) => (row.id === performer.id ? Object.assign({}, row, { favorite: !next }) : row)) : current
+          );
+        }
+      }, 550);
+    }
 
     useEffect(() => {
       setSelected(initialPerformer || null);
@@ -1934,38 +1996,15 @@
 
     useEffect(() => {
       let alive = true;
-      gql(
-        `query StashTokPerformerTags {
-          findTags(filter: { per_page: 24, sort: "scenes_count", direction: DESC }) {
-            tags { id name scene_count }
-          }
-        }`
-      )
-        .then((data) => alive && setTags(data.findTags.tags || []))
-        .catch(() =>
-          gql(`query StashTokPerformerTagsFallback { findTags(filter: { per_page: 24, sort: "name", direction: ASC }) { tags { id name scene_count } } }`)
-            .then((data) => alive && setTags(data.findTags.tags || []))
-            .catch(() => alive && setTags([]))
-        );
-      return () => {
-        alive = false;
-      };
-    }, []);
-
-    useEffect(() => {
-      let alive = true;
       const direction = sort === "name" ? "ASC" : "DESC";
       gql(
-        `query StashTokPerformers($q: String, $sort: String, $dir: SortDirectionEnum, $tags: [ID!]) {
-          findPerformers(
-            filter: { per_page: 200, sort: $sort, direction: $dir, q: $q },
-            performer_filter: { tags: { value: $tags, modifier: INCLUDES } }
-          ) {
+        `query StashTokPerformers($q: String, $sort: String, $dir: SortDirectionEnum) {
+          findPerformers(filter: { per_page: 200, sort: $sort, direction: $dir, q: $q }) {
             count
             performers { id name image_path scene_count favorite updated_at }
           }
         }`,
-        { q: query || null, sort, dir: direction, tags: tagFilter.length ? tagFilter : null }
+        { q: query || null, sort, dir: direction }
       )
         .then((data) => {
           if (alive) setRows(data.findPerformers.performers);
@@ -1974,7 +2013,7 @@
       return () => {
         alive = false;
       };
-    }, [query, sort, tagFilter]);
+    }, [query, sort]);
 
     if (selected) {
       return h(PerformerProfile, {
@@ -1992,12 +2031,14 @@
       ["updated_at", "Recently added"],
       ["name", "A–Z"],
       ["scenes_count", "Most scenes"],
+      ["rating", "Top rated"],
       ["random", "Random"],
     ];
+    const sortLabel = (SORTS.find((entry) => entry[0] === sort) || SORTS[0])[1];
 
     return h(
       "div",
-      { className: "stk-page" },
+      { className: "stk-page", onContextMenu: (event) => event.preventDefault() },
       h("h2", null, onBack && h("button", { onClick: onBack }, h(Icon, { name: "chevron", size: 18 })), "Performers"),
       h("input", {
         type: "search",
@@ -2008,31 +2049,28 @@
       }),
       h(
         "div",
-        { className: "stk-chips" },
-        SORTS.map(([key, label]) =>
-          h("button", { key, className: "stk-tagpill" + (sort === key ? " stk-speed-on" : ""), onClick: () => setSort(key) }, label)
-        )
+        { className: "stk-sort-bar" },
+        h("button", { className: "stk-sort-btn", onClick: () => setSortOpen(!sortOpen) }, sortLabel, " ▾"),
+        rows && h("span", { className: "stk-sub" }, rows.length + " performers")
       ),
-      tags.length > 0 &&
+      sortOpen &&
         h(
           "div",
-          { className: "stk-chips" },
-          tags.map((tag) =>
+          { className: "stk-sort-menu" },
+          SORTS.map(([key, label]) =>
             h(
               "button",
               {
-                key: tag.id,
-                className: "stk-tagpill" + (tagFilter.indexOf(tag.id) >= 0 ? " stk-speed-on" : ""),
-                onClick: () =>
-                  setTagFilter((current) =>
-                    current.indexOf(tag.id) >= 0 ? current.filter((id) => id !== tag.id) : current.concat([tag.id])
-                  ),
+                key,
+                className: key === sort ? "stk-sort-on" : "",
+                onClick: () => {
+                  setSort(key);
+                  setSortOpen(false);
+                },
               },
-              tag.name
+              label
             )
-          ),
-          tagFilter.length > 0 &&
-            h("button", { className: "stk-tagpill", onClick: () => setTagFilter([]) }, "Clear")
+          )
         ),
       !rows
         ? h("div", { className: "stk-state" }, h("div", { className: "stk-spinner" }))
@@ -2044,7 +2082,23 @@
             rows.map((performer) =>
               h(
                 "button",
-                { key: performer.id, className: "stk-account", onClick: () => setSelected(performer) },
+                {
+                  key: performer.id,
+                  className: "stk-account",
+                  onClick: () => {
+                    if (holdFired.current) {
+                      holdFired.current = false;
+                      return;
+                    }
+                    goTo("performer/" + encodeURIComponent(performer.name));
+                    setSelected(performer);
+                  },
+                  onPointerDown: (event) => startPerformerHold(event, performer),
+                  onPointerUp: cancelHold,
+                  onPointerLeave: cancelHold,
+                  onPointerCancel: cancelHold,
+                  onContextMenu: (event) => event.preventDefault(),
+                },
                 h("div", { className: "stk-account-photo", style: { backgroundImage: `url("${rel(performer.image_path)}")` } }),
                 h(
                   "div",
@@ -2413,6 +2467,7 @@
 
   function StashTokApp() {
     const cfg = usePluginConfig();
+    const shellRef = useRef(null);
     const [tab, setTab] = useState("home");
     const [feeds, setFeeds] = useState(() => loadFeeds());
     const [activeFeed, setActiveFeed] = useState(defaultFeed());
@@ -2424,13 +2479,116 @@
     const [tagFilter, setTagFilter] = useState(null);
     const [folderView, setFolderView] = useState(null);
 
-    useEffect(() => {
-      const onPop = () => setTab("home");
-      window.addEventListener("popstate", onPop);
-      return () => window.removeEventListener("popstate", onPop);
+    /* ---- routing: the URL is the source of truth --------------------- */
+
+    const applyRoute = useCallback((rest) => {
+      if (!rest) {
+        setTab("home");
+        setPerformerFilter(null);
+        setActiveFeed(defaultFeed());
+        return;
+      }
+      if (rest === "favorites") {
+        setTab("home");
+        setPerformerFilter(null);
+        setActiveFeed({ id: "favorites", name: "Favorites", type: "favorites" });
+        return;
+      }
+      if (rest === "performers") {
+        setPerformerFilter(null);
+        setTab("performers");
+        return;
+      }
+      if (rest === "tags") {
+        setTab("tags");
+        return;
+      }
+      if (rest === "settings") {
+        setTab("settings");
+        return;
+      }
+      if (rest.indexOf("performer/") === 0) {
+        resolvePerformerSlug(decodeURIComponent(rest.slice("performer/".length)));
+        return;
+      }
+      if (rest.indexOf("scene/") === 0) {
+        resolveSceneId(rest.slice("scene/".length));
+        return;
+      }
+      setTab("home");
     }, []);
 
-    function openPerformer(performer, payload) {
+    /* the page itself must never zoom: pinch belongs to the video only */
+    useEffect(() => {
+      const el = shellRef.current;
+      if (!el) return undefined;
+      const blockPinch = (event) => {
+        if (!event.touches || event.touches.length < 2) return;
+        const target = event.target;
+        const inStage = target && target.closest && target.closest(".stk-stage");
+        if (!inStage) event.preventDefault();
+      };
+      const blockGesture = (event) => event.preventDefault();
+      el.addEventListener("touchmove", blockPinch, { passive: false });
+      el.addEventListener("gesturestart", blockGesture, { passive: false });
+      document.addEventListener("gesturestart", blockGesture, { passive: false });
+      return () => {
+        el.removeEventListener("touchmove", blockPinch);
+        el.removeEventListener("gesturestart", blockGesture);
+        document.removeEventListener("gesturestart", blockGesture);
+      };
+    }, []);
+
+    useEffect(() => {
+      applyRoute(currentRoute());
+      const onNav = () => applyRoute(currentRoute());
+      window.addEventListener("hashchange", onNav);
+      window.addEventListener("popstate", onNav);
+      return () => {
+        window.removeEventListener("hashchange", onNav);
+        window.removeEventListener("popstate", onNav);
+      };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    async function resolvePerformerSlug(name) {
+      try {
+        const data = await gql(
+          `query StashTokFindByName($q: String) { findPerformers(filter: { q: $q, per_page: 20 }) { performers { id name image_path scene_count } } }`,
+          { q: name }
+        );
+        const list = (data.findPerformers && data.findPerformers.performers) || [];
+        const exact = list.find((row) => row.name.toLowerCase() === name.toLowerCase()) || list[0];
+        if (exact) {
+          setPerformerFilter(exact);
+          setTab("performers");
+        } else {
+          setTab("performers");
+        }
+      } catch (err) {
+        setTab("performers");
+      }
+    }
+
+    async function resolveSceneId(id) {
+      try {
+        const data = await gql(
+          `query StashTokScenePerformer($id: ID!) { findScene(id: $id) { id performers { id name image_path scene_count } } }`,
+          { id }
+        );
+        const scene = data.findScene;
+        const performer = scene && scene.performers && scene.performers[0];
+        if (performer) openPerformer(performer, { sceneId: id }, false);
+        else {
+          setTab("home");
+          setActiveFeed({ id: "scene-" + id, name: "Scene", type: "scene", sceneId: id });
+        }
+      } catch (err) {
+        setTab("home");
+      }
+    }
+
+    function openPerformer(performer, payload, push) {
       if (!performer) {
         setPerformersOpen(true);
         setTab("performers");
@@ -2452,6 +2610,7 @@
       });
       setTab("home");
       setRefreshKey((n) => n + 1);
+      if (push !== false && !(payload && payload.noPush)) goTo("performer/" + encodeURIComponent(performer.name));
     }
 
     function openTag(tag) {
@@ -2492,10 +2651,16 @@
     function onTab(nextTab) {
       if (nextTab === "home") {
         if (tab === "home") setRefreshKey((n) => n + 1); // tapping Home re-rolls the feed
-        else setTab("home");
+        else {
+          setTab("home");
+          setPerformerFilter(null);
+          setActiveFeed(defaultFeed());
+        }
+        goTo("");
         return;
       }
       setTab(nextTab);
+      goTo(nextTab);
     }
 
     let body;
@@ -2548,13 +2713,16 @@
         feeds,
         onSwitchFeed: useFeed,
         onNewFeed: () => setBuilder({ spec: null }),
-        onBack: activeFeed.origin ? () => setTab("performers") : undefined,
+        onBack: () => {
+          if (window.history.length > 1) window.history.back();
+          else setTab("performers");
+        },
       });
     }
 
     return h(
       "div",
-      { className: "stash-tok-wrap" },
+      { className: "stash-tok-wrap", ref: shellRef },
       h(
         "div",
         { style: { position: "fixed", inset: 0, zIndex: 9000, display: "flex", flexDirection: "column", background: "#000" } },
@@ -2565,15 +2733,21 @@
             "nav",
             { className: "stk-nav" },
             h(NavButton, { active: tab === "home", icon: "home", label: "Home", onClick: () => onTab("home") }),
-            h(NavButton, { active: false, icon: "user", label: "Performers", onClick: () => { setTab("performers"); } }),
+            h(NavButton, { active: false, icon: "user", label: "Performers", onClick: () => { setTab("performers"); goTo("performers"); } }),
             h(NavButton, {
-              active: false,
+              active: activeFeed.type === "favorites",
               icon: "heart",
               label: "Favorites",
-              onClick: () => useFeed({ type: "favorites", name: "Favorites" }),
+              onClick: () => {
+                setPerformerFilter(null);
+                setActiveFeed({ id: "favorites", name: "Favorites", type: "favorites" });
+                setTab("home");
+                setRefreshKey((n) => n + 1);
+                goTo("favorites");
+              },
             }),
-            h(NavButton, { active: false, icon: "tag", label: "Tags", onClick: () => setTab("tags") }),
-            h(NavButton, { active: false, icon: "gear", label: "Settings", onClick: () => setTab("settings") })
+            h(NavButton, { active: false, icon: "tag", label: "Tags", onClick: () => { setTab("tags"); goTo("tags"); } }),
+            h(NavButton, { active: false, icon: "gear", label: "Settings", onClick: () => { setTab("settings"); goTo("settings"); } })
           ),
 
         tab === "performers" || tab === "tags" || tab === "settings" || tab === "folder"
@@ -2582,9 +2756,20 @@
               { className: "stk-nav" },
               h(NavButton, { active: false, icon: "home", label: "Home", onClick: () => setTab("home") }),
               h(NavButton, { active: tab === "performers", icon: "user", label: "Performers", onClick: () => setTab("performers") }),
-              h(NavButton, { active: false, icon: "heart", label: "Favorites", onClick: () => useFeed({ type: "favorites", name: "Favorites" }) }),
-              h(NavButton, { active: tab === "tags", icon: "tag", label: "Tags", onClick: () => setTab("tags") }),
-              h(NavButton, { active: tab === "settings", icon: "gear", label: "Settings", onClick: () => setTab("settings") })
+              h(NavButton, {
+                active: false,
+                icon: "heart",
+                label: "Favorites",
+                onClick: () => {
+                  setPerformerFilter(null);
+                  setActiveFeed({ id: "favorites", name: "Favorites", type: "favorites" });
+                  setTab("home");
+                  setRefreshKey((n) => n + 1);
+                  goTo("favorites");
+                },
+              }),
+              h(NavButton, { active: tab === "tags", icon: "tag", label: "Tags", onClick: () => { setTab("tags"); goTo("tags"); } }),
+              h(NavButton, { active: tab === "settings", icon: "gear", label: "Settings", onClick: () => { setTab("settings"); goTo("settings"); } })
             )
           : null,
 

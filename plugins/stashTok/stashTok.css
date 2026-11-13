@@ -936,3 +936,20 @@
 /* stacked video layers: the next ones are already decoded, so a swipe swaps instead of loading */
 .stk-video { transition: opacity 0.1s linear; }
 .stk-video:not(.stk-active) { opacity: 0; pointer-events: none; }
+
+/* pinch zooms the video, never the page or the chrome around it */
+.stash-tok-wrap { touch-action: pan-y; overscroll-behavior: contain; }
+.stk-nav, .stk-rail, .stk-info, .stk-top, .stk-timeline { touch-action: manipulation; -webkit-user-select: none; user-select: none; }
+
+/* one sort control instead of a wall of chips */
+.stk-sort-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.stk-sort-bar .stk-sort-btn { margin-left: 0; }
+.stk-sort-bar .stk-sub { font-size: 12px; opacity: 0.6; }
+
+/* long-press must never select text or raise the copy callout anywhere in the app */
+.stash-tok-wrap, .stash-tok-wrap * {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
