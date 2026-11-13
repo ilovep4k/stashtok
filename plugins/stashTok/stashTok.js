@@ -556,6 +556,41 @@
   /* feed view                                                          */
   /* ------------------------------------------------------------------ */
 
+  /** Put a not-yet-active layer on its start frame so activating it is just play(). */
+  function prewarm(video, startAt) {
+    const start = Number(startAt) || 0;
+    if (!video || !start) return;
+    const doSeek = () => {
+      if (video.readyState < 1) return;
+      const duration = video.duration || 0;
+      if (!duration || start >= duration) return;
+      if (Math.abs(video.currentTime - start) < 0.5) return;
+      try {
+        video.currentTime = start;
+      } catch (e) {
+        /* ignore */
+      }
+    };
+    if (video.readyState >= 1) doSeek();
+    else video.addEventListener("loadedmetadata", doSeek, { once: true });
+  }
+
+  /** Play, but never start before a pending seek has landed: that race is the black flash. */
+  function seekThenPlay(video, startAt, playVideo) {
+    const start = Number(startAt) || 0;
+    const duration = video.duration || 0;
+    if (start > 0 && duration && start < duration && Math.abs(video.currentTime - start) > 1) {
+      try {
+        video.currentTime = start;
+      } catch (e) {
+        /* ignore */
+      }
+      video.addEventListener("seeked", () => playVideo(video), { once: true });
+      return;
+    }
+    playVideo(video);
+  }
+
   function FeedView({ spec, cfg, refreshKey, onBack, onOpenPerformer, onOpenTag, onDeriveFeed, onEditFeed, onOpenFolder, feeds, onSwitchFeed, onNewFeed }) {
     const [items, setItems] = useState([]);
     const [index, setIndex] = useState(0);
@@ -670,15 +705,8 @@
         Array.from(stage.querySelectorAll("video")).forEach((video) => {
           if (video.classList.contains("stk-active")) {
             const start = Number(item && item.startAt) || 0;
-            if (start > 0 && video.readyState >= 1 && video.currentTime < start - 2) {
-              try {
-                video.currentTime = start;
-              } catch (e) {
-                /* ignore */
-              }
-            }
             if (video.paused) {
-              playGuarded(video);
+              seekThenPlay(video, start, playGuarded);
               window.setTimeout(() => {
                 const nowActive = stage.querySelector(".stk-video.stk-active");
                 if (nowActive && nowActive.paused) playGuarded(nowActive);
@@ -709,14 +737,7 @@
       const start = Number(item.startAt) || 0;
       const onLoaded = () => {
         setDuration(video.duration || 0);
-        if (start > 0 && start < (video.duration || 0)) {
-          try {
-            video.currentTime = start;
-          } catch (e) {
-            /* ignore */
-          }
-        }
-        playGuarded(video);
+        seekThenPlay(video, start, playGuarded);
       };
       video.addEventListener("loadedmetadata", onLoaded);
       video.addEventListener("canplay", onLoaded);
@@ -1269,7 +1290,11 @@
               const source = streamSource(entry.scene);
               return h("video", {
                 key: entry.key,
-                ref: active ? videoRef : null,
+                ref: active
+                  ? videoRef
+                  : (el) => {
+                      if (el) prewarm(el, entry.startAt);
+                    },
                 className: "stk-video" + (active ? " stk-active" : ""),
                 src: active && streamFallback ? source.signed : source.plain,
                 poster: rel(entry.scene.paths && entry.scene.paths.screenshot),
