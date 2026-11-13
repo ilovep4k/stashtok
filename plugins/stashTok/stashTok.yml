@@ -1,0 +1,46 @@
+name: StashTok
+description: Full-screen, TikTok-style vertical feed for your scenes and markers, with pinch zoom, swipe navigation, hold-to-fast-forward and a marker scrub bar.
+version: 0.1.0
+url: https://github.com/yourname/stash-tok
+ui:
+  javascript:
+    - stashTok.js
+  css:
+    - stashTok.css
+settings:
+  source:
+    displayName: Feed source
+    description: What a new feed is built from. markers uses your scene markers, scenes uses whole scenes.
+    type: STRING
+  heartRating:
+    displayName: Heart rating
+    description: Rating written to a scene when you heart it (0-100). Hearts and any rating you set put a scene in the Favorites feed.
+    type: NUMBER
+  stopAtMarkerEnd:
+    displayName: Stop at marker end
+    description: When the item is a marker, advance to the next item when the marker ends instead of playing the rest of the scene.
+    type: BOOLEAN
+  blurBackdrop:
+    displayName: Blurred backdrop
+    description: Fill the space around non-9:16 video with a blurred copy of the scene screenshot.
+    type: BOOLEAN
+  showMarkerTicks:
+    displayName: Marker ticks on the scrub bar
+    description: Draw a tick for every marker of the current scene.
+    type: BOOLEAN
+  holdSpeed:
+    displayName: Hold-to-fast-forward rate
+    description: Playback rate while holding the right side of the screen (1-8).
+    type: NUMBER
+  autoplayMuted:
+    displayName: Start muted
+    description: Start each item muted so the browser allows autoplay. Tap the speaker to unmute.
+    type: BOOLEAN
+  doubleTapHeart:
+    displayName: Double-tap to heart
+    description: Double-tapping the video hearts the scene. When zoomed in, double-tap resets the zoom instead.
+    type: BOOLEAN
+  minDuration:
+    displayName: Minimum duration (seconds)
+    description: Scenes shorter than this are left out of every feed. Set to 0 to include everything. The Shorts feed ignores this.
+    type: NUMBER

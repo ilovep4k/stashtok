@@ -1,0 +1,49 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build plugin zip and index.yml
+        run: |
+          python tools/build.py --base-url "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}"
+
+      - name: Verify manifest matches tag
+        run: |
+          VERSION=$(sed -n 's/^version: *//p' plugins/stashTok/stashTok.yml)
+          if [ "v$VERSION" != "${GITHUB_REF_NAME}" ]; then
+            echo "stashTok.yml says $VERSION but tag is ${GITHUB_REF_NAME}" >&2
+            exit 1
+          fi
+
+      - name: Publish index.yml and zip
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
+          publish_branch: gh-pages
+          keep_files: true
+          # index.yml is generated at the repo root, dist/ is the site
+          # so both end up at the site root
+          commit_message: "release ${{ github.ref_name }}"
+
+      - name: Attach zip to the GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/stashTok.zip
