@@ -28,6 +28,14 @@ settings:
     displayName: Hold-to-fast-forward rate
     description: Playback rate while holding the right side of the screen (1-8, default 2).
     type: NUMBER
+  randomStart:
+    displayName: Start mid-scene
+    description: Start long scenes at a random marker, or a random fifth of the scene when it has none, instead of at the beginning.
+    type: BOOLEAN
+  longSceneSeconds:
+    displayName: Long scene threshold (seconds)
+    description: Scenes longer than this get a random start point when they have no markers.
+    type: NUMBER
   autoplayMuted:
     displayName: Start muted
     description: Start each item muted so the browser allows autoplay. Tap the speaker to unmute.

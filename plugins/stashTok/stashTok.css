@@ -930,3 +930,7 @@
   transform: rotate(90deg);
   backdrop-filter: blur(6px);
 }
+
+/* stacked video layers: the next ones are already decoded, so a swipe swaps instead of loading */
+.stk-video { transition: opacity 0.1s linear; }
+.stk-video:not(.stk-active) { opacity: 0; pointer-events: none; }

@@ -192,6 +192,24 @@
     return { plain: raw.split("?")[0], signed: raw };
   }
 
+
+  /** Start where the action is: a random marker when the scene has them, else a
+   *  random fifth for long scenes, so a feed never opens on an intro. */
+  function pickStartAt(scene, cfg, spec) {
+    if (spec && spec.startAt) return Number(spec.startAt) || 0;
+    if (cfg.randomStart === false) return 0;
+    const file = (scene.files && scene.files[0]) || {};
+    const duration = Number(file.duration) || 0;
+    const markers = (scene.scene_markers || []).filter((marker) => Number(marker.seconds) > 5);
+    if (markers.length) return Number(markers[Math.floor(Math.random() * markers.length)].seconds) || 0;
+    const floor = Number(cfg.longSceneSeconds) || 300;
+    if (duration > floor) {
+      const fifth = 1 + Math.floor(Math.random() * 4);
+      return Math.floor((duration * fifth) / 5);
+    }
+    return 0;
+  }
+
   function fmtTime(seconds) {
     const total = Math.max(0, Math.floor(Number(seconds) || 0));
     const hh = Math.floor(total / 3600);
@@ -301,7 +319,7 @@
       count: (data.findScenes && data.findScenes.count) || 0,
       items: scenes
         .filter((scene) => scene.files && scene.files.length)
-        .map((scene) => ({ key: "s" + scene.id, scene, startAt: 0, endAt: 0 })),
+        .map((scene) => ({ key: "s" + scene.id, scene, startAt: pickStartAt(scene, cfg, spec), endAt: 0 })),
     };
   }
 
@@ -368,7 +386,7 @@
       count: (data2.findScenes && data2.findScenes.count) || 0,
       items: scenes
         .filter((scene) => scene.files && scene.files.length)
-        .map((scene) => ({ key: "s" + scene.id, scene, startAt: 0, endAt: 0 })),
+        .map((scene) => ({ key: "s" + scene.id, scene, startAt: pickStartAt(scene, cfg, spec), endAt: 0 })),
     };
   }
 
@@ -409,6 +427,8 @@
       showMarkerTicks: raw.showMarkerTicks !== false,
       holdSpeed: clamp(Number(raw.holdSpeed) || 2, 1, 8),
       autoplayMuted: raw.autoplayMuted !== false,
+      randomStart: raw.randomStart !== false,
+      longSceneSeconds: Number(raw.longSceneSeconds) || 300,
       doubleTapHeart: raw.doubleTapHeart !== false,
       minDuration: raw.minDuration == null ? 30 : Number(raw.minDuration),
     };
@@ -540,6 +560,24 @@
     }, [spec.id, spec.type, refreshKey, cfg.heartRating, cfg.source]);
 
     useEffect(() => {
+      const stage = stageRef.current;
+      if (stage) {
+        Array.from(stage.querySelectorAll("video")).forEach((video) => {
+          if (video.classList.contains("stk-active")) {
+            const start = Number(item && item.startAt) || 0;
+            if (start > 0 && video.readyState >= 1 && video.currentTime < start - 2) {
+              try {
+                video.currentTime = start;
+              } catch (e) {
+                /* ignore */
+              }
+            }
+            if (video.paused) video.play().catch(() => {});
+          } else if (!video.paused) {
+            video.pause();
+          }
+        });
+      }
       if (index >= items.length - 3 && !exhaustedRef.current) loadPage(false);
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [index, items.length]);
@@ -1041,238 +1079,47 @@
               transition: dragY || rotation ? "none" : undefined,
             },
           },
-          h("video", {
-            key: item.key + (streamFallback ? "-signed" : ""),
-            ref: videoRef,
-            className: "stk-video",
-            src: streamFallback ? streamSource(scene).signed : streamSource(scene).plain,
-            poster: rel(scene.paths && scene.paths.screenshot),
-            playsInline: true,
-            autoPlay: true,
-            muted,
-            preload: "auto",
-            onCanPlay: () => {
-              setReady(true);
-              setFailCount(0);
-            },
-            onTimeUpdate,
-            onPlay: () => setPlaying(true),
-            onPause: () => setPlaying(false),
-            onEnded: loopCurrent,
-            onError: () => {
-              setPlaying(false);
-              if (!streamFallback) {
-                setStreamFallback(true);
-                return;
-              }
-              // file gone from disk: skip instead of showing a dead frame
-              setFailCount((count) => count + 1);
-              window.setTimeout(goNext, 600);
-            },
-          })
+          [index - 1, index, index + 1, index + 2]
+            .filter((at) => at >= 0 && items[at])
+            .map((at) => {
+              const entry = items[at];
+              const active = at === index;
+              const source = streamSource(entry.scene);
+              return h("video", {
+                key: entry.key,
+                ref: active ? videoRef : null,
+                className: "stk-video" + (active ? " stk-active" : ""),
+                src: active && streamFallback ? source.signed : source.plain,
+                poster: rel(entry.scene.paths && entry.scene.paths.screenshot),
+                playsInline: true,
+                autoPlay: active,
+                muted: active ? muted : true,
+                preload: "auto",
+                onCanPlay: active
+                  ? () => {
+                      setReady(true);
+                      setFailCount(0);
+                    }
+                  : undefined,
+                onTimeUpdate: active ? onTimeUpdate : undefined,
+                onPlay: active ? () => setPlaying(true) : undefined,
+                onPause: active ? () => setPlaying(false) : undefined,
+                onEnded: active ? loopCurrent : undefined,
+                onError: active
+                  ? () => {
+                      setPlaying(false);
+                      if (!streamFallback) {
+                        setStreamFallback(true);
+                        return;
+                      }
+                      setFailCount((count) => count + 1);
+                      window.setTimeout(goNext, 600);
+                    }
+                  : undefined,
+                style: active ? { zIndex: 2 } : { zIndex: 1 },
+              });
+            }),
         ),
-
-        items.slice(index + 1, index + 3).map((next) =>
-          h("video", {
-            key: "pre-" + next.key,
-            className: "stk-preload",
-            src: streamSource(next.scene).plain,
-            preload: "auto",
-            muted: true,
-            playsInline: true,
-          })
-        ),
-
-        onBack &&
-          h("button", { className: "stk-feed-back", onClick: onBack }, h(Icon, { name: "chevron", size: 22 })),
-
-        h(
-          "div",
-          { className: "stk-pause" + (!playing && ready ? " stk-show" : "") },
-          h(Icon, { name: playing ? "pause" : "play", size: 32 })
-        ),
-
-        heartBurst > 0 &&
-          h(
-            "div",
-            { key: heartBurst, className: "stk-big-heart stk-fire" },
-            h(Icon, { name: "heart", size: 110 })
-          ),
-
-        rateBadge && h("div", { className: "stk-rate" }, rateBadge),
-
-        h(
-          "div",
-          { className: "stk-top stk-top-center" },
-          h(
-            "button",
-            {
-              className: "stk-feed-pill",
-              onClick: (event) => {
-                event.stopPropagation();
-                setSheet("feeds");
-              },
-            },
-            h(Icon, { name: "sparkle", size: 11 }),
-            spec.name || "For You",
-            h(Icon, { name: "chevron", size: 10, className: "stk-pill-caret" })
-          )
-        ),
-
-        h(
-          "div",
-          { className: "stk-info" },
-          h(
-            "div",
-            { className: "stk-handle-row" },
-            handle.image
-              ? h("img", {
-                  className: "stk-handle-avatar",
-                  src: handle.image,
-                  alt: "",
-                  onClick: (event) => {
-                    event.stopPropagation();
-                    openHandle();
-                  },
-                })
-              : h(
-                  "button",
-                  { className: "stk-handle-avatar stk-handle-initials", onClick: (event) => { event.stopPropagation(); openHandle(); } },
-                  initials(handle.name)
-                ),
-            h(
-              "button",
-              { className: "stk-handle-name", onClick: (event) => { event.stopPropagation(); openHandle(); } },
-              handle.name
-            )
-          ),
-          performers.length > 1 &&
-            h("div", { className: "stk-info-with" }, "with " + performers.slice(1, 4).map((performer) => performer.name).join(", ")),
-          tags.length > 0 &&
-            h(
-              "div",
-              { className: "stk-hashtags" },
-              tags.slice(0, 8).map((tag) =>
-                h(
-                  "button",
-                  {
-                    key: tag.id,
-                    className: "stk-hashtext",
-                    onClick: (event) => {
-                      event.stopPropagation();
-                      onOpenTag(tag);
-                    },
-                  },
-                  "#" + tag.name.replace(/\s+/g, "-").toLowerCase()
-                )
-              )
-            )
-        ),
-
-        h(
-          "div",
-          { className: "stk-rail" },
-          h(
-            "button",
-            {
-              onClick: (event) => {
-                event.stopPropagation();
-                toggleHeart();
-              },
-              className: rating != null && rating >= cfg.heartRating ? "stk-on" : "",
-            },
-            h(Icon, { name: "heart", size: 26 }),
-            h("span", null, "Heart")
-          ),
-          performers.length > 0 &&
-            h(
-              "button",
-              {
-                onClick: (event) => {
-                  event.stopPropagation();
-                  onOpenPerformer(performers[0]);
-                },
-              },
-              h(Icon, { name: "user", size: 26 }),
-              h("span", null, performers.length > 1 ? performers.length + " people" : "Performer")
-            ),
-          h(
-            "button",
-            {
-              onClick: (event) => {
-                event.stopPropagation();
-                setMuted((value) => !value);
-              },
-            },
-            h(Icon, { name: muted ? "mute" : "volume", size: 26 }),
-            h("span", null, muted ? "Muted" : "Sound")
-          ),
-          h(
-            "button",
-            {
-              onClick: (event) => {
-                event.stopPropagation();
-                setSheet("actions");
-              },
-            },
-            h(Icon, { name: "sparkle", size: 26 }),
-            h("span", null, speed === 1 ? "More" : speed + "x")
-          )
-        ),
-
-        hud &&
-          h(
-            "div",
-            { className: "stk-time" },
-            `${fmtTime(time)} / ${fmtTime(duration)}${zoom > 1.02 ? ` · ${zoom.toFixed(1)}x` : ""}`
-          ),
-
-        h(
-          "div",
-          {
-            className: "stk-timeline" + (scrubbing ? " stk-scrubbing" : ""),
-            onPointerDown: onTimelineDown,
-            onPointerMove: onTimelineMove,
-            onPointerUp: onTimelineUp,
-            onPointerCancel: onTimelineUp,
-          },
-          h(
-            "div",
-            { className: "stk-timeline-inner" },
-            h("div", { className: "stk-timeline-fill", style: { width: `${scrubbingRatio * 100}%` } }),
-            cfg.showMarkerTicks &&
-              duration > 0 &&
-              markers.map((marker) =>
-                h("div", {
-                  key: marker.id,
-                  className: "stk-tick",
-                  style: { left: `${(Number(marker.seconds) / duration) * 100}%` },
-                })
-              ),
-            scrubbing &&
-              nearMarker &&
-              h(
-                "div",
-                { className: "stk-scrub-label", style: { left: `${scrubbingRatio * 100}%` } },
-                `${fmtTime(nearMarker.seconds)} · ${nearMarker.primary_tag ? nearMarker.primary_tag.name : "Marker"}`
-              )
-          )
-        ),
-
-        sheet === "feeds" &&
-          h(FeedPicker, {
-            feeds: feeds || [],
-            current: spec,
-            onPick: (next) => {
-              setSheet(null);
-              onSwitchFeed(next);
-            },
-            onNew: () => {
-              setSheet(null);
-              onNewFeed();
-            },
-            onClose: () => setSheet(null),
-          }),
 
         sheet && sheet !== "feeds" &&
           h(Sheet, {
@@ -1298,7 +1145,6 @@
             onNext: goNext,
           })
       ),
-
     );
   }
 
