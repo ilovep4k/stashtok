@@ -439,7 +439,7 @@
   /* feed view                                                          */
   /* ------------------------------------------------------------------ */
 
-  function FeedView({ spec, cfg, refreshKey, onOpenPerformer, onOpenTag, onDeriveFeed, onEditFeed, onOpenFolder, feeds, onSwitchFeed, onNewFeed }) {
+  function FeedView({ spec, cfg, refreshKey, onBack, onOpenPerformer, onOpenTag, onDeriveFeed, onEditFeed, onOpenFolder, feeds, onSwitchFeed, onNewFeed }) {
     const [items, setItems] = useState([]);
     const [index, setIndex] = useState(0);
     const [count, setCount] = useState(0);
@@ -501,7 +501,14 @@
           if (reset) {
             pageRef.current = 2;
             exhaustedRef.current = result.items.length === 0;
-            setItems(result.items);
+            const list = result.items.slice();
+            if (spec.startSceneId) {
+              // open on the scene the user tapped, wherever it sits in the list
+              const at = list.findIndex((entry) => String(entry.scene.id) === String(spec.startSceneId));
+              if (at > 0) list.unshift(list.splice(at, 1)[0]);
+            }
+            if (reset && spec.startAt && list.length) list[0] = Object.assign({}, list[0], { startAt: spec.startAt });
+            setItems(list);
             setIndex(0);
           } else {
             pageRef.current = page + 1;
@@ -578,7 +585,20 @@
 
     useEffect(() => {
       const video = videoRef.current;
-      if (video) video.muted = muted;
+      if (!video) return;
+      video.muted = muted;
+      // some browsers pause an autoplaying video the moment it becomes audible,
+      // and a muted autoplay that is unmuted by a tap must keep running
+      const resume = () => {
+        if (video.paused) video.play().catch(() => {});
+      };
+      resume();
+      const a = window.setTimeout(resume, 80);
+      const b = window.setTimeout(resume, 450);
+      return () => {
+        window.clearTimeout(a);
+        window.clearTimeout(b);
+      };
     }, [muted]);
 
     useEffect(() => {
@@ -729,6 +749,8 @@
 
     function onPointerDown(event) {
       if (sheet) return;
+      // a tap on a rail button / HUD must not also toggle playback
+      if (event.target && event.target.closest && event.target.closest("button, input, .stk-rail, .stk-nav, .stk-timeline, .stk-sheet, .stk-top, a")) return;
       const stage = stageRef.current;
       if (!stage) return;
       try {
@@ -841,6 +863,7 @@
     }
 
     function onPointerUp(event) {
+      if (event.target && event.target.closest && event.target.closest("button, input, .stk-rail, .stk-nav, .stk-timeline, .stk-sheet, .stk-top, a")) return;
       const g = gesture.current;
       window.clearTimeout(holdTimer.current);
       if (g && g.mode === "hold") stopHold();
@@ -1060,6 +1083,9 @@
           })
         ),
 
+        onBack &&
+          h("button", { className: "stk-feed-back", onClick: onBack }, h(Icon, { name: "chevron", size: 22 })),
+
         h(
           "div",
           { className: "stk-pause" + (!playing && ready ? " stk-show" : "") },
@@ -1156,18 +1182,7 @@
               className: rating != null && rating >= cfg.heartRating ? "stk-on" : "",
             },
             h(Icon, { name: "heart", size: 26 }),
-            h("span", null, rating == null ? "Heart" : String(rating))
-          ),
-          h(
-            "button",
-            {
-              onClick: (event) => {
-                event.stopPropagation();
-                setSheet("details");
-              },
-            },
-            h(Icon, { name: "info", size: 26 }),
-            h("span", null, "Details")
+            h("span", null, "Heart")
           ),
           performers.length > 0 &&
             h(
@@ -1191,17 +1206,6 @@
             },
             h(Icon, { name: muted ? "mute" : "volume", size: 26 }),
             h("span", null, muted ? "Muted" : "Sound")
-          ),
-          h(
-            "button",
-            {
-              onClick: (event) => {
-                event.stopPropagation();
-                rotate(90);
-              },
-            },
-            h(Icon, { name: "rotate", size: 26 }),
-            h("span", null, rotation ? rotation + "°" : "Rotate")
           ),
           h(
             "button",
@@ -1280,6 +1284,7 @@
             onHeart: toggleHeart,
             speed,
             onSpeed: setSpeed,
+            onRotate: rotate,
             onClose: () => setSheet(null),
             onOpenPerformer,
             onOpenTag,
@@ -1362,7 +1367,7 @@
     );
   }
 
-  function Sheet({ mode, item, cfg, rating, onRate, onHeart, speed, onSpeed, onClose, onOpenPerformer, onOpenTag, onDeriveFeed, onJump, onNext }) {
+  function Sheet({ mode, item, cfg, rating, onRate, onHeart, speed, onSpeed, onRotate, onClose, onOpenPerformer, onOpenTag, onDeriveFeed, onJump, onNext }) {
     const scene = item.scene;
     const file = (scene.files && scene.files[0]) || {};
     const markers = scene.scene_markers || [];
@@ -1483,10 +1488,16 @@
           "div",
           { className: "stk-sheet-actions" },
           h(
-            Link,
-            { className: "stk-btn", to: `/scenes/${scene.id}` },
+            "a",
+            { className: "stk-btn", href: `/scenes/${scene.id}`, target: "_blank", rel: "noopener noreferrer" },
             h(Icon, { name: "play", size: 16 }),
             "Whole scene"
+          ),
+          h(
+            "button",
+            { className: "stk-btn", onClick: () => onRotate(90) },
+            h(Icon, { name: "rotate", size: 16 }),
+            "Rotate"
           ),
           h(
             "button",
@@ -1558,12 +1569,26 @@
   /* library pages                                                      */
   /* ------------------------------------------------------------------ */
 
+  const SCENE_SORTS = [
+    ["updated_at", "Recently added"],
+    ["duration", "Duration"],
+    ["filesize", "File size"],
+    ["resolution", "Resolution"],
+    ["rating", "Favorites first"],
+    ["title", "A–Z"],
+    ["random", "Random"],
+  ];
+
   function PerformerProfile({ performerId, onBack, onPlay, onOpenTag }) {
     const [performer, setPerformer] = useState(null);
     const [scenes, setScenes] = useState([]);
     const [markers, setMarkers] = useState([]);
+    const [images, setImages] = useState([]);
     const [markerCount, setMarkerCount] = useState(null);
     const [tab, setTab] = useState("scenes");
+    const [sort, setSort] = useState("updated_at");
+    const [sortOpen, setSortOpen] = useState(false);
+    const [density, setDensity] = useState(3);
     const [error, setError] = useState("");
 
     useEffect(() => {
@@ -1580,19 +1605,6 @@
       )
         .then((data) => alive && setPerformer(data.findPerformer))
         .catch((err) => alive && setError(String(err.message || err)));
-
-      gql(
-        `query StashTokPerformerScenes($id: ID!) {
-          findScenes(scene_filter: { performers: { value: [$id], modifier: INCLUDES } },
-                     filter: { per_page: 60, sort: "date", direction: DESC }) {
-            count
-            scenes { id title date paths { screenshot } files { duration } }
-          }
-        }`,
-        { id: performerId }
-      )
-        .then((data) => alive && setScenes(data.findScenes.scenes))
-        .catch(() => alive && setScenes([]));
 
       gql(
         `query StashTokPerformerMarkers($id: ID!) {
@@ -1615,6 +1627,50 @@
         alive = false;
       };
     }, [performerId]);
+
+    useEffect(() => {
+      let alive = true;
+      const direction = sort === "title" ? "ASC" : "DESC";
+      gql(
+        `query StashTokPerformerScenes($id: ID!, $sort: String, $dir: SortDirectionEnum) {
+          findScenes(scene_filter: { performers: { value: [$id], modifier: INCLUDES } },
+                     filter: { per_page: 100, sort: $sort, direction: $dir }) {
+            count
+            scenes {
+              id title date rating100
+              paths { screenshot }
+              files { duration size width height }
+            }
+          }
+        }`,
+        { id: performerId, sort, dir: direction }
+      )
+        .then((data) => alive && setScenes(data.findScenes.scenes))
+        .catch(() => alive && setScenes([]));
+      return () => {
+        alive = false;
+      };
+    }, [performerId, sort]);
+
+    useEffect(() => {
+      if (tab !== "images") return undefined;
+      let alive = true;
+      gql(
+        `query StashTokPerformerImages($id: ID!, $sort: String) {
+          findImages(image_filter: { performers: { value: [$id], modifier: INCLUDES } },
+                     filter: { per_page: 60, sort: $sort, direction: DESC }) {
+            count
+            images { id title paths { thumbnail } }
+          }
+        }`,
+        { id: performerId, sort: sort === "filesize" || sort === "resolution" ? sort : "updated_at" }
+      )
+        .then((data) => alive && setImages(data.findImages.images || []))
+        .catch(() => alive && setImages([]));
+      return () => {
+        alive = false;
+      };
+    }, [performerId, tab, sort]);
 
     async function toggleFollow() {
       if (!performer) return;
@@ -1647,6 +1703,12 @@
       ["Images", performer.image_count],
       ["O", performer.o_counter || 0],
     ];
+    const gridClass = density === 5 ? "stk-grid-5" : "stk-grid-3";
+    const sortLabel = (SCENE_SORTS.find((entry) => entry[0] === sort) || SCENE_SORTS[0])[1];
+
+    function openScene(scene) {
+      onPlay({ sceneId: scene.id, tab: "scenes", sort });
+    }
 
     return h(
       "div",
@@ -1691,56 +1753,142 @@
           { className: "stk-profile-tags" },
           performer.tags.map((tag) => h("button", { key: tag.id, className: "stk-tagpill", onClick: () => onOpenTag(tag) }, tag.name))
         ),
+
       h(
         "div",
-        { className: "stk-tabs" },
+        { className: "stk-tabs stk-tabs-wide" },
         h("button", { className: tab === "scenes" ? "stk-active" : "", onClick: () => setTab("scenes") }, `Scenes ${performer.scene_count}`),
         h("button", { className: tab === "markers" ? "stk-active" : "", onClick: () => setTab("markers") }, markerCount ? `Markers ${markerCount}` : "Markers"),
-        h("button", { className: "stk-play-feed", onClick: onPlay }, h(Icon, { name: "play", size: 13 }), " Play feed")
+        h("button", { className: tab === "images" ? "stk-active" : "", onClick: () => setTab("images") }, `Images ${performer.image_count || 0}`),
+        h("button", { className: "stk-sort-btn", onClick: () => setSortOpen(!sortOpen) }, sortLabel),
+        h(
+          "button",
+          { className: "stk-sort-btn", onClick: () => setDensity(density === 3 ? 5 : 3) },
+          density === 3 ? "▦" : "▥"
+        )
       ),
+
+      sortOpen &&
+        h(
+          "div",
+          { className: "stk-sort-menu" },
+          SCENE_SORTS.map(([key, label]) =>
+            h(
+              "button",
+              {
+                key,
+                className: key === sort ? "stk-sort-on" : "",
+                onClick: () => {
+                  setSort(key);
+                  setSortOpen(false);
+                },
+              },
+              label
+            )
+          )
+        ),
+
       tab === "scenes"
         ? h(
             "div",
-            { className: "stk-grid-3" },
+            { className: gridClass },
             scenes.map((scene) =>
               h(
                 "button",
-                { key: scene.id, className: "stk-tile", onClick: onPlay },
+                {
+                  key: scene.id,
+                  className: "stk-tile",
+                  onClick: () => openScene(scene),
+                },
                 h("div", { className: "stk-tile-photo", style: { backgroundImage: `url("${rel(scene.paths && scene.paths.screenshot)}")` } }),
-                h("span", { className: "stk-tile-dur" }, fmtTime((scene.files && scene.files[0] && scene.files[0].duration) || 0))
+                h("span", { className: "stk-tile-dur" }, fmtTime((scene.files && scene.files[0] && scene.files[0].duration) || 0)),
+                scene.rating100 >= 60 && h("span", { className: "stk-tile-heart" }, h(Icon, { name: "heart", size: 12 }))
+              )
+            )
+          )
+        : tab === "markers"
+        ? h(
+            "div",
+            { className: gridClass },
+            markers.map((marker) =>
+              h(
+                "button",
+                {
+                  key: marker.id,
+                  className: "stk-tile",
+                  onClick: () => onPlay({ sceneId: marker.scene && marker.scene.id, startAt: marker.seconds, tab: "markers", sort }),
+                },
+                h("div", { className: "stk-tile-photo", style: { backgroundImage: `url("${rel(marker.scene && marker.scene.paths && marker.scene.paths.screenshot)}")` } }),
+                h("span", { className: "stk-tile-dur" }, fmtTime(marker.seconds))
               )
             )
           )
         : h(
             "div",
-            { className: "stk-grid-3" },
-            markers.map((marker) =>
+            { className: gridClass },
+            images.map((image) =>
               h(
-                "button",
-                { key: marker.id, className: "stk-tile", onClick: onPlay },
-                h("div", { className: "stk-tile-photo", style: { backgroundImage: `url("${rel(marker.scene && marker.scene.paths && marker.scene.paths.screenshot)}")` } }),
-                h("span", { className: "stk-tile-dur" }, fmtTime(marker.seconds))
+                "a",
+                {
+                  key: image.id,
+                  className: "stk-tile",
+                  href: `/images/${image.id}`,
+                  target: "_blank",
+                  rel: "noopener noreferrer",
+                },
+                h("div", { className: "stk-tile-photo", style: { backgroundImage: `url("${rel(image.paths && image.paths.thumbnail)}")` } })
               )
             )
           )
     );
   }
 
-  function PerformersPage({ onPick, onBack, onOpenTag }) {
+  function PerformersPage({ onPick, onBack, onOpenTag, initialPerformer }) {
     const [rows, setRows] = useState(null);
     const [query, setQuery] = useState("");
-    const [selected, setSelected] = useState(null);
+    const [sort, setSort] = useState("updated_at");
+    const [tagFilter, setTagFilter] = useState([]);
+    const [tags, setTags] = useState([]);
+    const [selected, setSelected] = useState(initialPerformer || null);
+
+    useEffect(() => {
+      setSelected(initialPerformer || null);
+    }, [initialPerformer]);
 
     useEffect(() => {
       let alive = true;
       gql(
-        `query StashTokPerformers($q: String) {
-          findPerformers(filter: { per_page: 200, sort: "scenes_count", direction: DESC, q: $q }) {
+        `query StashTokPerformerTags {
+          findTags(filter: { per_page: 24, sort: "scenes_count", direction: DESC }) {
+            tags { id name scene_count }
+          }
+        }`
+      )
+        .then((data) => alive && setTags(data.findTags.tags || []))
+        .catch(() =>
+          gql(`query StashTokPerformerTagsFallback { findTags(filter: { per_page: 24, sort: "name", direction: ASC }) { tags { id name scene_count } } }`)
+            .then((data) => alive && setTags(data.findTags.tags || []))
+            .catch(() => alive && setTags([]))
+        );
+      return () => {
+        alive = false;
+      };
+    }, []);
+
+    useEffect(() => {
+      let alive = true;
+      const direction = sort === "name" ? "ASC" : "DESC";
+      gql(
+        `query StashTokPerformers($q: String, $sort: String, $dir: SortDirectionEnum, $tags: [ID!]) {
+          findPerformers(
+            filter: { per_page: 200, sort: $sort, direction: $dir, q: $q },
+            performer_filter: { tags: { value: $tags, modifier: INCLUDES } }
+          ) {
             count
-            performers { id name image_path scene_count favorite }
+            performers { id name image_path scene_count favorite updated_at }
           }
         }`,
-        { q: query || null }
+        { q: query || null, sort, dir: direction, tags: tagFilter.length ? tagFilter : null }
       )
         .then((data) => {
           if (alive) setRows(data.findPerformers.performers);
@@ -1749,16 +1897,26 @@
       return () => {
         alive = false;
       };
-    }, [query]);
+    }, [query, sort, tagFilter]);
 
     if (selected) {
       return h(PerformerProfile, {
         performerId: selected.id,
-        onBack: () => setSelected(null),
-        onPlay: () => onPick(selected),
+        onBack: () => {
+          setSelected(null);
+          if (onBack) onBack();
+        },
+        onPlay: (payload) => onPick(selected, payload),
         onOpenTag,
       });
     }
+
+    const SORTS = [
+      ["updated_at", "Recently added"],
+      ["name", "A–Z"],
+      ["scenes_count", "Most scenes"],
+      ["random", "Random"],
+    ];
 
     return h(
       "div",
@@ -1769,10 +1927,40 @@
         placeholder: "Search performers",
         value: query,
         onChange: (event) => setQuery(event.currentTarget.value),
-        style: { width: "100%", marginBottom: "12px", padding: "9px 11px", borderRadius: "10px", background: "#171717", border: "1px solid #2a2a2a", color: "#fff" },
+        style: { width: "100%", marginBottom: "10px", padding: "9px 11px", borderRadius: "10px", background: "#171717", border: "1px solid #2a2a2a", color: "#fff" },
       }),
+      h(
+        "div",
+        { className: "stk-chips" },
+        SORTS.map(([key, label]) =>
+          h("button", { key, className: "stk-tagpill" + (sort === key ? " stk-speed-on" : ""), onClick: () => setSort(key) }, label)
+        )
+      ),
+      tags.length > 0 &&
+        h(
+          "div",
+          { className: "stk-chips" },
+          tags.map((tag) =>
+            h(
+              "button",
+              {
+                key: tag.id,
+                className: "stk-tagpill" + (tagFilter.indexOf(tag.id) >= 0 ? " stk-speed-on" : ""),
+                onClick: () =>
+                  setTagFilter((current) =>
+                    current.indexOf(tag.id) >= 0 ? current.filter((id) => id !== tag.id) : current.concat([tag.id])
+                  ),
+              },
+              tag.name
+            )
+          ),
+          tagFilter.length > 0 &&
+            h("button", { className: "stk-tagpill", onClick: () => setTagFilter([]) }, "Clear")
+        ),
       !rows
         ? h("div", { className: "stk-state" }, h("div", { className: "stk-spinner" }))
+        : rows.length === 0
+        ? h("div", { className: "stk-state" }, h("p", null, "No performers match that."))
         : h(
             "div",
             { className: "stk-grid" },
@@ -2165,7 +2353,7 @@
       return () => window.removeEventListener("popstate", onPop);
     }, []);
 
-    function openPerformer(performer) {
+    function openPerformer(performer, payload) {
       if (!performer) {
         setPerformersOpen(true);
         setTab("performers");
@@ -2175,12 +2363,15 @@
       setPerformerFilter(performer);
       setTagFilter(null);
       setActiveFeed({
-        id: "perf-" + performer.id,
+        id: "perf-" + performer.id + (payload && payload.sceneId ? ":" + payload.sceneId : ""),
         name: performer.name,
         type: "performer",
         performerId: performer.id,
         sort: "date",
         direction: "DESC",
+        startSceneId: (payload && payload.sceneId) || null,
+        startAt: (payload && payload.startAt) || null,
+        origin: { kind: "performer", id: performer.id },
       });
       setTab("home");
       setRefreshKey((n) => n + 1);
@@ -2236,6 +2427,7 @@
         onPick: openPerformer,
         onBack: () => setTab("home"),
         onOpenTag: openTag,
+        initialPerformer: performerFilter,
       });
     } else if (tab === "folder" && folderView) {
       body = h(FolderProfile, {
@@ -2279,6 +2471,7 @@
         feeds,
         onSwitchFeed: useFeed,
         onNewFeed: () => setBuilder({ spec: null }),
+        onBack: activeFeed.origin ? () => setTab("performers") : undefined,
       });
     }
 

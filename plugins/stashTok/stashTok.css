@@ -866,3 +866,67 @@
 /* playback speed chips */
 .stk-speed-row { display: flex; flex-wrap: wrap; gap: 6px; }
 .stk-speed-on { background: #ff2d55; border-color: #ff2d55; color: #fff; }
+
+/* performer page: sort + density */
+.stk-tabs-wide { flex-wrap: wrap; gap: 6px; }
+.stk-sort-btn {
+  margin-left: auto;
+  background: #1b1b1b;
+  border: 1px solid #333;
+  color: #eee;
+  border-radius: 8px;
+  padding: 5px 9px;
+  font-size: 12px;
+}
+.stk-sort-menu {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 12px 0;
+}
+.stk-sort-menu button {
+  background: #171717;
+  border: 1px solid #2c2c2c;
+  color: #ddd;
+  border-radius: 999px;
+  padding: 6px 11px;
+  font-size: 12px;
+}
+.stk-sort-menu .stk-sort-on { background: #ff2d55; border-color: #ff2d55; color: #fff; }
+.stk-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+
+.stk-grid-5 {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 3px;
+  padding: 0 8px 16px;
+}
+.stk-grid-5 .stk-tile-photo { aspect-ratio: 1 / 1; }
+.stk-grid-5 .stk-tile-dur { font-size: 9px; padding: 1px 3px; }
+
+.stk-tile-heart {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  color: #ff2d55;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.8));
+}
+
+/* back out of a performer feed to the profile */
+.stk-feed-back {
+  position: absolute;
+  top: calc(12px + env(safe-area-inset-top, 0px));
+  left: 10px;
+  z-index: 30;
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.45);
+  border: 0;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transform: rotate(90deg);
+  backdrop-filter: blur(6px);
+}
