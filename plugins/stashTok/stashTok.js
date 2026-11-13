@@ -195,6 +195,22 @@
 
   /** Start where the action is: a random marker when the scene has them, else a
    *  random fifth for long scenes, so a feed never opens on an intro. */
+
+  /** Browsers cannot decode these containers/codecs, so a feed containing them
+   *  is a run of dead frames. Drop them before they reach the player. */
+  const BAD_EXT = ["wmv", "avi", "flv", "mpg", "mpeg", "vob", "ts", "m2ts", "rmvb", "divx", "ogv", "3gp", "asf"];
+  const BAD_CODEC = ["wmv1", "wmv2", "wmv3", "vc-1", "msmpeg4", "mpeg4", "mpeg2video", "mpeg1video", "rv40", "h263", "msvideo1"];
+
+  function isPlayable(scene) {
+    const file = (scene.files && scene.files[0]) || {};
+    const path = String(file.path || (scene.paths && scene.paths.stream) || "");
+    const dot = path.lastIndexOf(".");
+    const ext = dot >= 0 ? path.slice(dot + 1).toLowerCase() : "";
+    if (BAD_EXT.indexOf(ext) >= 0) return false;
+    const codec = String(file.video_codec || "").toLowerCase();
+    return !BAD_CODEC.some((bad) => codec.indexOf(bad) === 0);
+  }
+
   function pickStartAt(scene, cfg, spec) {
     if (spec && spec.startAt) return Number(spec.startAt) || 0;
     if (cfg.randomStart === false) return 0;
@@ -318,7 +334,7 @@
     return {
       count: (data.findScenes && data.findScenes.count) || 0,
       items: scenes
-        .filter((scene) => scene.files && scene.files.length)
+        .filter((scene) => scene.files && scene.files.length && isPlayable(scene))
         .map((scene) => ({ key: "s" + scene.id, scene, startAt: pickStartAt(scene, cfg, spec), endAt: 0 })),
     };
   }
@@ -347,7 +363,7 @@
     return {
       count: (data.findSceneMarkers && data.findSceneMarkers.count) || 0,
       items: markers
-        .filter((marker) => marker.scene && marker.scene.files && marker.scene.files.length)
+        .filter((marker) => marker.scene && marker.scene.files && marker.scene.files.length && isPlayable(marker.scene))
         .map((marker) => ({
           key: "m" + marker.id,
           scene: marker.scene,
@@ -385,7 +401,7 @@
     return {
       count: (data2.findScenes && data2.findScenes.count) || 0,
       items: scenes
-        .filter((scene) => scene.files && scene.files.length)
+        .filter((scene) => scene.files && scene.files.length && isPlayable(scene))
         .map((scene) => ({ key: "s" + scene.id, scene, startAt: pickStartAt(scene, cfg, spec), endAt: 0 })),
     };
   }
@@ -1143,6 +1159,198 @@
               });
             }),
         ),
+
+
+        onBack &&
+          h("button", { className: "stk-feed-back", onClick: onBack }, h(Icon, { name: "chevron", size: 22 })),
+
+        h(
+          "div",
+          { className: "stk-pause" + (!playing && ready ? " stk-show" : "") },
+          h(Icon, { name: playing ? "pause" : "play", size: 32 })
+        ),
+
+        heartBurst > 0 &&
+          h(
+            "div",
+            { key: heartBurst, className: "stk-big-heart stk-fire" },
+            h(Icon, { name: "heart", size: 110 })
+          ),
+
+        rateBadge && h("div", { className: "stk-rate" }, rateBadge),
+
+        h(
+          "div",
+          { className: "stk-top stk-top-center" },
+          h(
+            "button",
+            {
+              className: "stk-feed-pill",
+              onClick: (event) => {
+                event.stopPropagation();
+                setSheet("feeds");
+              },
+            },
+            h(Icon, { name: "sparkle", size: 11 }),
+            spec.name || "For You",
+            h(Icon, { name: "chevron", size: 10, className: "stk-pill-caret" })
+          )
+        ),
+
+        h(
+          "div",
+          { className: "stk-info" },
+          h(
+            "div",
+            { className: "stk-handle-row" },
+            handle.image
+              ? h("img", {
+                  className: "stk-handle-avatar",
+                  src: handle.image,
+                  alt: "",
+                  onClick: (event) => {
+                    event.stopPropagation();
+                    openHandle();
+                  },
+                })
+              : h(
+                  "button",
+                  { className: "stk-handle-avatar stk-handle-initials", onClick: (event) => { event.stopPropagation(); openHandle(); } },
+                  initials(handle.name)
+                ),
+            h(
+              "button",
+              { className: "stk-handle-name", onClick: (event) => { event.stopPropagation(); openHandle(); } },
+              handle.name
+            )
+          ),
+          performers.length > 1 &&
+            h("div", { className: "stk-info-with" }, "with " + performers.slice(1, 4).map((performer) => performer.name).join(", ")),
+          tags.length > 0 &&
+            h(
+              "div",
+              { className: "stk-hashtags" },
+              tags.slice(0, 8).map((tag) =>
+                h(
+                  "button",
+                  {
+                    key: tag.id,
+                    className: "stk-hashtext",
+                    onClick: (event) => {
+                      event.stopPropagation();
+                      onOpenTag(tag);
+                    },
+                  },
+                  "#" + tag.name.replace(/\s+/g, "-").toLowerCase()
+                )
+              )
+            )
+        ),
+
+        h(
+          "div",
+          { className: "stk-rail" },
+          h(
+            "button",
+            {
+              onClick: (event) => {
+                event.stopPropagation();
+                toggleHeart();
+              },
+              className: rating != null && rating >= cfg.heartRating ? "stk-on" : "",
+            },
+            h(Icon, { name: "heart", size: 26 }),
+            h("span", null, "Heart")
+          ),
+          performers.length > 0 &&
+            h(
+              "button",
+              {
+                onClick: (event) => {
+                  event.stopPropagation();
+                  onOpenPerformer(performers[0]);
+                },
+              },
+              h(Icon, { name: "user", size: 26 }),
+              h("span", null, performers.length > 1 ? performers.length + " people" : "Performer")
+            ),
+          h(
+            "button",
+            {
+              onClick: (event) => {
+                event.stopPropagation();
+                setMuted((value) => !value);
+              },
+            },
+            h(Icon, { name: muted ? "mute" : "volume", size: 26 }),
+            h("span", null, muted ? "Muted" : "Sound")
+          ),
+          h(
+            "button",
+            {
+              onClick: (event) => {
+                event.stopPropagation();
+                setSheet("actions");
+              },
+            },
+            h(Icon, { name: "sparkle", size: 26 }),
+            h("span", null, speed === 1 ? "More" : speed + "x")
+          )
+        ),
+
+        hud &&
+          h(
+            "div",
+            { className: "stk-time" },
+            `${fmtTime(time)} / ${fmtTime(duration)}${zoom > 1.02 ? ` · ${zoom.toFixed(1)}x` : ""}`
+          ),
+
+        h(
+          "div",
+          {
+            className: "stk-timeline" + (scrubbing ? " stk-scrubbing" : ""),
+            onPointerDown: onTimelineDown,
+            onPointerMove: onTimelineMove,
+            onPointerUp: onTimelineUp,
+            onPointerCancel: onTimelineUp,
+          },
+          h(
+            "div",
+            { className: "stk-timeline-inner" },
+            h("div", { className: "stk-timeline-fill", style: { width: `${scrubbingRatio * 100}%` } }),
+            cfg.showMarkerTicks &&
+              duration > 0 &&
+              markers.map((marker) =>
+                h("div", {
+                  key: marker.id,
+                  className: "stk-tick",
+                  style: { left: `${(Number(marker.seconds) / duration) * 100}%` },
+                })
+              ),
+            scrubbing &&
+              nearMarker &&
+              h(
+                "div",
+                { className: "stk-scrub-label", style: { left: `${scrubbingRatio * 100}%` } },
+                `${fmtTime(nearMarker.seconds)} · ${nearMarker.primary_tag ? nearMarker.primary_tag.name : "Marker"}`
+              )
+          )
+        ),
+
+        sheet === "feeds" &&
+          h(FeedPicker, {
+            feeds: feeds || [],
+            current: spec,
+            onPick: (next) => {
+              setSheet(null);
+              onSwitchFeed(next);
+            },
+            onNew: () => {
+              setSheet(null);
+              onNewFeed();
+            },
+            onClose: () => setSheet(null),
+          }),
 
         sheet && sheet !== "feeds" &&
           h(Sheet, {
