@@ -572,7 +572,15 @@
                 /* ignore */
               }
             }
-            if (video.paused) video.play().catch(() => {});
+            if (video.paused) {
+              video.play().then(() => setPlaying(true)).catch(() => {});
+              window.setTimeout(() => {
+                const nowActive = stage.querySelector(".stk-video.stk-active");
+                if (nowActive && nowActive.paused) nowActive.play().catch(() => {});
+              }, 220);
+            } else {
+              setPlaying(true);
+            }
           } else if (!video.paused) {
             video.pause();
           }
@@ -614,12 +622,8 @@
       };
     }, [item && item.key]);
 
-    useEffect(() => {
-      const video = videoRef.current;
-      if (!video) return;
-      if (playing) video.play().catch(() => setPlaying(false));
-      else video.pause();
-    }, [playing]);
+    /* play/pause is driven directly on the active element: a state-driven pause
+       races the layer swap and kills the incoming video */
 
     useEffect(() => {
       const video = videoRef.current;
@@ -927,7 +931,16 @@
         lastTapAt.current = now;
         window.clearTimeout(tapTimer.current);
         tapTimer.current = window.setTimeout(() => {
-          setPlaying((value) => !value);
+          const video = videoRef.current;
+          if (video) {
+            if (video.paused) {
+              video.play().catch(() => {});
+              setPlaying(true);
+            } else {
+              video.pause();
+              setPlaying(false);
+            }
+          }
           lastTapAt.current = 0;
         }, 240);
         return;
@@ -1116,7 +1129,17 @@
                       window.setTimeout(goNext, 600);
                     }
                   : undefined,
-                style: active ? { zIndex: 2 } : { zIndex: 1 },
+                style: {
+                  // inline so a stale CSS cache can never stack the layers vertically
+                  position: "absolute",
+                  inset: 0,
+                  width: "100%",
+                  height: "100%",
+                  objectFit: fill ? "cover" : "contain",
+                  opacity: active ? 1 : 0,
+                  pointerEvents: active ? "auto" : "none",
+                  zIndex: active ? 2 : 1,
+                },
               });
             }),
         ),

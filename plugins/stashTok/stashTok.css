@@ -53,7 +53,9 @@
 }
 
 .stk-video {
-  position: relative;
+  /* layers overlap, so a swipe swaps stacked elements instead of scrolling */
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   object-fit: contain;
