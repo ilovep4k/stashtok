@@ -935,7 +935,9 @@
 
 /* stacked video layers: the next ones are already decoded, so a swipe swaps instead of loading */
 .stk-video { transition: opacity 0.1s linear; }
-.stk-video:not(.stk-active) { opacity: 0; pointer-events: none; }
+/* layers are offset a full screen apart, so they must stay painted or the
+   drag shows black until the swap */
+.stk-video:not(.stk-active) { opacity: 1; pointer-events: none; }
 
 /* pinch zooms the video, never the page or the chrome around it */
 .stash-tok-wrap { touch-action: pan-y; overscroll-behavior: contain; }

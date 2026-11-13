@@ -1307,7 +1307,7 @@
                   width: "100%",
                   height: "100%",
                   objectFit: "contain",
-                  opacity: active ? 1 : 0,
+                  opacity: 1,
                   pointerEvents: active ? "auto" : "none",
                   zIndex: active ? 2 : 1,
                 },
