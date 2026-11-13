@@ -2528,11 +2528,65 @@
   /* settings                                                           */
   /* ------------------------------------------------------------------ */
 
-  function SettingsPanel({ cfg, feeds, onEdit }) {
+  function SettingsPanel({ cfg, feeds, onEdit, pin, onSetPin, onClearPin }) {
+    const [draft, setDraft] = useState("");
+    const [saved, setSaved] = useState(false);
+
     return h(
       "div",
       { className: "stk-settings", style: { marginTop: "16px" } },
-      h("h4", null, "Feeds"),
+      h("h4", null, "Privacy lock"),
+      h(
+        "p",
+        { className: "stk-sub" },
+        pin
+          ? "A PIN is set. StashTok black-screens the moment this tab loses focus and asks for the PIN when you come back."
+          : "Set a PIN to black-screen StashTok whenever you leave the tab."
+      ),
+      h(
+        "div",
+        { className: "stk-pin-row" },
+        h("input", {
+          type: "tel",
+          inputMode: "numeric",
+          placeholder: pin ? "New PIN (4–8 digits)" : "PIN (4–8 digits)",
+          value: draft,
+          maxLength: 8,
+          onChange: (event) => {
+            setDraft(event.currentTarget.value.replace(/\D/g, ""));
+            setSaved(false);
+          },
+          className: "stk-pin-input",
+        }),
+        h(
+          "button",
+          {
+            className: "stk-btn",
+            onClick: () => {
+              if (draft.length < 4) return;
+              onSetPin(pinDigest(draft));
+              setDraft("");
+              setSaved(true);
+            },
+          },
+          pin ? "Change" : "Set PIN"
+        ),
+        pin &&
+          h(
+            "button",
+            {
+              className: "stk-btn stk-btn-danger",
+              onClick: () => {
+                onClearPin();
+                setDraft("");
+                setSaved(false);
+              },
+            },
+            "Remove"
+          )
+      ),
+      saved && h("p", { className: "stk-sub" }, "PIN saved."),
+      h("h4", { style: { marginTop: "18px" } }, "Feeds"),
       (feeds || []).map((feed) =>
         h(
           "button",
@@ -2576,9 +2630,129 @@
     return cfg;
   }
 
+
+  /* ---- privacy lock ------------------------------------------------ */
+
+  const PIN_KEY = "stashTok.pin";
+
+  /** Cheap, salted digest. crypto.subtle needs a secure context, and Stash on a
+   *  LAN IP is plain http, so it is unavailable exactly where this matters. */
+  function pinDigest(pin) {
+    const text = "stashtok:" + pin;
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < text.length; i += 1) {
+      hash ^= text.charCodeAt(i);
+      hash = (hash * 0x01000193) >>> 0;
+    }
+    return hash.toString(16);
+  }
+
+  function LockScreen({ stored, onUnlock }) {
+    const [entry, setEntry] = useState("");
+    const [wrong, setWrong] = useState(false);
+
+    function press(digit) {
+      setWrong(false);
+      setEntry((current) => (current + digit).slice(0, 8));
+    }
+
+    function submit() {
+      if (pinDigest(entry) === stored) {
+        onUnlock();
+        return;
+      }
+      setWrong(true);
+      setEntry("");
+      buzz(60);
+    }
+
+    return h(
+      "div",
+      { className: "stk-lock" },
+      h("div", { className: "stk-lock-title" }, "Locked"),
+      h("div", { className: "stk-lock-dots" }, entry.replace(/./g, "•") || "Enter PIN"),
+      h(
+        "div",
+        { className: "stk-lock-pad" },
+        ["1", "2", "3", "4", "5", "6", "7", "8", "9", "⌫", "0", "→"].map((key) =>
+          h(
+            "button",
+            {
+              key,
+              className: "stk-lock-key" + (wrong ? " stk-lock-wrong" : ""),
+              onClick: () => {
+                if (key === "⌫") setEntry((current) => current.slice(0, -1));
+                else if (key === "→") submit();
+                else press(key);
+              },
+            },
+            key
+          )
+        )
+      )
+    );
+  }
+
   function StashTokApp() {
     const cfg = usePluginConfig();
     const shellRef = useRef(null);
+    const coverRef = useRef(null);
+    const [pin, setPin] = useState(() => {
+      try {
+        return window.localStorage.getItem(PIN_KEY) || "";
+      } catch (e) {
+        return "";
+      }
+    });
+    const [locked, setLocked] = useState(() => {
+      try {
+        return Boolean(window.localStorage.getItem(PIN_KEY));
+      } catch (e) {
+        return false;
+      }
+    });
+
+    function savePin(value) {
+      try {
+        if (value) window.localStorage.setItem(PIN_KEY, value);
+        else window.localStorage.removeItem(PIN_KEY);
+      } catch (e) {
+        /* ignore */
+      }
+      setPin(value);
+      setLocked(Boolean(value));
+    }
+
+    /* cover the screen the moment attention leaves, before React can re-render */
+    useEffect(() => {
+      if (!pin) return undefined;
+      const hide = () => {
+        const cover = coverRef.current;
+        if (cover) {
+          cover.style.visibility = "visible";
+          cover.style.opacity = "1";
+        }
+        document.querySelectorAll(".stk-video").forEach((video) => {
+          try {
+            video.pause();
+          } catch (e) {
+            /* ignore */
+          }
+        });
+        setLocked(true);
+      };
+      const onVisibility = () => {
+        if (document.visibilityState !== "visible") hide();
+      };
+      document.addEventListener("visibilitychange", onVisibility);
+      window.addEventListener("blur", hide);
+      window.addEventListener("pagehide", hide);
+      return () => {
+        document.removeEventListener("visibilitychange", onVisibility);
+        window.removeEventListener("blur", hide);
+        window.removeEventListener("pagehide", hide);
+      };
+    }, [pin]);
     const [tab, setTab] = useState("home");
     const [feeds, setFeeds] = useState(() => loadFeeds());
     const [activeFeed, setActiveFeed] = useState(defaultFeed());
@@ -2800,7 +2974,14 @@
         "div",
         { className: "stk-page" },
         h("h2", null, "Settings"),
-        h(SettingsPanel, { cfg, feeds, onEdit: (spec) => setBuilder({ spec }) }),
+        h(SettingsPanel, {
+          cfg,
+          feeds,
+          onEdit: (spec) => setBuilder({ spec }),
+          pin,
+          onSetPin: savePin,
+          onClearPin: () => savePin(""),
+        }),
         h(
           "p",
           { className: "stk-sub" },
@@ -2892,6 +3073,24 @@
             onUse: useFeed,
             onDelete: deleteFeed,
             onClose: () => setBuilder(null),
+          }),
+
+        h("div", { className: "stk-lock-cover", ref: coverRef, style: locked ? { visibility: "visible", opacity: 1 } : undefined }),
+
+        locked &&
+          pin &&
+          h(LockScreen, {
+            stored: pin,
+            onUnlock: () => {
+              const cover = coverRef.current;
+              if (cover) {
+                cover.style.visibility = "hidden";
+                cover.style.opacity = "0";
+              }
+              setLocked(false);
+              const video = document.querySelector(".stk-video.stk-active");
+              if (video) video.play().catch(() => {});
+            },
           })
       )
     );
