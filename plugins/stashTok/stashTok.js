@@ -1617,19 +1617,6 @@
                 )
               )
             ),
-          h(
-            "div",
-            { className: "stk-music" },
-            h("span", { className: "stk-disc" + (playing ? " stk-spin" : "") }, h(Icon, { name: "music", size: 12 })),
-            h(
-              "div",
-              { className: "stk-ticker" },
-              h("div", { className: "stk-ticker-track" + (playing ? " stk-ticker-run" : "") },
-                h("span", null, item && item.scene && (item.scene.caption || handle.name) ? (item.scene.caption || handle.name) + " · " + (spec.name || "StashTok") : "StashTok"),
-                h("span", null, item && item.scene && (item.scene.caption || handle.name) ? (item.scene.caption || handle.name) + " · " + (spec.name || "StashTok") : "StashTok")
-              )
-            )
-          )
         ),
 
         h(
