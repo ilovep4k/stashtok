@@ -58,14 +58,14 @@
     rotate: "M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4",
   };
 
-  function Icon({ name, size = 22, className = "" }) {
+  function Icon({ name, size = 22, className = "", filled = false }) {
     return h(
       "svg",
       {
         viewBox: "0 0 24 24",
         width: size,
         height: size,
-        fill: "none",
+        fill: filled && name === "heart" ? "currentColor" : "none",
         stroke: "currentColor",
         strokeWidth: name === "heart" ? 1.8 : 1.7,
         strokeLinecap: "round",
@@ -1383,7 +1383,7 @@
           h(
             "div",
             { key: heartBurst, className: "stk-big-heart stk-fire" },
-            h(Icon, { name: "heart", size: 110 })
+            h(Icon, { name: "heart", size: 110, filled: true })
           ),
 
         rateBadge && h("div", { className: "stk-rate" }, rateBadge),
@@ -1495,7 +1495,7 @@
               },
               className: rating != null && rating >= cfg.heartRating ? "stk-on" : "",
             },
-            h(Icon, { name: "heart", size: 26 }),
+            h(Icon, { name: "heart", size: 26, filled: rating != null && rating >= cfg.heartRating }),
             h("span", null, "Heart")
           ),
           performers.length > 0 &&
@@ -2039,7 +2039,7 @@
         "div",
         { className: "stk-cover", style: { backgroundImage: `url("${cover}")` } },
         h("button", { className: "stk-cover-back", onClick: onBack }, h(Icon, { name: "chevron", size: 20 })),
-        performer.favorite && h("div", { className: "stk-cover-badge" }, h(Icon, { name: "heart", size: 13 }), " Following")
+        performer.favorite && h("div", { className: "stk-cover-badge" }, h(Icon, { name: "heart", size: 13, filled: true }), " Following")
       ),
       h(
         "div",
@@ -2140,7 +2140,7 @@
                 },
                 h("div", { className: "stk-tile-photo", style: { backgroundImage: `url("${rel(scene.paths && scene.paths.screenshot)}")` } }),
                 h("span", { className: "stk-tile-dur" }, fmtTime((scene.files && scene.files[0] && scene.files[0].duration) || 0)),
-                scene.rating100 >= 60 && h("span", { className: "stk-tile-heart" }, h(Icon, { name: "heart", size: 12 }))
+                scene.rating100 >= 60 && h("span", { className: "stk-tile-heart" }, h(Icon, { name: "heart", size: 12, filled: true }))
               );
             })
           )
