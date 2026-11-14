@@ -874,6 +874,8 @@
     indexRef.current = index;
     const timeRef = useRef(time);
     timeRef.current = time;
+    const speedRef = useRef(speed);
+    speedRef.current = Number(speed) || 1;
     const hydratedRef = useRef(false);
 
     /* remember the seat as we move, not only on the way out */
@@ -1233,7 +1235,7 @@
         cancelAnimationFrame(rafRef.current);
         rafRef.current = 0;
       }
-      if (video) video.playbackRate = speed;
+      if (video) video.playbackRate = speedRef.current;
       setRateBadge("");
     }, []);
 
@@ -1381,10 +1383,16 @@
     }
 
     function onPointerUp(event) {
-      if (event.target && event.target.closest && event.target.closest("button, input, .stk-rail, .stk-nav, .stk-timeline, .stk-sheet, .stk-top, a")) return;
       const g = gesture.current;
       window.clearTimeout(holdTimer.current);
+      // a fast-forward hold must end even when the finger lifts over a control,
+      // otherwise the clip keeps playing at holdSpeed while the badge says 1x
       if (g && g.mode === "hold") stopHold();
+      else if (!rateBadge) {
+        const held = activeVideo();
+        if (held && Math.abs(held.playbackRate - speedRef.current) > 0.01) held.playbackRate = speedRef.current;
+      }
+      if (event.target && event.target.closest && event.target.closest("button, input, .stk-rail, .stk-nav, .stk-timeline, .stk-sheet, .stk-top, a")) return;
 
       const remaining = pts.current.size;
       pts.current.delete(event.pointerId);
@@ -3341,7 +3349,7 @@
     ["random", "Random"],
   ];
 
-  function FolderProfile({ name, folder, onBack, onPlay, prefs }) {
+  function FolderProfile({ name, folder, onBack, onPlay, prefs, view }) {
     const [tab, setTab] = useState("scenes");
     const folderSortKey = "stashTok.folderSort." + folder;
     const [fvSort, setFvSort] = useState(() => {
@@ -3458,7 +3466,7 @@
       };
     }, [folder, tab, media]);
 
-    if (!prefs || prefs.folderView !== "gallery") {
+    if (prefs && prefs.folderView !== "gallery" && view !== "gallery") {
       const base = String(folder || "").replace(/\/+$/, "");
       const relOf = (scene) => {
         const path = String(((scene.files && scene.files[0]) || {}).path || "");
@@ -4664,6 +4672,7 @@
       body = h(FolderProfile, {
         name: folderView.name,
         folder: folderView.folder,
+        view: folderView.view || null,
         prefs,
         onBack: () => {
           setFolderView(null);
@@ -4708,7 +4717,7 @@
         onPickPerformer: openPerformer,
         onPickFolder: (row) => {
           if (!row || !row.folder) return;
-          setFolderView(row);
+          setFolderView(Object.assign({ view: "list" }, row));
           setTab("folder");
           goTo("folder/" + encodeURIComponent(row.folder));
         },
@@ -4778,7 +4787,7 @@
         onDeriveFeed: useFeed,
         onEditFeed: (spec) => setBuilder({ spec }),
         onOpenFolder: (target) => {
-          setFolderView(target);
+          setFolderView(Object.assign({ view: "gallery" }, target));
           setTab("folder");
         },
         feeds,
