@@ -1261,12 +1261,59 @@
       return Math.hypot(a.x - b.x, a.y - b.y);
     }
 
+    /** forget half-finished gestures (app switch, blur, cancel) and restore the rate */
+    const dropGestures = useCallback(() => {
+      window.clearTimeout(holdTimer.current);
+      window.clearTimeout(tapTimer.current);
+      pts.current.clear();
+      gesture.current = null;
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = 0;
+      }
+      const video = activeVideo();
+      if (video) video.playbackRate = speedRef.current;
+      setRateBadge("");
+    }, [activeVideo]);
+
+    useEffect(() => {
+      let wasPlaying = false;
+      const onHide = () => {
+        const video = activeVideo();
+        wasPlaying = !!(video && !video.paused);
+        dropGestures();
+      };
+      const onShow = () => {
+        const video = activeVideo();
+        if (wasPlaying && video && video.paused) {
+          const attempt = video.play();
+          if (attempt && attempt.catch) attempt.catch(() => {});
+        }
+        wasPlaying = false;
+      };
+      const onVisibility = () => (document.visibilityState === "hidden" ? onHide() : onShow());
+      document.addEventListener("visibilitychange", onVisibility);
+      window.addEventListener("blur", onHide);
+      window.addEventListener("focus", onShow);
+      return () => {
+        document.removeEventListener("visibilitychange", onVisibility);
+        window.removeEventListener("blur", onHide);
+        window.removeEventListener("focus", onShow);
+      };
+    }, [activeVideo, dropGestures]);
+
     function onPointerDown(event) {
       if (sheet) return;
       // a tap on a rail button / HUD must not also toggle playback
       if (event.target && event.target.closest && event.target.closest("button, input, .stk-rail, .stk-nav, .stk-timeline, .stk-sheet, .stk-top, a")) return;
       const stage = stageRef.current;
       if (!stage) return;
+      // switching apps can eat the pointerup, leaving a phantom point behind: the
+      // next tap then reads as a two-finger pinch and zooms the video
+      if (event.isPrimary) {
+        pts.current.clear();
+        gesture.current = null;
+      }
       try {
         stage.setPointerCapture(event.pointerId);
       } catch (e) {
@@ -1528,7 +1575,7 @@
 
     /* ---- render ---------------------------------------------------- */
 
-    if (failCount >= 8) {
+    if (failCount >= 20) {
       return h(
         "div",
         { className: "stash-tok stk-embedded" },
