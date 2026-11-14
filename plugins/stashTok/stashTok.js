@@ -627,6 +627,7 @@
     const [ready, setReady] = useState(false);
     const [streamFallback, setStreamFallback] = useState(false);
     const [failCount, setFailCount] = useState(0);
+    const [revealed, setRevealed] = useState(false);
     const [rotation, setRotation] = useState(0);
     const [speed, setSpeed] = useState(() => Number(window.localStorage.getItem("stashTok.speed")) || 1);
     const [muted, setMuted] = useState(cfg.autoplayMuted);
@@ -775,6 +776,7 @@
       setStreamFallback(false);
       setDuration(0);
       setTime((item && Number(item.startAt)) || 0);
+      setRevealed(false);
       resetZoom();
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [item && item.key]);
@@ -1270,6 +1272,8 @@
       if (!video) return;
       setTime(video.currentTime);
       if (!duration && video.duration) setDuration(video.duration);
+      // real frames only: timeupdate never fires before the clip is rolling
+      if (!revealed && video.currentTime > 0.05 && video.readyState >= 2) setRevealed(true);
     };
 
     /* ---- render ---------------------------------------------------- */
@@ -1378,7 +1382,7 @@
                   : (el) => {
                       if (el) prewarm(el, entry.startAt);
                     },
-                className: "stk-video" + (active ? " stk-active" : ""),
+                className: "stk-video" + (active ? " stk-active" : "") + (active && !revealed ? " stk-video-blur" : ""),
                 src: active && streamFallback ? source.signed : source.plain,
                 playsInline: true,
                 autoPlay: active,
@@ -3239,6 +3243,26 @@
     const [performerFilter, setPerformerFilter] = useState(null);
     const [tagFilter, setTagFilter] = useState(null);
     const [folderView, setFolderView] = useState(null);
+
+    /* thumbnails stay blurred; pressing one peeks at it, nothing switches the blur off */
+    useEffect(() => {
+      const down = (event) => {
+        const target = event.target;
+        const host = target && target.closest && target.closest(".stk-tile, .stk-account, .stk-search-row, .stk-cover");
+        if (host) host.classList.add("stk-peek");
+      };
+      const up = () => {
+        document.querySelectorAll(".stk-peek").forEach((el) => el.classList.remove("stk-peek"));
+      };
+      document.addEventListener("pointerdown", down, true);
+      document.addEventListener("pointerup", up, true);
+      document.addEventListener("pointercancel", up, true);
+      return () => {
+        document.removeEventListener("pointerdown", down, true);
+        document.removeEventListener("pointerup", up, true);
+        document.removeEventListener("pointercancel", up, true);
+      };
+    }, []);
 
     /* ---- routing: the URL is the source of truth --------------------- */
 

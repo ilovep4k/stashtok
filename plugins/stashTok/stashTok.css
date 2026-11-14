@@ -1171,3 +1171,27 @@
 }
 .stk-media-toggle button.stk-on { background: #fff; color: #000; }
 .stk-media-actions { grid-column: 3; display: flex; gap: 6px; justify-self: end; }
+
+/* content is blurred by default and there is no switch: press to peek */
+.stk-tile-photo,
+.stk-account-photo,
+.stk-search-thumb,
+.stk-avatar,
+.stk-handle-avatar,
+.stk-cover {
+  filter: blur(18px) saturate(0.9);
+  transform: scale(1.08);
+  transition: filter 120ms linear;
+}
+.stk-tile.stk-peek .stk-tile-photo,
+.stk-account.stk-peek .stk-account-photo,
+.stk-search-row.stk-peek .stk-search-thumb,
+.stk-cover.stk-peek {
+  filter: none;
+  transform: none;
+}
+.stk-peek .stk-avatar,
+.stk-peek .stk-handle-avatar { filter: none; transform: none; }
+
+/* the clip stays blurred until it is actually playing */
+.stk-video-blur { filter: blur(24px) saturate(0.85); }
