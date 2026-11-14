@@ -530,7 +530,8 @@
       longSceneSeconds: Number(raw.longSceneSeconds) || 300,
       flagTag: raw.flagTag || "stashtok-delete",
       doubleTapHeart: raw.doubleTapHeart !== false,
-      minDuration: raw.minDuration == null ? 30 : Number(raw.minDuration),
+      // 0 = every scene in the library is eligible, regardless of length
+      minDuration: raw.minDuration == null ? 0 : Number(raw.minDuration),
     };
   }
 
