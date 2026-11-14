@@ -2008,6 +2008,186 @@
     ["random", "Random"],
   ];
 
+  function ImageViewer({ image, rect, onClose }) {
+    const [mode, setMode] = useState("fit");
+    const [natural, setNatural] = useState(null);
+    const [hero, setHero] = useState(rect || null);
+    const [scale, setScale] = useState(1);
+    const stageRef = useRef(null);
+    const imgRef = useRef(null);
+    const view = useRef({ s: 1, x: 0, y: 0 });
+    const gesture = useRef(null);
+    const pts = useRef(new Map());
+    const lastTap = useRef(0);
+
+    const src = image && image.paths ? rel(image.paths.image || image.paths.thumbnail) : "";
+
+    useEffect(() => {
+      // grow out of the thumbnail instead of popping in
+      const t = window.setTimeout(() => setHero(null), 40);
+      const onKey = (event) => {
+        if (event.key === "Escape") onClose();
+      };
+      window.addEventListener("keydown", onKey);
+      return () => {
+        window.clearTimeout(t);
+        window.removeEventListener("keydown", onKey);
+      };
+    }, []);
+
+    const geometry = useCallback(() => {
+      const el = stageRef.current;
+      if (!el || !natural) return { contain: 1, fill: 1 };
+      const cw = el.clientWidth || 1;
+      const ch = el.clientHeight || 1;
+      return { contain: Math.min(cw / natural.w, ch / natural.h), fill: Math.max(cw / natural.w, ch / natural.h) };
+    }, [natural]);
+
+    // 1 = fit, fill = cover the frame, original = one image pixel per CSS pixel
+    const scaleFor = useCallback(
+      (next) => {
+        const geo = geometry();
+        if (next === "fill") return geo.fill / geo.contain;
+        if (next === "original") return 1 / geo.contain;
+        return 1;
+      },
+      [geometry]
+    );
+
+    const apply = useCallback(() => {
+      const img = imgRef.current;
+      if (!img) return;
+      const { s, x, y } = view.current;
+      img.style.transform = `translate3d(${x}px, ${y}px, 0) scale(${s})`;
+      setScale(s);
+    }, []);
+
+    const clampPan = useCallback(() => {
+      const el = stageRef.current;
+      if (!el) return;
+      const { s } = view.current;
+      const maxX = Math.max(0, (el.clientWidth * s - el.clientWidth) / 2);
+      const maxY = Math.max(0, (el.clientHeight * s - el.clientHeight) / 2);
+      view.current.x = clamp(view.current.x, -maxX, maxX);
+      view.current.y = clamp(view.current.y, -maxY, maxY);
+    }, []);
+
+    useEffect(() => {
+      const img = imgRef.current;
+      if (!img || !natural) return undefined;
+      img.style.transition = "transform 220ms cubic-bezier(.2,.7,.2,1)";
+      view.current = { s: scaleFor(mode), x: 0, y: 0 };
+      apply();
+      const t = window.setTimeout(() => {
+        if (img) img.style.transition = "none";
+      }, 240);
+      return () => window.clearTimeout(t);
+    }, [mode, natural, scaleFor, apply]);
+
+    function onDown(event) {
+      pts.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      if (pts.current.size >= 2) {
+        const [a, b] = Array.from(pts.current.values());
+        gesture.current = {
+          mode: "pinch",
+          d0: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)),
+          s0: view.current.s,
+          x0: view.current.x,
+          y0: view.current.y,
+        };
+        return;
+      }
+      const now = performance.now();
+      const isDouble = now - lastTap.current < 280;
+      lastTap.current = isDouble ? 0 : now;
+      if (isDouble) {
+        gesture.current = { mode: "tap" };
+        setMode((prev) => (prev === "original" ? "fit" : "original"));
+        return;
+      }
+      gesture.current = { mode: "drag", x0: event.clientX, y0: event.clientY, px: view.current.x, py: view.current.y };
+    }
+
+    function onMove(event) {
+      const point = pts.current.get(event.pointerId);
+      if (point) {
+        point.x = event.clientX;
+        point.y = event.clientY;
+      }
+      const g = gesture.current;
+      if (!g) return;
+      if (g.mode === "pinch" && pts.current.size >= 2) {
+        const [a, b] = Array.from(pts.current.values());
+        const ratio = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)) / g.d0;
+        view.current.s = clamp(g.s0 * ratio, 0.6, 8);
+        clampPan();
+        apply();
+        return;
+      }
+      if (g.mode !== "drag") return;
+      view.current.x = g.px + (event.clientX - g.x0);
+      view.current.y = g.py + (event.clientY - g.y0);
+      clampPan();
+      apply();
+    }
+
+    function onUp(event) {
+      pts.current.delete(event.pointerId);
+      if (pts.current.size === 0) gesture.current = null;
+      if (pts.current.size === 1) {
+        const only = Array.from(pts.current.values())[0];
+        gesture.current = { mode: "drag", x0: only.x, y0: only.y, px: view.current.x, py: view.current.y };
+      }
+    }
+
+    const frame = hero
+      ? { left: hero.left + "px", top: hero.top + "px", width: hero.width + "px", height: hero.height + "px", borderRadius: "14px" }
+      : { left: "0px", top: "0px", width: window.innerWidth + "px", height: window.innerHeight + "px", borderRadius: "0px" };
+
+    return h(
+      "div",
+      {
+        className: "stk-img-overlay",
+        onPointerDown: onDown,
+        onPointerMove: onMove,
+        onPointerUp: onUp,
+        onPointerCancel: onUp,
+      },
+      h(
+        "div",
+        { className: "stk-img-frame" + (hero ? " stk-img-hero" : ""), style: frame },
+        h(
+          "div",
+          { className: "stk-img-stage", ref: stageRef },
+          src &&
+            h("img", {
+              ref: imgRef,
+              className: "stk-img",
+              src,
+              draggable: false,
+              onLoad: (event) => setNatural({ w: event.currentTarget.naturalWidth, h: event.currentTarget.naturalHeight }),
+            })
+        )
+      ),
+      h("button", { className: "stk-img-close", onClick: onClose, "aria-label": "Close" }, h(Icon, { name: "chevron", size: 22 })),
+      h(
+        "div",
+        { className: "stk-img-pill" },
+        [
+          ["fit", "Fit"],
+          ["fill", "Fill"],
+          ["original", "Original"],
+        ].map(([value, label]) =>
+          h(
+            "button",
+            { key: value, className: mode === value ? "stk-on" : "", onClick: () => setMode(value) },
+            label
+          )
+        )
+      )
+    );
+  }
+
   function PerformerProfile({ performerId, onBack, onPlay, onOpenTag }) {
     const [performer, setPerformer] = useState(null);
     const [scenes, setScenes] = useState([]);
@@ -2016,6 +2196,9 @@
     const [markerCount, setMarkerCount] = useState(null);
     const [tab, setTab] = useState("scenes");
     const [media, setMedia] = useState("videos");
+    const [viewer, setViewer] = useState(null);
+    const [stuck, setStuck] = useState(false);
+    const pageRef = useRef(null);
     const [sort, setSort] = useState("updated_at");
     const [sortOpen, setSortOpen] = useState(false);
     const [density, setDensity] = useState(3);
@@ -2090,7 +2273,7 @@
           findImages(image_filter: { performers: { value: [$id], modifier: INCLUDES } },
                      filter: { per_page: 60, sort: $sort, direction: DESC }) {
             count
-            images { id title paths { thumbnail } }
+            images { id title paths { thumbnail image } }
           }
         }`,
         { id: performerId, sort: sort === "filesize" || sort === "resolution" ? sort : "updated_at" }
@@ -2144,7 +2327,35 @@
 
     return h(
       "div",
-      { className: "stk-page stk-profile", style: { padding: 0 } },
+      {
+        className: "stk-page stk-profile",
+        style: { padding: 0 },
+        ref: pageRef,
+        onScroll: (event) => setStuck(event.currentTarget.scrollTop > 128),
+      },
+      stuck &&
+        performer &&
+        h(
+          "div",
+          {
+            className: "stk-minihead",
+            onClick: () => pageRef.current && pageRef.current.scrollTo({ top: 0, behavior: "smooth" }),
+          },
+          h("div", { className: "stk-mini-avatar", style: { backgroundImage: `url("${cover}")` } }),
+          h("span", { className: "stk-mini-name" }, performer.name),
+          h(
+            "button",
+            {
+              className: "stk-mini-play",
+              onClick: (event) => {
+                event.stopPropagation();
+                onPlay({});
+              },
+            },
+            h(Icon, { name: "play", size: 12 }),
+            " Play"
+          )
+        ),
       h(
         "div",
         { className: "stk-cover", style: { backgroundImage: `url("${cover}")` } },
@@ -2275,13 +2486,11 @@
             { className: gridClass },
             images.map((image) =>
               h(
-                "a",
+                "button",
                 {
                   key: image.id,
                   className: "stk-tile",
-                  href: `/images/${image.id}`,
-                  target: "_blank",
-                  rel: "noopener noreferrer",
+                  onClick: (event) => setViewer({ image, rect: event.currentTarget.getBoundingClientRect() }),
                 },
                 h("div", { className: "stk-tile-photo", style: { backgroundImage: `url("${rel(image.paths && image.paths.thumbnail)}")` } })
               )
@@ -2333,18 +2542,18 @@
             { className: gridClass },
             images.map((image) =>
               h(
-                "a",
+                "button",
                 {
                   key: image.id,
                   className: "stk-tile",
-                  href: `/images/${image.id}`,
-                  target: "_blank",
-                  rel: "noopener noreferrer",
+                  onClick: (event) => setViewer({ image, rect: event.currentTarget.getBoundingClientRect() }),
                 },
                 h("div", { className: "stk-tile-photo", style: { backgroundImage: `url("${rel(image.paths && image.paths.thumbnail)}")` } })
               )
             )
-          )
+          ),
+
+      viewer && h(ImageViewer, { image: viewer.image, rect: viewer.rect, onClose: () => setViewer(null) })
     );
   }
 
@@ -2768,6 +2977,9 @@
   function FolderProfile({ name, folder, onBack, onPlay }) {
     const [tab, setTab] = useState("scenes");
     const [media, setMedia] = useState("videos");
+    const [viewer, setViewer] = useState(null);
+    const [stuck, setStuck] = useState(false);
+    const pageRef = useRef(null);
     const [sort, setSort] = useState("updated_at");
     const [sortOpen, setSortOpen] = useState(false);
     const [scenes, setScenes] = useState([]);
@@ -2833,7 +3045,7 @@
           findImages(image_filter: { path: { value: $path, modifier: INCLUDES } },
                      filter: { per_page: 60, ${sortArg} }) {
             count
-            images { id title paths { thumbnail } }
+            images { id title paths { thumbnail image } }
           }
         }`,
         { path: folder }
@@ -2875,7 +3087,34 @@
 
     return h(
       "div",
-      { className: "stk-page stk-profile", style: { padding: 0 } },
+      {
+        className: "stk-page stk-profile",
+        style: { padding: 0 },
+        ref: pageRef,
+        onScroll: (event) => setStuck(event.currentTarget.scrollTop > 128),
+      },
+      stuck &&
+        h(
+          "div",
+          {
+            className: "stk-minihead",
+            onClick: () => pageRef.current && pageRef.current.scrollTo({ top: 0, behavior: "smooth" }),
+          },
+          h("div", { className: "stk-mini-avatar", style: cover ? { backgroundImage: `url("${cover}")` } : undefined }, cover ? null : initials(name)),
+          h("span", { className: "stk-mini-name" }, name),
+          h(
+            "button",
+            {
+              className: "stk-mini-play",
+              onClick: (event) => {
+                event.stopPropagation();
+                onPlay({ sceneId: null });
+              },
+            },
+            h(Icon, { name: "play", size: 12 }),
+            " Play"
+          )
+        ),
       h(
         "div",
         { className: "stk-cover", style: cover ? { backgroundImage: `url("${cover}")` } : undefined },
@@ -2981,13 +3220,11 @@
             { className: "stk-grid-3" },
             images.map((image) =>
               h(
-                "a",
+                "button",
                 {
                   key: image.id,
                   className: "stk-tile",
-                  href: `/images/${image.id}`,
-                  target: "_blank",
-                  rel: "noopener noreferrer",
+                  onClick: (event) => setViewer({ image, rect: event.currentTarget.getBoundingClientRect() }),
                 },
                 h("div", { className: "stk-tile-photo", style: { backgroundImage: `url("${rel(image.paths && image.paths.thumbnail)}")` } })
               )
@@ -3024,7 +3261,9 @@
                 h("span", { className: "stk-tile-dur" }, fmtTime((scene.files && scene.files[0] && scene.files[0].duration) || 0))
               )
             )
-          )
+          ),
+
+      viewer && h(ImageViewer, { image: viewer.image, rect: viewer.rect, onClose: () => setViewer(null) })
     );
   }
 
