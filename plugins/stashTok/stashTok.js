@@ -582,17 +582,35 @@
   /** Play, but never start before a pending seek has landed: that race is the black flash. */
   function seekThenPlay(video, startAt, playVideo) {
     const start = Number(startAt) || 0;
-    const duration = video.duration || 0;
-    if (start > 0 && duration && start < duration && Math.abs(video.currentTime - start) > 1) {
+    const play = () => playVideo(video);
+    if (start <= 0) {
+      play();
+      return;
+    }
+    // metadata may not have arrived yet: seeking blindly is what left clips at 0:00
+    const landOnStart = () => {
+      const total = video.duration;
+      if (!isFinite(total) || total <= 0 || start >= total) {
+        play();
+        return;
+      }
+      if (Math.abs(video.currentTime - start) <= 1) {
+        play();
+        return;
+      }
       try {
         video.currentTime = start;
       } catch (e) {
-        /* ignore */
+        play();
+        return;
       }
-      video.addEventListener("seeked", () => playVideo(video), { once: true });
+      video.addEventListener("seeked", play, { once: true });
+    };
+    if (video.readyState >= 1) {
+      landOnStart();
       return;
     }
-    playVideo(video);
+    video.addEventListener("loadedmetadata", landOnStart, { once: true });
   }
 
   function FeedView({ spec, cfg, refreshKey, onBack, onSearch, onSettings, onOpenPerformer, onOpenTag, onDeriveFeed, onEditFeed, onOpenFolder, feeds, onSwitchFeed, onNewFeed }) {
@@ -634,6 +652,14 @@
     const lastTapAt = useRef(0);
     const rafRef = useRef(0);
     const tf = useRef({ s: 1, x: 0, y: 0 });
+
+    /* React can leave videoRef pointing at the clip we just swiped away from, so
+       always resolve the element that is actually marked active on screen. */
+    const activeVideo = useCallback(() => {
+      const stage = stageRef.current;
+      const live = stage && stage.querySelector(".stk-video.stk-active");
+      return live || videoRef.current;
+    }, []);
 
     const item = items[index] || null;
     const [, setRootsReady] = useState(0);
@@ -743,12 +769,30 @@
       if (item) setRating(item.scene.rating100 == null ? null : Number(item.scene.rating100));
       setReady(false);
       setStreamFallback(false);
+      setDuration(0);
+      setTime((item && Number(item.startAt)) || 0);
+      resetZoom();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [item && item.key]);
+
+    /* the timeline needs the real duration, whenever the metadata lands */
+    useEffect(() => {
+      const video = activeVideo();
+      if (!video) return undefined;
+      const sync = () => setDuration(video.duration || 0);
+      sync();
+      video.addEventListener("loadedmetadata", sync);
+      video.addEventListener("durationchange", sync);
+      return () => {
+        video.removeEventListener("loadedmetadata", sync);
+        video.removeEventListener("durationchange", sync);
+      };
+    }, [item && item.key, index]);
 
     /* ---- video ----------------------------------------------------- */
 
     useEffect(() => {
-      const video = videoRef.current;
+      const video = activeVideo();
       if (!video || !item) return;
       const start = Number(item.startAt) || 0;
       const onLoaded = () => {
@@ -768,7 +812,7 @@
        races the layer swap and kills the incoming video */
 
     useEffect(() => {
-      const video = videoRef.current;
+      const video = activeVideo();
       if (!video) return;
       video.muted = muted;
       // some browsers pause an autoplaying video the moment it becomes audible,
@@ -786,7 +830,7 @@
     }, [muted]);
 
     useEffect(() => {
-      const video = videoRef.current;
+      const video = activeVideo();
       if (video && !rateBadge) video.playbackRate = speed;
       try {
         window.localStorage.setItem("stashTok.speed", String(speed));
@@ -797,7 +841,7 @@
 
     /** the scale at which the video covers the stage, i.e. a pinch-fill */
     function coverScale() {
-      const video = videoRef.current;
+      const video = activeVideo();
       const stage = stageRef.current;
       if (!video || !stage) return 1;
       const vw = video.videoWidth || 16;
@@ -869,7 +913,7 @@
     }, []);
 
     const applyTransform = useCallback(() => {
-      const video = videoRef.current;
+      const video = activeVideo();
       if (!video) return;
       const { s, x, y } = tf.current;
       video.style.transform = `translate3d(${x}px, ${y}px, 0) scale(${s})`;
@@ -895,7 +939,7 @@
     /* ---- navigation ------------------------------------------------ */
 
     const loopCurrent = useCallback(() => {
-      const video = videoRef.current;
+      const video = activeVideo();
       if (!video) return;
       video.currentTime = item && item.startAt ? item.startAt : 0;
       playGuarded(video);
@@ -943,7 +987,7 @@
     /* ---- hold to speed -------------------------------------------- */
 
     const stopHold = useCallback(() => {
-      const video = videoRef.current;
+      const video = activeVideo();
       if (rafRef.current) {
         cancelAnimationFrame(rafRef.current);
         rafRef.current = 0;
@@ -954,7 +998,7 @@
 
     const startHold = useCallback(
       (side) => {
-        const video = videoRef.current;
+        const video = activeVideo();
         if (!video) return;
         poke();
         if (side === "left" || side === "right") {
@@ -1014,7 +1058,7 @@
         y0: event.clientY,
         t0: performance.now(),
         moved: false,
-        startTime: videoRef.current ? videoRef.current.currentTime : 0,
+        startTime: activeVideo() ? activeVideo().currentTime : 0,
         seekTo: null,
       };
       window.clearTimeout(holdTimer.current);
@@ -1080,12 +1124,14 @@
         setDragY(dy);
       } else if (g.mode === "seek") {
         const rect = stage.getBoundingClientRect();
-        const span = Math.min(duration || 600, 600);
-        const target = clamp(g.startTime + (dx / rect.width) * span, 0, duration || 0);
+        const live = activeVideo();
+        const total = duration || (live && isFinite(live.duration) ? live.duration : 0) || 0;
+        const span = Math.min(total || 600, 600);
+        const target = clamp(g.startTime + (dx / rect.width) * span, 0, total);
         g.seekTo = target;
         setScrubTime(target);
         setScrubbing(true);
-        if (videoRef.current) videoRef.current.currentTime = target;
+        if (activeVideo()) activeVideo().currentTime = target;
       }
     }
 
@@ -1105,7 +1151,7 @@
       gesture.current = null;
 
       if (g.mode === "press" && !g.moved) {
-        const video = videoRef.current;
+        const video = activeVideo();
         if (!video) return;
         if (tf.current.s > 1.02) {
           resetZoom();
@@ -1165,7 +1211,7 @@
     /* ---- timeline -------------------------------------------------- */
 
     function seekFromEvent(event) {
-      const video = videoRef.current;
+      const video = activeVideo();
       const bar = event.currentTarget.querySelector(".stk-timeline-inner") || event.currentTarget;
       const rect = bar.getBoundingClientRect();
       const ratio = clamp((event.clientX - rect.left) / rect.width, 0, 1);
@@ -1213,7 +1259,7 @@
     }
 
     const onTimeUpdate = () => {
-      const video = videoRef.current;
+      const video = activeVideo();
       if (!video) return;
       setTime(video.currentTime);
       if (!duration && video.duration) setDuration(video.duration);
@@ -1605,7 +1651,7 @@
             onOpenTag,
             onDeriveFeed,
             onJump: (seconds) => {
-              const video = videoRef.current;
+              const video = activeVideo();
               if (video) video.currentTime = seconds;
               setSheet(null);
               setPlaying(true);
@@ -3193,9 +3239,8 @@
       if (!el) return undefined;
       const blockPinch = (event) => {
         if (!event.touches || event.touches.length < 2) return;
-        const target = event.target;
-        const inStage = target && target.closest && target.closest(".stk-stage");
-        if (!inStage) event.preventDefault();
+        // pinch is ours (video zoom); letting it through page-zoomed the whole UI
+        event.preventDefault();
       };
       const blockGesture = (event) => event.preventDefault();
       el.addEventListener("touchmove", blockPinch, { passive: false });
