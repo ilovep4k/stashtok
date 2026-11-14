@@ -55,8 +55,10 @@
     search: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20.5 20.5 16 16",
     folder: "M3.5 7.5A1.5 1.5 0 0 1 5 6h3.6l1.9 2.4H19a1.5 1.5 0 0 1 1.5 1.5V18A1.5 1.5 0 0 1 19 19.5H5A1.5 1.5 0 0 1 3.5 18V7.5z",
     video: "M3.5 6.5h11.5v11H3.5zM15 10.2l5.5-2.7v9l-5.5-2.7",
+    music: "M9 18.5V7.2l10-2v11.1M9 18.5a2.4 2.4 0 1 1-4.8 0 2.4 2.4 0 0 1 4.8 0zM19 16.3a2.4 2.4 0 1 1-4.8 0 2.4 2.4 0 0 1 4.8 0z",
     image: "M3.5 5.5h17v13h-17zM8.2 11.2a1.6 1.6 0 1 0 0-3.2 1.6 1.6 0 0 0 0 3.2zM4.2 17.2l5-5 3.6 3.6 2.6-2.6 4.4 4.4",
     video: "M3.5 6.5h11.5v11H3.5zM15 10.2l5.5-2.7v9l-5.5-2.7",
+    music: "M9 18.5V7.2l10-2v11.1M9 18.5a2.4 2.4 0 1 1-4.8 0 2.4 2.4 0 0 1 4.8 0zM19 16.3a2.4 2.4 0 1 1-4.8 0 2.4 2.4 0 0 1 4.8 0z",
     image: "M3.5 5.5h17v13h-17zM8.2 11.2a1.6 1.6 0 1 0 0-3.2 1.6 1.6 0 0 0 0 3.2zM4.2 17.2l5-5 3.6 3.6 2.6-2.6 4.4 4.4",
     sparkle: "M12 3.5 13.8 9l5.7 1.8L13.8 13 12 18.5 10.2 13 4.5 10.8 10.2 9 12 3.5z",
     rotate: "M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4",
@@ -1570,28 +1572,30 @@
           { className: "stk-info" },
           h(
             "div",
-            { className: "stk-handle-row" },
-            handle.image
-              ? h("img", {
-                  className: "stk-handle-avatar",
-                  src: handle.image,
-                  alt: "",
-                  onClick: (event) => {
-                    event.stopPropagation();
-                    openHandle();
-                  },
-                })
-              : h(
-                  "button",
-                  { className: "stk-handle-avatar stk-handle-initials", onClick: (event) => { event.stopPropagation(); openHandle(); } },
-                  initials(handle.name)
-                ),
+            { className: "stk-handle-row stk-handle-row-text" },
             h(
               "button",
-              { className: "stk-handle-name", onClick: (event) => { event.stopPropagation(); openHandle(); } },
-              handle.name
+              { className: "stk-handle-at", onClick: (event) => { event.stopPropagation(); openHandle(); } },
+              "@" + String(handle.name || "").replace(/\s+/g, "").toLowerCase()
             )
           ),
+          (() => {
+            const scene = item && item.scene;
+            if (!scene) return null;
+            const file = (scene.files && scene.files[0]) || {};
+            const line =
+              scene.title ||
+              scene.details ||
+              [
+                file.width && file.height ? Math.min(file.width, file.height) + "p" : "",
+                file.duration ? fmtTime(file.duration) : "",
+              ]
+                .filter(Boolean)
+                .join(" · ") ||
+              scene.date ||
+              "";
+            return line ? h("div", { className: "stk-caption-line" }, line) : null;
+          })(),
           performers.length > 1 &&
             h("div", { className: "stk-info-with" }, "with " + performers.slice(1, 4).map((performer) => performer.name).join(", ")),
           tags.length > 0 &&
@@ -1612,12 +1616,39 @@
                   "#" + tag.name.replace(/\s+/g, "-").toLowerCase()
                 )
               )
+            ),
+          h(
+            "div",
+            { className: "stk-music" },
+            h("span", { className: "stk-disc" + (playing ? " stk-spin" : "") }, h(Icon, { name: "music", size: 12 })),
+            h(
+              "div",
+              { className: "stk-ticker" },
+              h("div", { className: "stk-ticker-track" + (playing ? " stk-ticker-run" : "") },
+                h("span", null, item && item.scene && (item.scene.caption || handle.name) ? (item.scene.caption || handle.name) + " · " + (spec.name || "StashTok") : "StashTok"),
+                h("span", null, item && item.scene && (item.scene.caption || handle.name) ? (item.scene.caption || handle.name) + " · " + (spec.name || "StashTok") : "StashTok")
+              )
             )
+          )
         ),
 
         h(
           "div",
           { className: "stk-rail" },
+          h(
+            "button",
+            {
+              className: "stk-rail-avatar-btn",
+              onClick: (event) => {
+                event.stopPropagation();
+                openHandle();
+              },
+            },
+            handle.image
+              ? h("img", { className: "stk-rail-avatar", src: handle.image, alt: "" })
+              : h("span", { className: "stk-rail-avatar stk-rail-avatar-text" }, initials(handle.name)),
+            performers.length > 1 && h("span", { className: "stk-rail-badge" }, performers.length)
+          ),
           h(
             "button",
             {
