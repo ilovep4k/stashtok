@@ -23,11 +23,11 @@ A full-screen, TikTok-style vertical feed for [Stash](https://github.com/stashap
 
 ## Install from a source (updates)
 
-Once this repo is published, add it once in each Stash instance:
+Add it once in each Stash instance:
 
 **Settings → Plugins → Available Plugins → Add Source**
 
-- URL: `https://<your-user>.github.io/stash-tok/index.yml`
+- URL: `https://raw.githubusercontent.com/ilovep4k/stashtok/main/index.yml`
 
 StashTok then appears in the available list and installs into `plugins/community/stashTok`. Later releases show up under **Check for Updates** on that same screen — Stash updates plugins per instance, on demand, not automatically.
 

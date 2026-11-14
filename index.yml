@@ -4,5 +4,5 @@
     description: Full-screen vertical feed for scenes and markers with swipe, pinch zoom and a marker scrub bar.
   version: 0.1.0
   date: 2026-11-13 00:00:00
-  path: https://example.github.io/stash-tok/stashTok.zip
-  sha256: 1daca22bb95aa214f0b54c34973fffbd377eb1644d2c2ffe729111b5c6f1d746
+  path: https://raw.githubusercontent.com/ilovep4k/stashtok/main/dist/stashTok.zip
+  sha256: 1f7a130d56268ab4bcbdc77972ac8802b1d7836b9046b504db46ed290a237105
