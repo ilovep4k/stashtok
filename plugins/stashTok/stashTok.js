@@ -480,6 +480,9 @@
     return match ? match[1] : "/stash-tok";
   }
 
+  /* the clip on screen, so a route written by the feed is not mistaken for a navigation */
+  const clipState = { sceneId: null };
+
   function currentRoute() {
     return window.location.hash.replace(/^#\/?/, "");
   }
@@ -769,6 +772,7 @@
       if (spec.type === "performer") target = "performer/" + encodeURIComponent(spec.name) + "/" + sceneId;
       else if (spec.type === "scene") target = "scene/" + sceneId;
       if (!target) return;
+      clipState.sceneId = String(sceneId);
       if (currentRoute() !== target) goTo(target, true);
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [item && item.scene && item.scene.id, spec.type, spec.name]);
@@ -3807,7 +3811,12 @@
 
     /* ---- routing: the URL is the source of truth --------------------- */
 
+    const liveRef = useRef({});
+    liveRef.current = { tab, activeFeed };
+
     const applyRoute = useCallback((rest) => {
+      const live = liveRef.current || {};
+      const feedNow = live.activeFeed || null;
       if (!rest) {
         setTab("home");
         setPerformerFilter(null);
@@ -3852,11 +3861,24 @@
         const slash = tail.indexOf("/");
         const slug = decodeURIComponent(slash === -1 ? tail : tail.slice(0, slash));
         const sceneId = slash === -1 ? null : tail.slice(slash + 1).replace(/\D/g, "");
+        // the feed itself rewrites this URL on every swipe; re-applying it would
+        // rebuild the feed (and snap back to item 0), so ignore our own writes
+        if (
+          live.tab === "home" &&
+          feedNow &&
+          feedNow.type === "performer" &&
+          String(feedNow.name || "").toLowerCase() === slug.toLowerCase() &&
+          String(clipState.sceneId || "") === String(sceneId || "")
+        ) {
+          return;
+        }
         resolvePerformerSlug(slug, sceneId || null);
         return;
       }
       if (rest.indexOf("scene/") === 0) {
-        resolveSceneId(rest.slice("scene/".length));
+        const id = rest.slice("scene/".length).replace(/\D/g, "");
+        if (live.tab === "home" && feedNow && feedNow.type === "scene" && String(feedNow.sceneId) === String(id)) return;
+        resolveSceneId(id);
         return;
       }
       setTab("home");
