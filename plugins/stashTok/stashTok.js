@@ -52,6 +52,8 @@
     plus: "M12 5v14M5 12h14",
     chevron: "M9 6l6 6-6 6",
     sort: "M7 4v16M4 17l3 3 3-3M17 20V4M14 7l3-3 3 3",
+    search: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20.5 20.5 16 16",
+    folder: "M3.5 7.5A1.5 1.5 0 0 1 5 6h3.6l1.9 2.4H19a1.5 1.5 0 0 1 1.5 1.5V18A1.5 1.5 0 0 1 19 19.5H5A1.5 1.5 0 0 1 3.5 18V7.5z",
     sparkle: "M12 3.5 13.8 9l5.7 1.8L13.8 13 12 18.5 10.2 13 4.5 10.8 10.2 9 12 3.5z",
     rotate: "M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4",
   };
@@ -592,7 +594,7 @@
     playVideo(video);
   }
 
-  function FeedView({ spec, cfg, refreshKey, onBack, onOpenPerformer, onOpenTag, onDeriveFeed, onEditFeed, onOpenFolder, feeds, onSwitchFeed, onNewFeed }) {
+  function FeedView({ spec, cfg, refreshKey, onBack, onSearch, onSettings, onOpenPerformer, onOpenTag, onDeriveFeed, onEditFeed, onOpenFolder, feeds, onSwitchFeed, onNewFeed }) {
     const [items, setItems] = useState([]);
     const [index, setIndex] = useState(0);
     const [count, setCount] = useState(0);
@@ -1212,6 +1214,20 @@
         { className: "stash-tok stk-embedded" },
         h(
           "div",
+          { className: "stk-top stk-top-right" },
+          h(
+            "button",
+            { className: "stk-top-btn", onClick: (event) => { event.stopPropagation(); if (onSearch) onSearch(); } },
+            h(Icon, { name: "search", size: 18 })
+          ),
+          h(
+            "button",
+            { className: "stk-top-btn", onClick: (event) => { event.stopPropagation(); if (onSettings) onSettings(); } },
+            h(Icon, { name: "gear", size: 18 })
+          )
+        ),
+        h(
+          "div",
           { className: "stk-state" },
           h("p", null, "Several scenes in a row could not be played."),
           h("p", { style: { fontSize: "12px", opacity: 0.6 } }, "Their files look missing from disk — run a Stash scan, or pick another feed."),
@@ -1374,6 +1390,33 @@
             h(Icon, { name: "sparkle", size: 11 }),
             spec.name || "For You",
             h(Icon, { name: "chevron", size: 10, className: "stk-pill-caret" })
+          )
+        ),
+
+        h(
+          "div",
+          { className: "stk-top stk-top-right" },
+          h(
+            "button",
+            {
+              className: "stk-top-btn",
+              onClick: (event) => {
+                event.stopPropagation();
+                if (onSearch) onSearch();
+              },
+            },
+            h(Icon, { name: "search", size: 18 })
+          ),
+          h(
+            "button",
+            {
+              className: "stk-top-btn",
+              onClick: (event) => {
+                event.stopPropagation();
+                if (onSettings) onSettings();
+              },
+            },
+            h(Icon, { name: "gear", size: 18 })
           )
         ),
 
@@ -2068,19 +2111,23 @@
         ? h(
             "div",
             { className: gridClass },
-            scenes.map((scene) =>
-              h(
+            scenes.map((scene) => {
+              const file = (scene.files && scene.files[0]) || {};
+              const tileStyle =
+                density === 5 && file.width && file.height ? { aspectRatio: file.width + " / " + file.height } : undefined;
+              return h(
                 "button",
                 {
                   key: scene.id,
                   className: "stk-tile",
+                  style: tileStyle,
                   onClick: () => openScene(scene),
                 },
                 h("div", { className: "stk-tile-photo", style: { backgroundImage: `url("${rel(scene.paths && scene.paths.screenshot)}")` } }),
                 h("span", { className: "stk-tile-dur" }, fmtTime((scene.files && scene.files[0] && scene.files[0].duration) || 0)),
                 scene.rating100 >= 60 && h("span", { className: "stk-tile-heart" }, h(Icon, { name: "heart", size: 12 }))
-              )
-            )
+              );
+            })
           )
         : tab === "markers"
         ? h(
@@ -2280,6 +2327,248 @@
                 )
               )
             )
+          )
+    );
+  }
+
+
+  /* ---- folders ----------------------------------------------------- */
+
+  function FoldersPage({ onPick, onBack }) {
+    const [rows, setRows] = useState(null);
+    const [query, setQuery] = useState("");
+
+    useEffect(() => {
+      let alive = true;
+      (async () => {
+        const roots = await loadLibraryRoots();
+        let all = [];
+        for (let page = 1; page <= 20; page += 1) {
+          const data = await gql(
+            `query StashTokFolders($page: Int!) {
+              findFolders(filter: { per_page: 1000, page: $page }) { folders { path } }
+            }`,
+            { page }
+          );
+          const batch = (data.findFolders && data.findFolders.folders) || [];
+          all = all.concat(batch);
+          if (batch.length < 1000) break;
+        }
+        const seen = {};
+        const out = [];
+        all.forEach((folder) => {
+          const root = roots.find((candidate) => folder.path.indexOf(candidate + "/") === 0);
+          if (!root) return;
+          const rest = folder.path.slice(root.length + 1);
+          if (!rest || rest.indexOf("/") !== -1) return;
+          if (seen[folder.path]) return;
+          seen[folder.path] = true;
+          out.push({ name: rest, folder: folder.path });
+        });
+        out.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+        if (alive) setRows(out);
+      })().catch(() => alive && setRows([]));
+      return () => {
+        alive = false;
+      };
+    }, []);
+
+    const term = query.trim().toLowerCase();
+    const list = (rows || []).filter((row) => !term || row.name.toLowerCase().indexOf(term) !== -1);
+
+    return h(
+      "div",
+      { className: "stk-page" },
+      h("h2", null, onBack && h("button", { onClick: onBack }, h(Icon, { name: "chevron", size: 18 })), "Folders"),
+      h("input", {
+        type: "search",
+        placeholder: "Filter folders",
+        value: query,
+        onChange: (event) => setQuery(event.currentTarget.value),
+        style: {
+          width: "100%",
+          marginBottom: "10px",
+          padding: "9px 11px",
+          borderRadius: "10px",
+          background: "#171717",
+          border: "1px solid #2a2a2a",
+          color: "#fff",
+        },
+      }),
+      !rows
+        ? h("div", { className: "stk-state" }, h("div", { className: "stk-spinner" }))
+        : h(
+            "div",
+            { className: "stk-folder-list" },
+            h("div", { className: "stk-sub", style: { padding: "0 0 8px" } }, list.length + " folders"),
+            list.map((row) =>
+              h(
+                "button",
+                { key: row.folder, className: "stk-folder-row", onClick: () => onPick(row) },
+                h(Icon, { name: "folder", size: 17 }),
+                h("span", null, row.name)
+              )
+            )
+          )
+    );
+  }
+
+  /* ---- global search ------------------------------------------------ */
+
+  function SearchPage({ onPickScene, onPickPerformer, onBack }) {
+    const [query, setQuery] = useState("");
+    const [results, setResults] = useState({ performers: [], markers: [], scenes: [], busy: false, term: "" });
+
+    useEffect(() => {
+      const term = query.trim();
+      if (term.length < 2) {
+        setResults({ performers: [], markers: [], scenes: [], busy: false, term: "" });
+        return undefined;
+      }
+      let alive = true;
+      setResults((current) => Object.assign({}, current, { busy: true }));
+      const timer = window.setTimeout(() => {
+        gql(
+          `query StashTokSearch($q: String!) {
+            findPerformers(filter: { q: $q, per_page: 8, sort: "scenes_count", direction: DESC }) {
+              performers { id name image_path scene_count }
+            }
+            findSceneMarkers(filter: { q: $q, per_page: 12 }) {
+              scene_markers { id title seconds scene { id paths { screenshot } performers { name } } }
+            }
+            findScenes(filter: { q: $q, per_page: 12, sort: "date", direction: DESC }) {
+              scenes { id title paths { screenshot } files { path duration } performers { name } }
+            }
+          }`,
+          { q: term }
+        )
+          .then((data) => {
+            if (!alive) return;
+            setResults({
+              performers: (data.findPerformers && data.findPerformers.performers) || [],
+              markers: (data.findSceneMarkers && data.findSceneMarkers.scene_markers) || [],
+              scenes: (data.findScenes && data.findScenes.scenes) || [],
+              busy: false,
+              term,
+            });
+          })
+          .catch(() => alive && setResults({ performers: [], markers: [], scenes: [], busy: false, term }));
+      }, 280);
+      return () => {
+        alive = false;
+        window.clearTimeout(timer);
+      };
+    }, [query]);
+
+    function section(title, rows) {
+      if (!rows.length) return null;
+      return h(
+        "div",
+        { className: "stk-search-section" },
+        h("h4", null, title),
+        rows
+      );
+    }
+
+    return h(
+      "div",
+      { className: "stk-page stk-search-page" },
+      h(
+        "div",
+        { className: "stk-search-head" },
+        h("button", { className: "stk-search-back", onClick: onBack }, h(Icon, { name: "chevron", size: 18 })),
+        h("input", {
+          type: "search",
+          autoFocus: true,
+          placeholder: "Search scenes, performers, markers",
+          value: query,
+          onChange: (event) => setQuery(event.currentTarget.value),
+          className: "stk-search-input",
+        })
+      ),
+      query.trim().length < 2
+        ? h("div", { className: "stk-state" }, h("p", null, "Type at least two characters."))
+        : results.busy
+        ? h("div", { className: "stk-state" }, h("div", { className: "stk-spinner" }))
+        : h(
+            "div",
+            null,
+            section(
+              "Performers",
+              results.performers.map((performer) =>
+                h(
+                  "button",
+                  { key: performer.id, className: "stk-search-row", onClick: () => onPickPerformer(performer) },
+                  h("div", {
+                    className: "stk-search-thumb stk-search-thumb-round",
+                    style: { backgroundImage: `url("${rel(performer.image_path)}")` },
+                  }),
+                  h(
+                    "div",
+                    { className: "stk-search-body" },
+                    h("div", { className: "stk-account-name" }, performer.name),
+                    h("div", { className: "stk-account-meta" }, performer.scene_count + " scenes")
+                  )
+                )
+              )
+            ),
+            section(
+              "Markers",
+              results.markers.map((marker) =>
+                h(
+                  "button",
+                  {
+                    key: marker.id,
+                    className: "stk-search-row",
+                    onClick: () => onPickScene(marker.scene && marker.scene.id, marker.seconds, marker.title),
+                  },
+                  h("div", {
+                    className: "stk-search-thumb",
+                    style: { backgroundImage: `url("${rel(marker.scene && marker.scene.paths && marker.scene.paths.screenshot)}")` },
+                  }),
+                  h(
+                    "div",
+                    { className: "stk-search-body" },
+                    h("div", { className: "stk-account-name" }, marker.title || "Marker"),
+                    h(
+                      "div",
+                      { className: "stk-account-meta" },
+                      [fmtTime(marker.seconds), (marker.scene && marker.scene.performers || []).map((row) => row.name).join(", ")]
+                        .filter(Boolean)
+                        .join(" · ")
+                    )
+                  )
+                )
+              )
+            ),
+            section(
+              "Scenes",
+              results.scenes.map((scene) =>
+                h(
+                  "button",
+                  { key: scene.id, className: "stk-search-row", onClick: () => onPickScene(scene.id, 0, scene.title) },
+                  h("div", {
+                    className: "stk-search-thumb",
+                    style: { backgroundImage: `url("${rel(scene.paths && scene.paths.screenshot)}")` },
+                  }),
+                  h(
+                    "div",
+                    { className: "stk-search-body" },
+                    h("div", { className: "stk-account-name" }, scene.title || ((scene.files[0] || {}).path || "").split("/").pop()),
+                    h(
+                      "div",
+                      { className: "stk-account-meta" },
+                      [(scene.performers || []).map((row) => row.name).join(", "), fmtTime((scene.files[0] || {}).duration || 0)]
+                        .filter(Boolean)
+                        .join(" · ")
+                    )
+                  )
+                )
+              )
+            ),
+            !results.performers.length && !results.markers.length && !results.scenes.length
+              ? h("div", { className: "stk-state" }, h("p", null, "Nothing matches “" + results.term + "”."))
+              : null
           )
     );
   }
@@ -2853,6 +3142,20 @@
         setTab("settings");
         return;
       }
+      if (rest === "folders") {
+        setTab("folders");
+        return;
+      }
+      if (rest === "search") {
+        setTab("search");
+        return;
+      }
+      if (rest.indexOf("folder/") === 0) {
+        const path = decodeURIComponent(rest.slice("folder/".length));
+        setFolderView({ name: path.split("/").filter(Boolean).pop() || path, folder: path });
+        setTab("folder");
+        return;
+      }
       if (rest.indexOf("performer/") === 0) {
         resolvePerformerSlug(decodeURIComponent(rest.slice("performer/".length)));
         return;
@@ -3030,6 +3333,40 @@
       });
     } else if (tab === "tags") {
       body = h(TagsPage, { onPick: openTag, onBack: () => setTab("home") });
+    } else if (tab === "folders") {
+      body = h(FoldersPage, {
+        onBack: () => setTab("home"),
+        onPick: (row) => {
+          setFolderView(row);
+          setTab("folder");
+          goTo("folder/" + encodeURIComponent(row.folder));
+        },
+      });
+    } else if (tab === "search") {
+      body = h(SearchPage, {
+        onBack: () => {
+          if (window.history.length > 1) window.history.back();
+          else {
+            setTab("home");
+            goTo("");
+          }
+        },
+        onPickPerformer: openPerformer,
+        onPickScene: (sceneId, startAt, title) => {
+          if (!sceneId) return;
+          setPerformerFilter(null);
+          setActiveFeed({
+            id: "scene-" + sceneId,
+            name: title || "Scene",
+            type: "scene",
+            sceneId: String(sceneId),
+            startAt: startAt || 0,
+          });
+          setTab("home");
+          setRefreshKey((n) => n + 1);
+          goTo("scene/" + sceneId);
+        },
+      });
     } else if (tab === "settings") {
       body = h(
         "div",
@@ -3055,6 +3392,14 @@
         spec: activeFeed,
         cfg,
         refreshKey,
+        onSearch: () => {
+          setTab("search");
+          goTo("search");
+        },
+        onSettings: () => {
+          setTab("settings");
+          goTo("settings");
+        },
         onOpenPerformer: openPerformer,
         onOpenTag: openTag,
         onDeriveFeed: useFeed,
@@ -3100,10 +3445,10 @@
               },
             }),
             h(NavButton, { active: false, icon: "tag", label: "Tags", onClick: () => { setTab("tags"); goTo("tags"); } }),
-            h(NavButton, { active: false, icon: "gear", label: "Settings", onClick: () => { setTab("settings"); goTo("settings"); } })
+            h(NavButton, { active: false, icon: "folder", label: "Folders", onClick: () => { setTab("folders"); goTo("folders"); } })
           ),
 
-        tab === "performers" || tab === "tags" || tab === "settings" || tab === "folder"
+        tab === "performers" || tab === "tags" || tab === "settings" || tab === "folder" || tab === "folders"
           ? h(
               "nav",
               { className: "stk-nav" },
@@ -3122,9 +3467,22 @@
                 },
               }),
               h(NavButton, { active: tab === "tags", icon: "tag", label: "Tags", onClick: () => { setTab("tags"); goTo("tags"); } }),
-              h(NavButton, { active: tab === "settings", icon: "gear", label: "Settings", onClick: () => { setTab("settings"); goTo("settings"); } })
+              h(NavButton, { active: tab === "folders", icon: "folder", label: "Folders", onClick: () => { setTab("folders"); goTo("folders"); } })
             )
           : null,
+
+        tab !== "settings" && tab !== "home" && tab !== "feed" &&
+          h(
+            "button",
+            {
+              className: "stk-gear-fab",
+              onClick: () => {
+                setTab("settings");
+                goTo("settings");
+              },
+            },
+            h(Icon, { name: "gear", size: 17 })
+          ),
 
         builder &&
           h(FeedBuilder, {

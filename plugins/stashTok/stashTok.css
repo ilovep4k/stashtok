@@ -76,6 +76,7 @@
 /* ---------- top hud ---------- */
 .stk-top {
   position: absolute;
+  z-index: 6; /* the video layers carry z-index 2 and would swallow the taps */
   top: 0;
   left: 0;
   right: 0;
@@ -903,7 +904,19 @@
   gap: 3px;
   padding: 0 8px 16px;
 }
-.stk-grid-5 .stk-tile-photo { aspect-ratio: 1 / 1; }
+/* 5-across becomes a masonry so 16:9 and 9:16 keep their own shape */
+.stk-grid-5 {
+  display: block;
+  column-count: 5;
+  column-gap: 3px;
+  padding: 0 8px 16px;
+}
+.stk-grid-5 .stk-tile {
+  display: block;
+  width: 100%;
+  margin: 0 0 3px;
+  break-inside: avoid;
+}
 .stk-grid-5 .stk-tile-dur { font-size: 9px; padding: 1px 3px; }
 
 .stk-tile-heart {
@@ -1028,3 +1041,103 @@
   flex: 0 0 auto;
 }
 .stk-sort-pill svg { opacity: 0.85; }
+
+/* feed top-right controls */
+.stk-top-right {
+  flex-direction: row;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+}
+.stk-top-right .stk-top-btn { pointer-events: auto; }
+.stk-top-btn {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 0;
+  background: rgba(0, 0, 0, 0.42);
+  color: #fff;
+  backdrop-filter: blur(6px);
+}
+
+/* settings moves off the nav to a corner button */
+.stk-gear-fab {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 40;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* folders list */
+.stk-folder-list { padding: 4px 0 24px; }
+.stk-folder-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 11px 4px;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  background: none;
+  color: #fff;
+  font-size: 14px;
+  text-align: left;
+}
+
+/* global search */
+.stk-search-page { padding: 12px 14px 90px; }
+.stk-search-head { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.stk-search-back { background: none; border: 0; color: #fff; display: inline-flex; padding: 4px; }
+.stk-search-back svg { transform: rotate(180deg); }
+.stk-search-input {
+  flex: 1 1 auto;
+  padding: 10px 12px;
+  border-radius: 999px;
+  border: 1px solid #2a2a2a;
+  background: #171717;
+  color: #fff;
+  font-size: 14px;
+}
+.stk-search-section { margin-bottom: 18px; }
+.stk-search-section h4 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  opacity: 0.55;
+}
+.stk-search-row {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 7px 0;
+  border: 0;
+  background: none;
+  color: #fff;
+  text-align: left;
+}
+.stk-search-thumb {
+  width: 54px;
+  height: 54px;
+  flex: 0 0 54px;
+  border-radius: 8px;
+  background-size: cover;
+  background-position: center;
+  background-color: #141414;
+}
+.stk-search-thumb-round { border-radius: 50%; }
+.stk-search-body { min-width: 0; }
