@@ -534,6 +534,7 @@
       longSceneSeconds: Number(raw.longSceneSeconds) || 300,
       flagTag: raw.flagTag || "stashtok-delete",
       doubleTapHeart: raw.doubleTapHeart !== false,
+      sfw: raw.sfw === true,
       // 10s keeps 2-second clips out without cutting whole folders
       minDuration: raw.minDuration == null ? 10 : Number(raw.minDuration),
     };
@@ -618,6 +619,7 @@
   }
 
   function FeedView({ spec, cfg, refreshKey, onBack, onSearch, onSettings, onOpenPerformer, onOpenTag, onDeriveFeed, onEditFeed, onOpenFolder, feeds, onSwitchFeed, onNewFeed }) {
+    const sfw = !!cfg.sfw;
     const [items, setItems] = useState([]);
     const [index, setIndex] = useState(0);
     const [count, setCount] = useState(0);
@@ -1374,6 +1376,27 @@
             .map((at) => {
               const entry = items[at];
               const active = at === index;
+              if (sfw) {
+                // safe-for-work: no stream is ever requested, only the still frame
+                return h("img", {
+                  key: entry.key,
+                  className: "stk-frame" + (active ? " stk-active" : ""),
+                  src: rel(entry.scene.paths && entry.scene.paths.screenshot),
+                  draggable: false,
+                  style: {
+                    position: "absolute",
+                    left: 0,
+                    right: 0,
+                    top: (at - index) * 100 + "%",
+                    width: "100%",
+                    height: "100%",
+                    objectFit: "contain",
+                    opacity: 1,
+                    pointerEvents: active ? "auto" : "none",
+                    zIndex: active ? 2 : 1,
+                  },
+                });
+              }
               const source = streamSource(entry.scene);
               return h("video", {
                 key: entry.key,
@@ -1382,7 +1405,7 @@
                   : (el) => {
                       if (el) prewarm(el, entry.startAt);
                     },
-                className: "stk-video" + (active ? " stk-active" : "") + (active && !revealed ? " stk-video-blur" : ""),
+                className: "stk-video" + (active ? " stk-active" : ""),
                 src: active && streamFallback ? source.signed : source.plain,
                 playsInline: true,
                 autoPlay: active,
@@ -1592,12 +1615,14 @@
         ),
 
         hud &&
+          !sfw &&
           h(
             "div",
             { className: "stk-time" },
             `${fmtTime(time)} / ${fmtTime(duration)}${zoom > 1.02 ? ` · ${zoom.toFixed(1)}x` : ""}`
           ),
 
+        !sfw &&
         h(
           "div",
           {
@@ -3008,14 +3033,35 @@
   /* settings                                                           */
   /* ------------------------------------------------------------------ */
 
-  function SettingsPanel({ cfg, feeds, onEdit, pin, onSetPin, onClearPin }) {
+  function SettingsPanel({ cfg, feeds, onEdit, pin, onSetPin, onClearPin, sfw, onToggleSfw }) {
     const [draft, setDraft] = useState("");
     const [saved, setSaved] = useState(false);
 
     return h(
       "div",
       { className: "stk-settings", style: { marginTop: "16px" } },
-      h("h4", null, "Privacy lock"),
+      h("h4", null, "Safe for work"),
+      h(
+        "button",
+        {
+          className: "stk-switch-row" + (sfw ? " stk-on" : ""),
+          onClick: () => onToggleSfw(!sfw),
+        },
+        h(
+          "span",
+          { className: "stk-switch-copy" },
+          sfw ? "On — frames only" : "Off — playback",
+          h(
+            "small",
+            null,
+            sfw
+              ? "Videos are never requested or played; the feed shows still frames."
+              : "Videos stream and autoplay as usual."
+          )
+        ),
+        h("span", { className: "stk-switch" }, h("span", { className: "stk-knob" }))
+      ),
+      h("h4", { style: { marginTop: "18px" } }, "Privacy lock"),
       h(
         "p",
         { className: "stk-sub" },
@@ -3113,6 +3159,7 @@
 
   /* ---- privacy lock ------------------------------------------------ */
 
+  const SFW_KEY = "stashtok.sfw";
   const PIN_KEY = "stashTok.pin";
 
   /** Cheap, salted digest. crypto.subtle needs a secure context, and Stash on a
@@ -3174,7 +3221,24 @@
   }
 
   function StashTokApp() {
-    const cfg = usePluginConfig();
+    const baseCfg = usePluginConfig();
+    const [sfw, setSfw] = useState(() => {
+      try {
+        return window.localStorage.getItem(SFW_KEY) === "1";
+      } catch (e) {
+        return false;
+      }
+    });
+    const cfg = { ...baseCfg, sfw };
+    function setSfwMode(next) {
+      try {
+        if (next) window.localStorage.setItem(SFW_KEY, "1");
+        else window.localStorage.removeItem(SFW_KEY);
+      } catch (e) {
+        /* ignore */
+      }
+      setSfw(next);
+    }
     const shellRef = useRef(null);
     const coverRef = useRef(null);
     const [pin, setPin] = useState(() => {
@@ -3543,6 +3607,8 @@
           pin,
           onSetPin: savePin,
           onClearPin: () => savePin(""),
+          sfw,
+          onToggleSfw: setSfwMode,
         }),
         h(
           "p",
@@ -3584,7 +3650,10 @@
 
     return h(
       "div",
-      { className: "stash-tok-wrap" + (locked ? " stk-locked" : ""), ref: shellRef },
+      {
+        className: "stash-tok-wrap" + (locked ? " stk-locked" : "") + (sfw ? " stk-sfw" : ""),
+        ref: shellRef,
+      },
       h(
         "div",
         { style: { position: "fixed", inset: 0, zIndex: 9000, display: "flex", flexDirection: "column", background: "#000" } },
