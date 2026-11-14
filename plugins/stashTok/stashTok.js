@@ -2081,11 +2081,10 @@
   /* ------------------------------------------------------------------ */
 
   const SCENE_SORTS = [
+    ["filesize", "File size"],
     ["updated_at", "Recently added"],
     ["duration", "Duration"],
-    ["filesize", "File size"],
     ["resolution", "Resolution"],
-    ["rating", "Favorites first"],
     ["title", "A–Z"],
     ["random", "Random"],
   ];
@@ -2281,7 +2280,20 @@
     const [viewer, setViewer] = useState(null);
     const [stuck, setStuck] = useState(false);
     const pageRef = useRef(null);
-    const [sort, setSort] = useState("updated_at");
+    const [sort, setSort] = useState(() => {
+      try {
+        return window.localStorage.getItem("stashTok.perfSort") || "filesize";
+      } catch (e) {
+        return "filesize";
+      }
+    });
+    const [favFirst, setFavFirst] = useState(() => {
+      try {
+        return window.localStorage.getItem("stashTok.perfFavFirst") === "1";
+      } catch (e) {
+        return false;
+      }
+    });
     const [sortOpen, setSortOpen] = useState(false);
     const [density, setDensity] = useState(3);
     const [error, setError] = useState("");
@@ -2340,12 +2352,20 @@
         }`,
         { id: performerId, sort, dir: direction }
       )
-        .then((data) => alive && setScenes(data.findScenes.scenes))
+        .then((data) => {
+          if (!alive) return;
+          const rows = data.findScenes.scenes || [];
+          // favourites first is a stable partition, so the chosen sort survives inside each half
+          const ordered = favFirst
+            ? rows.filter((row) => (row.rating100 || 0) > 0).concat(rows.filter((row) => !((row.rating100 || 0) > 0)))
+            : rows;
+          setScenes(ordered);
+        })
         .catch(() => alive && setScenes([]));
       return () => {
         alive = false;
       };
-    }, [performerId, sort]);
+    }, [performerId, sort, favFirst]);
 
     useEffect(() => {
       if (media !== "images") return undefined;
@@ -2489,70 +2509,97 @@
 
       h(
         "div",
-        { className: "stk-tabs stk-tabbar" },
-        h(
-          "button",
-          {
-            className: tab === "scenes" && media === "videos" ? "stk-active" : "",
-            title: "Scenes",
-            onClick: () => { setTab("scenes"); setMedia("videos"); },
-          },
-          h(Icon, { name: "video", size: 21 })
-        ),
-        h(
-          "button",
-          {
-            className: tab === "images" ? "stk-active" : "",
-            title: "Images",
-            onClick: () => { setTab("images"); setMedia("images"); },
-          },
-          h(Icon, { name: "image", size: 21 })
-        ),
-        h(
-          "button",
-          {
-            className: tab === "markers" && media === "videos" ? "stk-active" : "",
-            title: markerCount ? "Markers " + markerCount : "Markers",
-            onClick: () => { setTab("markers"); setMedia("videos"); },
-          },
-          h(Icon, { name: "chapter", size: 21 })
-        ),
-        h(
-          "button",
-          {
-            className: sortOpen ? "stk-active" : "",
-            title: "Sort: " + sortLabel,
-            onClick: () => setSortOpen(!sortOpen),
-          },
-          h(Icon, { name: "sort", size: 20 })
-        ),
-        h(
-          "button",
-          { className: "stk-density", title: "Grid density", onClick: () => setDensity(density === 3 ? 5 : 3) },
-          density === 3 ? "▦" : "▥"
-        )
-      ),
-
-      sortOpen &&
+        { className: "stk-tabwrap" },
         h(
           "div",
-          { className: "stk-sort-menu stk-sort-drop" },
-          SCENE_SORTS.map(([key, label]) =>
-            h(
-              "button",
-              {
-                key,
-                className: key === sort ? "stk-sort-on" : "",
-                onClick: () => {
-                  setSort(key);
-                  try { window.localStorage.setItem("stashTok.perfSort", key); } catch (e) { /* ignore */ }
-                  setSortOpen(false);
-                },
-              },
-              label
-            )
+          { className: "stk-tabs stk-tabbar" },
+          h(
+            "button",
+            {
+              className: tab === "scenes" && media === "videos" ? "stk-active" : "",
+              title: "Scenes",
+              onClick: () => { setTab("scenes"); setMedia("videos"); },
+            },
+            h(Icon, { name: "video", size: 21 })
+          ),
+          h(
+            "button",
+            {
+              className: tab === "images" ? "stk-active" : "",
+              title: "Images",
+              onClick: () => { setTab("images"); setMedia("images"); },
+            },
+            h(Icon, { name: "image", size: 21 })
+          ),
+          h(
+            "button",
+            {
+              className: tab === "markers" && media === "videos" ? "stk-active" : "",
+              title: markerCount ? "Markers " + markerCount : "Markers",
+              onClick: () => { setTab("markers"); setMedia("videos"); },
+            },
+            h(Icon, { name: "chapter", size: 21 })
+          ),
+          h(
+            "button",
+            {
+              className: sortOpen ? "stk-active" : "",
+              title: "Sort: " + sortLabel,
+              onClick: () => setSortOpen(!sortOpen),
+            },
+            h(Icon, { name: "sort", size: 20 })
+          ),
+          h(
+            "button",
+            { className: "stk-density", title: "Grid density", onClick: () => setDensity(density === 3 ? 5 : 3) },
+            density === 3 ? "▦" : "▥"
           )
         ),
+        sortOpen &&
+          h(
+            React.Fragment,
+            null,
+            h("div", { className: "stk-pop-backdrop", onClick: () => setSortOpen(false) }),
+            h(
+              "div",
+              { className: "stk-pop", role: "menu" },
+              h(
+                "button",
+                {
+                  className: "stk-pop-toggle" + (favFirst ? " stk-on" : ""),
+                  role: "menuitemcheckbox",
+                  "aria-checked": !!favFirst,
+                  onClick: () => {
+                    const next = !favFirst;
+                    setFavFirst(next);
+                    try { window.localStorage.setItem("stashTok.perfFavFirst", next ? "1" : "0"); } catch (e) { /* ignore */ }
+                  },
+                },
+                h("span", null, "Favorites first"),
+                h("span", { className: "stk-pop-check" }, favFirst ? "✓" : "")
+              ),
+              h("div", { className: "stk-pop-sep" }),
+              SCENE_SORTS.map(([key, label]) =>
+                h(
+                  "button",
+                  {
+                    key,
+                    role: "menuitemradio",
+                    "aria-checked": key === sort,
+                    className: "stk-pop-item" + (key === sort ? " stk-on" : ""),
+                    onClick: () => {
+                      setSort(key);
+                      try { window.localStorage.setItem("stashTok.perfSort", key); } catch (e) { /* ignore */ }
+                      setSortOpen(false);
+                    },
+                  },
+                  h("span", null, label),
+                  key === sort && h("span", { className: "stk-pop-check" }, "✓")
+                )
+              )
+            )
+          )
+      ),
 
       media === "images" || tab === "images"
         ? h(
@@ -3314,64 +3361,75 @@
 
       h(
         "div",
-        { className: "stk-tabs stk-tabbar" },
-        h(
-          "button",
-          {
-            className: tab === "scenes" && media === "videos" ? "stk-active" : "",
-            title: "Scenes",
-            onClick: () => { setTab("scenes"); setMedia("videos"); },
-          },
-          h(Icon, { name: "video", size: 21 })
-        ),
-        h(
-          "button",
-          {
-            className: tab === "images" ? "stk-active" : "",
-            title: "Images",
-            onClick: () => { setTab("images"); setMedia("images"); },
-          },
-          h(Icon, { name: "image", size: 21 })
-        ),
-        h(
-          "button",
-          {
-            className: tab === "markers" && media === "videos" ? "stk-active" : "",
-            title: markerCount ? "Markers " + markerCount : "Markers",
-            onClick: () => { setTab("markers"); setMedia("videos"); },
-          },
-          h(Icon, { name: "chapter", size: 21 })
-        ),
-        h(
-          "button",
-          {
-            className: sortOpen ? "stk-active" : "",
-            title: "Sort: " + sortLabel,
-            onClick: () => setSortOpen(!sortOpen),
-          },
-          h(Icon, { name: "sort", size: 20 })
-        )
-      ),
-
-      sortOpen &&
+        { className: "stk-tabwrap" },
         h(
           "div",
-          { className: "stk-sort-menu stk-sort-drop" },
-          FOLDER_SORTS.map(([value, label]) =>
-            h(
-              "button",
-              {
-                key: value,
-                className: value === sort ? "stk-on" : "",
-                onClick: () => {
-                  setSort(value);
-                  setSortOpen(false);
-                },
-              },
-              label
-            )
+          { className: "stk-tabs stk-tabbar" },
+          h(
+            "button",
+            {
+              className: tab === "scenes" && media === "videos" ? "stk-active" : "",
+              title: "Scenes",
+              onClick: () => { setTab("scenes"); setMedia("videos"); },
+            },
+            h(Icon, { name: "video", size: 21 })
+          ),
+          h(
+            "button",
+            {
+              className: tab === "images" ? "stk-active" : "",
+              title: "Images",
+              onClick: () => { setTab("images"); setMedia("images"); },
+            },
+            h(Icon, { name: "image", size: 21 })
+          ),
+          h(
+            "button",
+            {
+              className: tab === "markers" && media === "videos" ? "stk-active" : "",
+              title: markerCount ? "Markers " + markerCount : "Markers",
+              onClick: () => { setTab("markers"); setMedia("videos"); },
+            },
+            h(Icon, { name: "chapter", size: 21 })
+          ),
+          h(
+            "button",
+            {
+              className: sortOpen ? "stk-active" : "",
+              title: "Sort: " + sortLabel,
+              onClick: () => setSortOpen(!sortOpen),
+            },
+            h(Icon, { name: "sort", size: 20 })
           )
         ),
+        sortOpen &&
+          h(
+            React.Fragment,
+            null,
+            h("div", { className: "stk-pop-backdrop", onClick: () => setSortOpen(false) }),
+            h(
+              "div",
+              { className: "stk-pop", role: "menu" },
+              FOLDER_SORTS.map(([value, label]) =>
+                h(
+                  "button",
+                  {
+                    key: value,
+                    role: "menuitemradio",
+                    "aria-checked": value === sort,
+                    className: "stk-pop-item" + (value === sort ? " stk-on" : ""),
+                    onClick: () => {
+                      setSort(value);
+                      setSortOpen(false);
+                    },
+                  },
+                  h("span", null, label),
+                  value === sort && h("span", { className: "stk-pop-check" }, "✓")
+                )
+              )
+            )
+          )
+      ),
 
       media === "images" || tab === "images"
         ? h(
@@ -3950,8 +4008,14 @@
     /* a feed we just opened on a scene, so the scene route does not replace it
        with a one-clip feed (the URL write lands before React re-renders) */
     const selfSceneRef = useRef(null);
+    /* exact route we just wrote, so the router can skip re-applying it */
+    const routeClaimRef = useRef(null);
 
     const applyRoute = useCallback((rest) => {
+      if (routeClaimRef.current && routeClaimRef.current === rest) {
+        routeClaimRef.current = null;
+        return;
+      }
       const live = liveRef.current || {};
       const feedNow = live.activeFeed || null;
       if (!rest) {
@@ -4009,7 +4073,12 @@
         ) {
           return;
         }
-        resolvePerformerSlug(slug, sceneId || null);
+        if (!sceneId) {
+          // /performer/<name> is the profile page; only /performer/<name>/<clip> plays
+          resolvePerformerSlug(slug, null, true);
+          return;
+        }
+        resolvePerformerSlug(slug, sceneId);
         return;
       }
       if (rest.indexOf("scene/") === 0) {
@@ -4057,7 +4126,7 @@
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    async function resolvePerformerSlug(name, sceneId) {
+    async function resolvePerformerSlug(name, sceneId, asProfile) {
       try {
         const data = await gql(
           `query StashTokFindByName($q: String) { findPerformers(filter: { q: $q, per_page: 20 }) { performers { id name image_path scene_count } } }`,
@@ -4066,9 +4135,9 @@
         const list = (data.findPerformers && data.findPerformers.performers) || [];
         const exact = list.find((row) => row.name.toLowerCase() === name.toLowerCase()) || list[0];
         if (exact) {
-          setPerformerFilter(exact);
-          setTab("performers");
-          if (sceneId) openPerformer(exact, { sceneId }, false);
+          if (asProfile) openProfile(exact, false);
+          else if (sceneId) openPerformer(exact, { sceneId }, false);
+          else openProfile(exact, false);
         } else {
           setTab("performers");
         }
@@ -4109,6 +4178,21 @@
       goTo("");
     }
 
+    /** the profile page: /performer/<name> */
+    function openProfile(performer, push) {
+      if (!performer) {
+        setPerformersOpen(true);
+        setTab("performers");
+        return;
+      }
+      setPerformersOpen(false);
+      setPerformerFilter(performer);
+      setTagFilter(null);
+      setTab("performers");
+      if (push !== false) goTo("performer/" + encodeURIComponent(performer.name));
+    }
+
+    /** the clip feed for a performer: /performer/<name>/<sceneId> */
     function openPerformer(performer, payload, push) {
       if (!performer) {
         setPerformersOpen(true);
@@ -4127,11 +4211,16 @@
         direction: (payload && payload.sort) === "title" ? "ASC" : "DESC",
         startSceneId: (payload && payload.sceneId) || null,
         startAt: (payload && payload.startAt) || null,
-        origin: { kind: "performer", id: performer.id },
+        origin: { kind: "performer", id: performer.id, performer },
       });
       setTab("home");
       setRefreshKey((n) => n + 1);
-      if (push !== false && !(payload && payload.noPush)) goTo("performer/" + encodeURIComponent(performer.name));
+      if (push !== false && !(payload && payload.noPush)) {
+        const route = "performer/" + encodeURIComponent(performer.name) + (payload && payload.sceneId ? "/" + payload.sceneId : "");
+        // we just built this feed; the router must not rebuild it from the URL
+        routeClaimRef.current = route;
+        goTo(route);
+      }
     }
 
     function openTag(tag) {
@@ -4187,7 +4276,7 @@
     let body;
     if (tab === "performers") {
       body = h(PerformersPage, {
-        onPick: openPerformer,
+        onPick: openProfile,
         onBack: () => setTab("home"),
         onOpenTag: openTag,
         initialPerformer: performerFilter,
@@ -4293,7 +4382,7 @@
           setTab("settings");
           goTo("settings");
         },
-        onOpenPerformer: openPerformer,
+        onOpenPerformer: openProfile,
         onOpenTag: openTag,
         onDeriveFeed: useFeed,
         onEditFeed: (spec) => setBuilder({ spec }),
@@ -4305,8 +4394,20 @@
         onSwitchFeed: useFeed,
         onNewFeed: () => setBuilder({ spec: null }),
         onBack: () => {
+          const origin = (activeFeed && activeFeed.origin) || null;
+          if (origin && origin.kind === "performer" && origin.performer) {
+            openProfile(origin.performer, false);
+            goTo("performer/" + encodeURIComponent(origin.performer.name));
+            return;
+          }
+          if (origin && origin.kind === "folder" && origin.folder) {
+            setFolderView({ name: origin.name, folder: origin.folder });
+            setTab("folder");
+            goTo("folder/" + encodeURIComponent(origin.folder));
+            return;
+          }
           if (window.history.length > 1) window.history.back();
-          else setTab("performers");
+          else goHome();
         },
       });
     }
