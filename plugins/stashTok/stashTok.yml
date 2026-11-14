@@ -50,5 +50,5 @@ settings:
     type: BOOLEAN
   minDuration:
     displayName: Minimum duration (seconds)
-    description: Scenes shorter than this are left out of every feed. Set to 0 to include everything. The Shorts feed ignores this.
+    description: Scenes shorter than this are left out of every feed. Default 10 seconds; set 0 to include everything. The Shorts feed ignores this.
     type: NUMBER

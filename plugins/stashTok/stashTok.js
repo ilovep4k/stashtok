@@ -530,8 +530,8 @@
       longSceneSeconds: Number(raw.longSceneSeconds) || 300,
       flagTag: raw.flagTag || "stashtok-delete",
       doubleTapHeart: raw.doubleTapHeart !== false,
-      // 0 = every scene in the library is eligible, regardless of length
-      minDuration: raw.minDuration == null ? 0 : Number(raw.minDuration),
+      // 10s keeps 2-second clips out without cutting whole folders
+      minDuration: raw.minDuration == null ? 10 : Number(raw.minDuration),
     };
   }
 
@@ -726,6 +726,18 @@
       if (index >= items.length - 3 && !exhaustedRef.current) loadPage(false);
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [index, items.length]);
+
+    /* the address bar always names the clip on screen, so it can be shared or reloaded */
+    useEffect(() => {
+      const sceneId = item && item.scene && item.scene.id;
+      if (!sceneId || !spec) return;
+      let target = null;
+      if (spec.type === "performer") target = "performer/" + encodeURIComponent(spec.name) + "/" + sceneId;
+      else if (spec.type === "scene") target = "scene/" + sceneId;
+      if (!target) return;
+      if (currentRoute() !== target) goTo(target, true);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [item && item.scene && item.scene.id, spec.type, spec.name]);
 
     useEffect(() => {
       if (item) setRating(item.scene.rating100 == null ? null : Number(item.scene.rating100));
@@ -2015,8 +2027,9 @@
     const sortLabel = (SCENE_SORTS.find((entry) => entry[0] === sort) || SCENE_SORTS[0])[1];
 
     function openScene(scene) {
-      onPlay({ sceneId: scene.id, tab: "scenes", sort, noPush: true });
-      goTo("scene/" + scene.id);
+      // the URL names the performer and the exact clip, like tiktok.com/@user/video/<id>
+      onPlay({ sceneId: scene.id, tab: "scenes", sort });
+      goTo("performer/" + encodeURIComponent(performer.name) + "/" + scene.id);
     }
 
     return h(
@@ -2121,6 +2134,7 @@
                 {
                   key: scene.id,
                   className: "stk-tile",
+                  "data-scene": scene.id,
                   style: tileStyle,
                   onClick: () => openScene(scene),
                 },
@@ -2140,7 +2154,8 @@
                 {
                   key: marker.id,
                   className: "stk-tile",
-                  onClick: () => onPlay({ sceneId: marker.scene && marker.scene.id, startAt: marker.seconds, tab: "markers", sort }),
+                  onClick: () =>
+                    onPlay({ sceneId: marker.scene && marker.scene.id, startAt: marker.seconds, tab: "markers", sort }),
                 },
                 h("div", { className: "stk-tile-photo", style: { backgroundImage: `url("${rel(marker.scene && marker.scene.paths && marker.scene.paths.screenshot)}")` } }),
                 h("span", { className: "stk-tile-dur" }, fmtTime(marker.seconds))
@@ -3158,7 +3173,11 @@
         return;
       }
       if (rest.indexOf("performer/") === 0) {
-        resolvePerformerSlug(decodeURIComponent(rest.slice("performer/".length)));
+        const tail = rest.slice("performer/".length);
+        const slash = tail.indexOf("/");
+        const slug = decodeURIComponent(slash === -1 ? tail : tail.slice(0, slash));
+        const sceneId = slash === -1 ? null : tail.slice(slash + 1).replace(/\D/g, "");
+        resolvePerformerSlug(slug, sceneId || null);
         return;
       }
       if (rest.indexOf("scene/") === 0) {
@@ -3201,7 +3220,7 @@
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    async function resolvePerformerSlug(name) {
+    async function resolvePerformerSlug(name, sceneId) {
       try {
         const data = await gql(
           `query StashTokFindByName($q: String) { findPerformers(filter: { q: $q, per_page: 20 }) { performers { id name image_path scene_count } } }`,
@@ -3212,6 +3231,7 @@
         if (exact) {
           setPerformerFilter(exact);
           setTab("performers");
+          if (sceneId) openPerformer(exact, { sceneId }, false);
         } else {
           setTab("performers");
         }
