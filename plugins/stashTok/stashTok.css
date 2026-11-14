@@ -1566,3 +1566,76 @@
   letter-spacing: 0.005em;
   word-break: break-all;
 }
+
+/* ---------- settings page ---------- */
+.stk-page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.stk-page-x {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  cursor: pointer;
+}
+.stk-page-x:active { background: rgba(255, 255, 255, 0.2); }
+
+.stk-pref {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+.stk-pref-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.stk-pref-copy span { font-size: 14px; color: #fff; }
+.stk-pref-copy small { font-size: 11px; color: rgba(255, 255, 255, 0.5); line-height: 1.3; }
+.stk-pref-control { flex: 0 0 auto; }
+
+.stk-pills { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+.stk-pill {
+  padding: 7px 11px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.stk-pill.stk-active { background: #fff; border-color: #fff; color: #111; }
+.stk-switch-inline { padding: 0; border: 0; background: none; }
+
+/* ---------- folder strip on a performer page ---------- */
+.stk-folderstrip {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 8px 12px 10px;
+  scrollbar-width: none;
+}
+.stk-folderstrip::-webkit-scrollbar { display: none; }
+.stk-folderstrip .stk-chip {
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.stk-folderstrip .stk-chip.stk-on { background: #fff; color: #111; border-color: #fff; }
+.stk-pref-stack { flex-direction: column; align-items: stretch; gap: 8px; }
+.stk-pref-stack .stk-pref-control { max-width: 100%; }
+.stk-pref-stack .stk-pills { justify-content: flex-start; }

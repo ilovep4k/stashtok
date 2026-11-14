@@ -364,6 +364,10 @@
     if (type === "favorites") {
       parts.push(`rating100: { value: 0, modifier: GREATER_THAN }`);
     }
+    if (cfg.windowDays && Number(cfg.windowDays) > 0) {
+      const since = new Date(Date.now() - Number(cfg.windowDays) * 86400000);
+      parts.push(`date: { value: "${since.toISOString().slice(0, 10)}", modifier: GREATER_THAN }`);
+    }
     if (type === "performer" && spec.performerId) {
       parts.push(`performers: { value: ["${spec.performerId}"], modifier: INCLUDES }`);
     }
@@ -650,6 +654,35 @@
   function shortDate(value) {
     const raw = String(value || "").slice(0, 10);
     return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : "";
+  }
+
+  /* in-app preferences (the plugin's own config lives in Stash's settings page) */
+  const PREFS_KEY = "stashTok.prefs.v1";
+  const PREF_DEFAULTS = {
+    performerSort: "filesize",
+    performerImages: true,
+    performerMarkers: true,
+    foldersOnTop: true,
+    favoritesSort: "updated_at",
+    favoritesOpen: "gallery",
+    feedWindow: "all",
+  };
+
+  function loadPrefs() {
+    try {
+      const parsed = JSON.parse(window.localStorage.getItem(PREFS_KEY) || "{}");
+      return Object.assign({}, PREF_DEFAULTS, parsed && typeof parsed === "object" ? parsed : {});
+    } catch (e) {
+      return Object.assign({}, PREF_DEFAULTS);
+    }
+  }
+
+  function savePrefs(prefs) {
+    try {
+      window.localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+    } catch (e) {
+      /* ignore quota errors */
+    }
   }
 
   /** one popover for every sort control: same shape, different options */
@@ -2418,7 +2451,7 @@
     );
   }
 
-  function PerformerProfile({ performerId, onBack, onPlay, onOpenTag }) {
+  function PerformerProfile({ performerId, onBack, onPlay, onOpenTag, prefs }) {
     const [performer, setPerformer] = useState(null);
     const [scenes, setScenes] = useState([]);
     const [markers, setMarkers] = useState([]);
@@ -2431,10 +2464,11 @@
     const pageRef = useRef(null);
     const sortKey = "stashTok.perfSort." + performerId;
     const favKey = "stashTok.perfFavFirst." + performerId;
-    const [sort, setSort] = useState(() => readSortPref(sortKey, "filesize"));
+    const [sort, setSort] = useState(() => readSortPref(sortKey, (prefs && prefs.performerSort) || "filesize"));
     const [favFirst, setFavFirst] = useState(() => readSortPref(favKey, false));
     const [sortOpen, setSortOpen] = useState(false);
     const [density, setDensity] = useState(3);
+    const [folderPick, setFolderPick] = useState(null);
     const [error, setError] = useState("");
 
     useEffect(() => {
@@ -2666,6 +2700,7 @@
             {
               className: tab === "images" ? "stk-active" : "",
               title: "Images",
+              style: prefs && prefs.performerImages === false ? { display: "none" } : null,
               onClick: () => { setTab("images"); setMedia("images"); },
             },
             h(Icon, { name: "image", size: 21 })
@@ -2675,6 +2710,7 @@
             {
               className: tab === "markers" && media === "videos" ? "stk-active" : "",
               title: markerCount ? "Markers " + markerCount : "Markers",
+              style: prefs && prefs.performerMarkers === false ? { display: "none" } : null,
               onClick: () => { setTab("markers"); setMedia("videos"); },
             },
             h(Icon, { name: "chapter", size: 21 })
@@ -2715,6 +2751,11 @@
           })
       ),
 
+      (() => {
+        if (!prefs || prefs.foldersOnTop === false || tab !== "scenes" || media === "images" || !scenes.length) return null;
+        return null; // chips are rendered from the grouped scene list above
+      })(),
+
       media === "images" || tab === "images"
         ? h(
             "div",
@@ -2735,7 +2776,10 @@
         ? h(
             "div",
             { className: gridClass },
-            scenes.map((scene) => {
+            (folderPick
+              ? scenes.filter((scene) => (prettyPath(((scene.files && scene.files[0]) || {}).path) || "(root)") === folderPick)
+              : scenes
+            ).map((scene) => {
               const file = (scene.files && scene.files[0]) || {};
               const tileStyle =
                 density === 5 && file.width && file.height ? { aspectRatio: file.width + " / " + file.height } : undefined;
@@ -2792,7 +2836,7 @@
     );
   }
 
-  function PerformersPage({ onPick, onBack, onOpenTag, initialPerformer }) {
+  function PerformersPage({ onPick, onBack, onOpenTag, initialPerformer, prefs }) {
     const [rows, setRows] = useState(null);
     const [query, setQuery] = useState("");
     const [sort, setSort] = useState(() => readSortPref("stashTok.performerListSort", "updated_at"));
@@ -2864,6 +2908,7 @@
         },
         onPlay: (payload) => onPick(selected, payload),
         onOpenTag,
+        prefs,
       });
     }
 
@@ -3805,13 +3850,101 @@
   /* settings                                                           */
   /* ------------------------------------------------------------------ */
 
-  function SettingsPanel({ cfg, feeds, onEdit, pin, onSetPin, onClearPin, sfw, onToggleSfw }) {
+  function PrefRow({ title, hint, children, stack }) {
+    return h(
+      "div",
+      { className: "stk-pref" + (stack ? " stk-pref-stack" : "") },
+      h("div", { className: "stk-pref-copy" }, h("span", null, title), hint && h("small", null, hint)),
+      h("div", { className: "stk-pref-control" }, children)
+    );
+  }
+
+  function PrefToggle({ on, onChange, label }) {
+    return h(
+      "button",
+      {
+        className: "stk-switch-row stk-switch-inline" + (on ? " stk-on" : ""),
+        role: "switch",
+        "aria-checked": !!on,
+        "aria-label": label || "Toggle",
+        onClick: () => onChange(!on),
+      },
+      h("span", { className: "stk-switch" }, h("span", { className: "stk-knob" }))
+    );
+  }
+
+  function PrefPills({ value, options, onChange }) {
+    return h(
+      "div",
+      { className: "stk-pills" },
+      options.map(([key, label]) =>
+        h(
+          "button",
+          { key, className: "stk-pill" + (key === value ? " stk-active" : ""), onClick: () => onChange(key) },
+          label
+        )
+      )
+    );
+  }
+
+  function SettingsPanel({ cfg, feeds, onEdit, pin, onSetPin, onClearPin, sfw, onToggleSfw, prefs, setPref }) {
     const [draft, setDraft] = useState("");
     const [saved, setSaved] = useState(false);
 
     return h(
       "div",
       { className: "stk-settings", style: { marginTop: "16px" } },
+      h("h4", null, "Feed"),
+      h(
+        PrefRow,
+        { title: "What lands in the feed", hint: "For You draws from this window", stack: true },
+        h(PrefPills, {
+          value: prefs.feedWindow,
+          options: [["all", "Everything"], ["30", "30 days"], ["90", "90 days"], ["365", "1 year"]],
+          onChange: (value) => setPref("feedWindow", value),
+        })
+      ),
+      h("h4", { style: { marginTop: "18px" } }, "Performer page"),
+      h(
+        PrefRow,
+        { title: "Default sort", hint: "Used the first time you open a performer", stack: true },
+        h(PrefPills, {
+          value: prefs.performerSort,
+          options: [["filesize", "Size"], ["updated_at", "Recent"], ["duration", "Length"], ["resolution", "Res"], ["title", "A–Z"], ["random", "Random"]],
+          onChange: (value) => setPref("performerSort", value),
+        })
+      ),
+      h(
+        PrefRow,
+        { title: "Folders on top", hint: "Group a performer's clips by folder above the grid" },
+        h(PrefToggle, { label: "Folders on top", on: prefs.foldersOnTop, onChange: (value) => setPref("foldersOnTop", value) })
+      ),
+      h(
+        PrefRow,
+        { title: "Show Images tab", hint: "" },
+        h(PrefToggle, { label: "Images tab", on: prefs.performerImages, onChange: (value) => setPref("performerImages", value) })
+      ),
+      h(
+        PrefRow,
+        { title: "Show Markers tab", hint: "" },
+        h(PrefToggle, { label: "Markers tab", on: prefs.performerMarkers, onChange: (value) => setPref("performerMarkers", value) })
+      ),
+      h("h4", { style: { marginTop: "18px" } }, "Favorites"),
+      h(
+        PrefRow,
+        { title: "Sort order", hint: "How your hearted scenes are ordered", stack: true },
+        h(PrefPills, {
+          value: prefs.favoritesSort,
+          options: [["updated_at", "Recent"], ["filesize", "Size"], ["duration", "Length"], ["resolution", "Res"], ["title", "A–Z"], ["random", "Random"]],
+          onChange: (value) => setPref("favoritesSort", value),
+        })
+      ),
+      h("h4", { style: { marginTop: "18px" } }, "Folder view"),
+      h(
+        PrefRow,
+        { title: "Folders on top in any sort", hint: "Subfolders always lead, whatever the sort" },
+        h(PrefToggle, { label: "Folders first", on: prefs.foldersOnTop, onChange: (value) => setPref("foldersOnTop", value) })
+      ),
       h("h4", null, "Safe for work"),
       h(
         "button",
@@ -3994,6 +4127,14 @@
 
   function StashTokApp() {
     const baseCfg = usePluginConfig();
+    const [prefs, setPrefs] = useState(loadPrefs);
+    const setPref = useCallback((key, value) => {
+      setPrefs((cur) => {
+        const next = Object.assign({}, cur, { [key]: value });
+        savePrefs(next);
+        return next;
+      });
+    }, []);
     const [sfw, setSfw] = useState(() => {
       try {
         return window.localStorage.getItem(SFW_KEY) === "1";
@@ -4379,6 +4520,7 @@
         onBack: () => setTab("home"),
         onOpenTag: openTag,
         initialPerformer: performerFilter,
+        prefs,
       });
     } else if (tab === "folder" && folderView) {
       body = h(FolderProfile, {
@@ -4450,9 +4592,20 @@
       body = h(
         "div",
         { className: "stk-page" },
-        h("h2", null, "Settings"),
+        h(
+          "h2",
+          { className: "stk-page-head" },
+          "Settings",
+          h(
+            "button",
+            { className: "stk-page-x", title: "Close settings", onClick: () => { setTab("home"); goTo(""); } },
+            h(Icon, { name: "x", size: 18 })
+          )
+        ),
         h(SettingsPanel, {
           cfg,
+          prefs,
+          setPref,
           feeds,
           onEdit: (spec) => setBuilder({ spec }),
           pin,
@@ -4471,7 +4624,7 @@
       body = h(FeedView, {
         key: activeFeed.id + ":" + refreshKey,
         spec: activeFeed,
-        cfg,
+        cfg: Object.assign({}, cfg, { windowDays: prefs.feedWindow === "all" ? 0 : Number(prefs.feedWindow) || 0 }),
         refreshKey,
         onSearch: () => {
           setTab("search");
