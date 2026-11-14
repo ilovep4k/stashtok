@@ -2728,32 +2728,62 @@
     );
   }
 
+  const FOLDER_SORTS = [
+    ["updated_at", "Recently added"],
+    ["duration", "Duration"],
+    ["filesize", "File size"],
+    ["resolution", "Resolution"],
+    ["rating", "Favorites first"],
+    ["title", "A–Z"],
+    ["random", "Random"],
+  ];
+
   function FolderProfile({ name, folder, onBack, onPlay }) {
+    const [tab, setTab] = useState("scenes");
+    const [media, setMedia] = useState("videos");
+    const [sort, setSort] = useState("updated_at");
+    const [sortOpen, setSortOpen] = useState(false);
     const [scenes, setScenes] = useState([]);
+    const [images, setImages] = useState([]);
+    const [markers, setMarkers] = useState([]);
     const [count, setCount] = useState(0);
-    const [markers, setMarkers] = useState(0);
+    const [imageCount, setImageCount] = useState(0);
+    const [markerCount, setMarkerCount] = useState(0);
     const [cover, setCover] = useState("");
+    const [loading, setLoading] = useState(true);
+
+    const sortArg = sortClause({ sort, direction: sort === "random" ? null : "DESC" });
+    const sortLabel = (FOLDER_SORTS.find((entry) => entry[0] === sort) || FOLDER_SORTS[0])[1];
 
     useEffect(() => {
       let alive = true;
+      setLoading(true);
       gql(
-        `query StashTokFolder($path: String!) {
+        `query StashTokFolderScenes($path: String!) {
           findScenes(scene_filter: { path: { value: $path, modifier: INCLUDES } },
-                     filter: { per_page: 60, sort: "date", direction: DESC }) {
+                     filter: { per_page: 60, ${sortArg} }) {
             count
-            scenes { id paths { screenshot } files { duration } }
+            scenes { id title paths { screenshot } files { duration } }
           }
         }`,
         { path: folder }
       )
         .then((data) => {
           if (!alive) return;
-          setScenes(data.findScenes.scenes || []);
-          setCount(data.findScenes.count || 0);
-          const first = data.findScenes.scenes && data.findScenes.scenes[0];
-          if (first) setCover(rel(first.paths && first.paths.screenshot));
+          const next = (data.findScenes && data.findScenes.scenes) || [];
+          setScenes(next);
+          setCount((data.findScenes && data.findScenes.count) || 0);
+          if (next[0]) setCover(rel(next[0].paths && next[0].paths.screenshot));
+          setLoading(false);
         })
-        .catch(() => {});
+        .catch(() => alive && setLoading(false));
+      return () => {
+        alive = false;
+      };
+    }, [folder, sortArg]);
+
+    useEffect(() => {
+      let alive = true;
       gql(
         `query StashTokFolderMarkers($path: String!) {
           findSceneMarkers(filter: { per_page: 1 },
@@ -2761,12 +2791,60 @@
         }`,
         { path: folder }
       )
-        .then((data) => alive && setMarkers(data.findSceneMarkers.count || 0))
+        .then((data) => alive && setMarkerCount((data.findSceneMarkers && data.findSceneMarkers.count) || 0))
         .catch(() => {});
       return () => {
         alive = false;
       };
     }, [folder]);
+
+    useEffect(() => {
+      if (media !== "images") return undefined;
+      let alive = true;
+      gql(
+        `query StashTokFolderImages($path: String!) {
+          findImages(image_filter: { path: { value: $path, modifier: INCLUDES } },
+                     filter: { per_page: 60, ${sortArg} }) {
+            count
+            images { id title paths { thumbnail } }
+          }
+        }`,
+        { path: folder }
+      )
+        .then((data) => {
+          if (!alive) return;
+          setImages((data.findImages && data.findImages.images) || []);
+          setImageCount((data.findImages && data.findImages.count) || 0);
+        })
+        .catch(() => alive && setImages([]));
+      return () => {
+        alive = false;
+      };
+    }, [folder, media, sortArg]);
+
+    useEffect(() => {
+      if (tab !== "markers" || media === "images") return undefined;
+      let alive = true;
+      gql(
+        `query StashTokFolderMarkerList($path: String!) {
+          findSceneMarkers(filter: { per_page: 60 },
+            scene_marker_filter: { scene_filter: { path: { value: $path, modifier: INCLUDES } } }) {
+            count
+            scene_markers { id title seconds scene { id paths { screenshot } } }
+          }
+        }`,
+        { path: folder }
+      )
+        .then((data) => {
+          if (!alive) return;
+          setMarkers((data.findSceneMarkers && data.findSceneMarkers.scene_markers) || []);
+          setMarkerCount((data.findSceneMarkers && data.findSceneMarkers.count) || 0);
+        })
+        .catch(() => alive && setMarkers([]));
+      return () => {
+        alive = false;
+      };
+    }, [folder, tab, media]);
 
     return h(
       "div",
@@ -2779,35 +2857,147 @@
       h(
         "div",
         { className: "stk-profile-head" },
-        h("div", { className: "stk-avatar stk-avatar-text", style: cover ? { backgroundImage: `url("${cover}")` } : undefined }, cover ? null : initials(name)),
+        h(
+          "div",
+          { className: "stk-avatar stk-avatar-text", style: cover ? { backgroundImage: `url("${cover}")` } : undefined },
+          cover ? null : initials(name)
+        ),
         h(
           "div",
           { style: { flex: "1 1 auto", minWidth: 0 } },
           h("div", { className: "stk-profile-name" }, name),
           h("div", { className: "stk-account-meta" }, folder)
         ),
-        h("button", { className: "stk-follow", onClick: onPlay }, h(Icon, { name: "play", size: 13 }), " Play")
+        h("button", { className: "stk-follow", onClick: () => onPlay({ sceneId: null }) }, h(Icon, { name: "play", size: 13 }), " Play")
       ),
+
       h(
         "div",
-        { className: "stk-stats" },
-        [
-          ["Scenes", count],
-          ["Markers", markers],
-        ].map(([label, value]) => h("div", { key: label, className: "stk-stat" }, h("b", null, value), h("span", null, label)))
+        { className: "stk-tabs stk-tabs-wide" },
+        h(
+          "button",
+          {
+            className: tab === "scenes" && media === "videos" ? "stk-active" : "",
+            onClick: () => {
+              setTab("scenes");
+              setMedia("videos");
+            },
+          },
+          `Scenes ${count}`
+        ),
+        h(
+          "button",
+          {
+            className: tab === "markers" && media === "videos" ? "stk-active" : "",
+            onClick: () => {
+              setTab("markers");
+              setMedia("videos");
+            },
+          },
+          `Markers ${markerCount}`
+        )
       ),
+
       h(
         "div",
-        { className: "stk-grid-3" },
-        scenes.map((scene) =>
+        { className: "stk-media-row" },
+        h(
+          "div",
+          { className: "stk-media-toggle", role: "tablist" },
           h(
             "button",
-            { key: scene.id, className: "stk-tile", onClick: onPlay },
-            h("div", { className: "stk-tile-photo", style: { backgroundImage: `url("${rel(scene.paths && scene.paths.screenshot)}")` } }),
-            h("span", { className: "stk-tile-dur" }, fmtTime((scene.files && scene.files[0] && scene.files[0].duration) || 0))
+            { className: media === "videos" ? "stk-on" : "", title: "Videos", onClick: () => setMedia("videos") },
+            h(Icon, { name: "video", size: 16 })
+          ),
+          h(
+            "button",
+            { className: media === "images" ? "stk-on" : "", title: "Images", onClick: () => setMedia("images") },
+            h(Icon, { name: "image", size: 16 })
+          )
+        ),
+        h(
+          "div",
+          { className: "stk-media-actions" },
+          h(
+            "button",
+            { className: "stk-sort-btn stk-sort-pill", onClick: () => setSortOpen(!sortOpen) },
+            h(Icon, { name: "sort", size: 13 }),
+            sortLabel,
+            " ▾"
           )
         )
-      )
+      ),
+
+      sortOpen &&
+        h(
+          "div",
+          { className: "stk-sort-menu" },
+          FOLDER_SORTS.map(([value, label]) =>
+            h(
+              "button",
+              {
+                key: value,
+                className: value === sort ? "stk-on" : "",
+                onClick: () => {
+                  setSort(value);
+                  setSortOpen(false);
+                },
+              },
+              label
+            )
+          )
+        ),
+
+      media === "images"
+        ? h(
+            "div",
+            { className: "stk-grid-3" },
+            images.map((image) =>
+              h(
+                "a",
+                {
+                  key: image.id,
+                  className: "stk-tile",
+                  href: `/images/${image.id}`,
+                  target: "_blank",
+                  rel: "noopener noreferrer",
+                },
+                h("div", { className: "stk-tile-photo", style: { backgroundImage: `url("${rel(image.paths && image.paths.thumbnail)}")` } })
+              )
+            )
+          )
+        : tab === "markers"
+        ? h(
+            "div",
+            { className: "stk-grid-3" },
+            markers.map((marker) =>
+              h(
+                "button",
+                {
+                  key: marker.id,
+                  className: "stk-tile",
+                  onClick: () => onPlay({ sceneId: marker.scene && marker.scene.id, startAt: marker.seconds, tab: "markers" }),
+                },
+                h("div", {
+                  className: "stk-tile-photo",
+                  style: { backgroundImage: `url("${rel(marker.scene && marker.scene.paths && marker.scene.paths.screenshot)}")` },
+                }),
+                h("span", { className: "stk-tile-dur" }, fmtTime(marker.seconds || 0))
+              )
+            )
+          )
+        : h(
+            "div",
+            { className: "stk-grid-3" },
+            scenes.map((scene) =>
+              h(
+                "button",
+                { key: scene.id, className: "stk-tile", onClick: () => onPlay({ sceneId: scene.id }) },
+                h("div", { className: "stk-tile-photo", style: { backgroundImage: `url("${rel(scene.paths && scene.paths.screenshot)}")` } }),
+                h("span", { className: "stk-tile-dur" }, fmtTime((scene.files && scene.files[0] && scene.files[0].duration) || 0))
+              )
+            )
+          )
     );
   }
 
@@ -3556,8 +3746,20 @@
           setFolderView(null);
           setTab("home");
         },
-        onPlay: () =>
-          useFeed({ type: "foryou", name: folderView.name, pathIncludes: folderView.folder, sort: "date", direction: "DESC" }),
+        onPlay: (payload) => {
+          const sceneId = (payload && payload.sceneId) || null;
+          useFeed({
+            type: payload && payload.tab === "markers" ? "markers" : "foryou",
+            name: folderView.name,
+            pathIncludes: folderView.folder,
+            sort: "date",
+            direction: "DESC",
+            startSceneId: sceneId,
+            startAt: (payload && payload.startAt) || null,
+          });
+          // the folder route would otherwise keep re-selecting the folder page
+          goTo(sceneId ? "scene/" + sceneId : "");
+        },
       });
     } else if (tab === "tags") {
       body = h(TagsPage, { onPick: openTag, onBack: () => setTab("home") });
