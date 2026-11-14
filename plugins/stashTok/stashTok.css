@@ -1482,3 +1482,18 @@
 .stk-sort-drop {
   padding: 8px 12px 4px;
 }
+
+/* folders page: filter box + sort button on one row */
+.stk-folder-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.stk-folder-tools input { flex: 1 1 auto; margin-bottom: 0 !important; }
+.stk-folder-tools .stk-sort-btn {
+  flex: 0 0 auto;
+  height: 38px;
+  padding: 0 12px;
+}
+.stk-sort-btn.stk-on { color: #fff; border-color: rgba(255, 255, 255, 0.45); }

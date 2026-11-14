@@ -288,6 +288,26 @@
     return hh ? `${hh}:${pad(mm)}:${pad(ss)}` : `${mm}:${pad(ss)}`;
   }
 
+  /** 7550 -> 7.5K, 45265 -> 45K, 1_240_000 -> 1.2M (truncated, never rounds up past the real count) */
+  function fmtCount(value) {
+    const n = Math.floor(Number(value) || 0);
+    if (n < 1000) return String(n);
+    const units = [
+      [1000000000, "B"],
+      [1000000, "M"],
+      [1000, "K"],
+    ];
+    for (let i = 0; i < units.length; i += 1) {
+      const [div, suffix] = units[i];
+      if (n >= div) {
+        const scaled = n / div;
+        const text = scaled >= 10 ? String(Math.floor(scaled)) : (Math.floor(scaled * 10) / 10).toFixed(1);
+        return text.replace(/\.0$/, "") + suffix;
+      }
+    }
+    return String(n);
+  }
+
   function fmtBytes(bytes) {
     const n = Number(bytes) || 0;
     if (!n) return "—";
@@ -2452,7 +2472,12 @@
         "div",
         { className: "stk-stats" },
         stats.map(([label, value]) =>
-          h("div", { key: label, className: "stk-stat" }, h("b", null, value), h("span", null, label))
+          h(
+            "div",
+            { key: label, className: "stk-stat" },
+            h("b", null, typeof value === "number" ? fmtCount(value) : value),
+            h("span", null, label)
+          )
         )
       ),
       performer.tags && performer.tags.length > 0 &&
@@ -2763,7 +2788,7 @@
                   "div",
                   { className: "stk-account-body" },
                   h("div", { className: "stk-account-name" }, performer.name),
-                  h("div", { className: "stk-account-meta" }, `${performer.scene_count} scenes`, performer.favorite ? " · ♥" : "")
+                  h("div", { className: "stk-account-meta" }, `${fmtCount(performer.scene_count)} scenes`, performer.favorite ? " · ♥" : "")
                 )
               )
             )
@@ -2774,9 +2799,23 @@
 
   /* ---- folders ----------------------------------------------------- */
 
+  const FOLDER_LIST_SORTS = [
+    ["az", "A–Z"],
+    ["za", "Z–A"],
+    ["modified", "Last modified"],
+  ];
+
   function FoldersPage({ onPick, onBack }) {
     const [rows, setRows] = useState(null);
     const [query, setQuery] = useState("");
+    const [listSort, setListSort] = useState(() => {
+      try {
+        return window.localStorage.getItem("stashTok.folderListSort") || "az";
+      } catch (e) {
+        return "az";
+      }
+    });
+    const [sortOpen, setSortOpen] = useState(false);
 
     useEffect(() => {
       let alive = true;
@@ -2786,7 +2825,9 @@
         for (let page = 1; page <= 20; page += 1) {
           const data = await gql(
             `query StashTokFolders($page: Int!) {
-              findFolders(filter: { per_page: 1000, page: $page }) { folders { path } }
+              findFolders(filter: { per_page: 1000, page: $page, sort: "updated_at", direction: DESC }) {
+                folders { path updated_at }
+              }
             }`,
             { page }
           );
@@ -2803,24 +2844,36 @@
           if (!rest || rest.indexOf("/") !== -1) return;
           if (seen[folder.path]) return;
           seen[folder.path] = true;
-          out.push({ name: rest, folder: folder.path });
+          out.push({ name: rest, folder: folder.path, modTime: Date.parse(folder.updated_at) || 0 });
         });
-        out.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
         if (alive) setRows(out);
-      })().catch(() => alive && setRows([]));
+      })().catch((err) => {
+        try { window.__stkFolderErr = String((err && (err.message || err)) || ""); } catch (e) { /* ignore */ }
+        if (alive) setRows([]);
+      });
       return () => {
         alive = false;
       };
     }, []);
 
     const term = query.trim().toLowerCase();
-    const list = (rows || []).filter((row) => !term || row.name.toLowerCase().indexOf(term) !== -1);
+    const list = (rows || [])
+      .filter((row) => !term || row.name.toLowerCase().indexOf(term) !== -1)
+      .sort((a, b) => {
+        if (listSort === "modified") return b.modTime - a.modTime || a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+        const byName = a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+        return listSort === "za" ? -byName : byName;
+      });
+    const listSortLabel = (FOLDER_LIST_SORTS.find((entry) => entry[0] === listSort) || FOLDER_LIST_SORTS[0])[1];
 
     return h(
       "div",
       { className: "stk-page" },
       h("h2", null, onBack && h("button", { onClick: onBack }, h(Icon, { name: "chevron", size: 18 })), "Folders"),
-      h("input", {
+      h(
+        "div",
+        { className: "stk-folder-tools" },
+        h("input", {
         type: "search",
         placeholder: "Filter folders",
         value: query,
@@ -2834,13 +2887,47 @@
           border: "1px solid #2a2a2a",
           color: "#fff",
         },
-      }),
+        }),
+        h(
+          "button",
+          {
+            className: "stk-sort-btn stk-sort-pill" + (sortOpen ? " stk-on" : ""),
+            title: "Sort folders",
+            onClick: () => setSortOpen(!sortOpen),
+          },
+          h(Icon, { name: "sort", size: 14 })
+        )
+      ),
+      sortOpen &&
+        h(
+          "div",
+          { className: "stk-sort-menu stk-sort-drop" },
+          FOLDER_LIST_SORTS.map(([value, label]) =>
+            h(
+              "button",
+              {
+                key: value,
+                className: value === listSort ? "stk-on" : "",
+                onClick: () => {
+                  setListSort(value);
+                  try {
+                    window.localStorage.setItem("stashTok.folderListSort", value);
+                  } catch (e) {
+                    /* ignore */
+                  }
+                  setSortOpen(false);
+                },
+              },
+              label
+            )
+          )
+        ),
       !rows
         ? h("div", { className: "stk-state" }, h("div", { className: "stk-spinner" }))
         : h(
             "div",
             { className: "stk-folder-list" },
-            h("div", { className: "stk-sub", style: { padding: "0 0 8px" } }, list.length + " folders"),
+            h("div", { className: "stk-sub", style: { padding: "0 0 8px" } }, list.length + " folders · " + listSortLabel),
             list.map((row) =>
               h(
                 "button",
@@ -2971,7 +3058,7 @@
                     "div",
                     { className: "stk-search-body" },
                     h("div", { className: "stk-account-name" }, performer.name),
-                    h("div", { className: "stk-account-meta" }, performer.scene_count + " scenes")
+                    h("div", { className: "stk-account-meta" }, fmtCount(performer.scene_count) + " scenes")
                   )
                 )
               )
