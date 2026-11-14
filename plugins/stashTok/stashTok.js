@@ -54,6 +54,10 @@
     sort: "M7 4v16M4 17l3 3 3-3M17 20V4M14 7l3-3 3 3",
     search: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20.5 20.5 16 16",
     folder: "M3.5 7.5A1.5 1.5 0 0 1 5 6h3.6l1.9 2.4H19a1.5 1.5 0 0 1 1.5 1.5V18A1.5 1.5 0 0 1 19 19.5H5A1.5 1.5 0 0 1 3.5 18V7.5z",
+    video: "M3.5 6.5h11.5v11H3.5zM15 10.2l5.5-2.7v9l-5.5-2.7",
+    image: "M3.5 5.5h17v13h-17zM8.2 11.2a1.6 1.6 0 1 0 0-3.2 1.6 1.6 0 0 0 0 3.2zM4.2 17.2l5-5 3.6 3.6 2.6-2.6 4.4 4.4",
+    video: "M3.5 6.5h11.5v11H3.5zM15 10.2l5.5-2.7v9l-5.5-2.7",
+    image: "M3.5 5.5h17v13h-17zM8.2 11.2a1.6 1.6 0 1 0 0-3.2 1.6 1.6 0 0 0 0 3.2zM4.2 17.2l5-5 3.6 3.6 2.6-2.6 4.4 4.4",
     sparkle: "M12 3.5 13.8 9l5.7 1.8L13.8 13 12 18.5 10.2 13 4.5 10.8 10.2 9 12 3.5z",
     rotate: "M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4",
   };
@@ -1189,18 +1193,21 @@
           setDragY(0);
           if (wrap) wrap.style.transition = "";
         } else {
-          // slide the strip all the way out, then swap underneath it
-          wrap.style.transition = "transform 180ms ease-out";
+          // slide the strip out, then swap underneath it with no return animation
+          const duration = 190;
+          wrap.style.transition = `transform ${duration}ms cubic-bezier(.22,.61,.36,1)`;
           setDragY(direction > 0 ? -height : height);
           window.setTimeout(() => {
+            wrap.style.transition = "none";
+            wrap.style.transform = "translateY(0px) rotate(0deg)";
             if (direction > 0) goNext();
             else goPrev();
-            wrap.style.transition = "none";
             setDragY(0);
-            requestAnimationFrame(() => {
+            // give React a frame to commit the swap before transitions come back
+            window.setTimeout(() => {
               wrap.style.transition = "";
-            });
-          }, 180);
+            }, 80);
+          }, duration);
         }
       }
       if (g.mode === "seek") setScrubbing(false);
@@ -1952,6 +1959,7 @@
     const [images, setImages] = useState([]);
     const [markerCount, setMarkerCount] = useState(null);
     const [tab, setTab] = useState("scenes");
+    const [media, setMedia] = useState("videos");
     const [sort, setSort] = useState("updated_at");
     const [sortOpen, setSortOpen] = useState(false);
     const [density, setDensity] = useState(3);
@@ -2019,7 +2027,7 @@
     }, [performerId, sort]);
 
     useEffect(() => {
-      if (tab !== "images") return undefined;
+      if (media !== "images") return undefined;
       let alive = true;
       gql(
         `query StashTokPerformerImages($id: ID!, $sort: String) {
@@ -2036,7 +2044,7 @@
       return () => {
         alive = false;
       };
-    }, [performerId, tab, sort]);
+    }, [performerId, media, sort]);
 
     async function toggleFollow() {
       if (!performer) return;
@@ -2125,20 +2133,58 @@
       h(
         "div",
         { className: "stk-tabs stk-tabs-wide" },
-        h("button", { className: tab === "scenes" ? "stk-active" : "", onClick: () => setTab("scenes") }, `Scenes ${performer.scene_count}`),
-        h("button", { className: tab === "markers" ? "stk-active" : "", onClick: () => setTab("markers") }, markerCount ? `Markers ${markerCount}` : "Markers"),
-        h("button", { className: tab === "images" ? "stk-active" : "", onClick: () => setTab("images") }, `Images ${performer.image_count || 0}`),
         h(
           "button",
-          { className: "stk-sort-btn stk-sort-pill", onClick: () => setSortOpen(!sortOpen) },
-          h(Icon, { name: "sort", size: 13 }),
-          sortLabel,
-          " ▾"
+          { className: tab === "scenes" && media === "videos" ? "stk-active" : "", onClick: () => { setTab("scenes"); setMedia("videos"); } },
+          `Scenes ${performer.scene_count}`
         ),
         h(
           "button",
-          { className: "stk-sort-btn stk-sort-pill", onClick: () => setDensity(density === 3 ? 5 : 3) },
-          density === 3 ? "▦" : "▥"
+          { className: tab === "markers" && media === "videos" ? "stk-active" : "", onClick: () => { setTab("markers"); setMedia("videos"); } },
+          markerCount ? `Markers ${markerCount}` : "Markers"
+        )
+      ),
+
+      h(
+        "div",
+        { className: "stk-media-row" },
+        h(
+          "div",
+          { className: "stk-media-toggle", role: "tablist" },
+          h(
+            "button",
+            {
+              className: media === "videos" ? "stk-on" : "",
+              title: "Videos",
+              onClick: () => setMedia("videos"),
+            },
+            h(Icon, { name: "video", size: 16 })
+          ),
+          h(
+            "button",
+            {
+              className: media === "images" ? "stk-on" : "",
+              title: "Images",
+              onClick: () => setMedia("images"),
+            },
+            h(Icon, { name: "image", size: 16 })
+          )
+        ),
+        h(
+          "div",
+          { className: "stk-media-actions" },
+          h(
+            "button",
+            { className: "stk-sort-btn stk-sort-pill", onClick: () => setSortOpen(!sortOpen) },
+            h(Icon, { name: "sort", size: 13 }),
+            sortLabel,
+            " ▾"
+          ),
+          h(
+            "button",
+            { className: "stk-sort-btn stk-sort-pill", onClick: () => setDensity(density === 3 ? 5 : 3) },
+            density === 3 ? "▦" : "▥"
+          )
         )
       ),
 
@@ -2167,7 +2213,25 @@
           )
         ),
 
-      tab === "scenes"
+      media === "images"
+        ? h(
+            "div",
+            { className: gridClass },
+            images.map((image) =>
+              h(
+                "a",
+                {
+                  key: image.id,
+                  className: "stk-tile",
+                  href: `/images/${image.id}`,
+                  target: "_blank",
+                  rel: "noopener noreferrer",
+                },
+                h("div", { className: "stk-tile-photo", style: { backgroundImage: `url("${rel(image.paths && image.paths.thumbnail)}")` } })
+              )
+            )
+          )
+        : tab === "scenes"
         ? h(
             "div",
             { className: gridClass },
@@ -3303,6 +3367,16 @@
       }
     }
 
+    function goHome() {
+      if (tab === "home" && !builder) {
+        // second press on Home refreshes the feed
+        setRefreshKey((n) => n + 1);
+        return;
+      }
+      setTab("home");
+      goTo("");
+    }
+
     function openPerformer(performer, payload, push) {
       if (!performer) {
         setPerformersOpen(true);
@@ -3496,8 +3570,21 @@
           h(
             "nav",
             { className: "stk-nav" },
-            h(NavButton, { active: tab === "home", icon: "home", label: "Home", onClick: () => onTab("home") }),
-            h(NavButton, { active: false, icon: "user", label: "Performers", onClick: () => { setTab("performers"); goTo("performers"); } }),
+            h(NavButton, {
+              active: tab === "home" && activeFeed.type !== "performer",
+              icon: "home",
+              label: "Home",
+              onClick: goHome,
+            }),
+            h(NavButton, {
+              active: activeFeed.type === "performer",
+              icon: "user",
+              label: "Performers",
+              onClick: () => {
+                setTab("performers");
+                goTo("performers");
+              },
+            }),
             h(NavButton, {
               active: activeFeed.type === "favorites",
               icon: "heart",
@@ -3518,7 +3605,7 @@
           ? h(
               "nav",
               { className: "stk-nav" },
-              h(NavButton, { active: false, icon: "home", label: "Home", onClick: () => setTab("home") }),
+              h(NavButton, { active: false, icon: "home", label: "Home", onClick: goHome }),
               h(NavButton, { active: tab === "performers", icon: "user", label: "Performers", onClick: () => setTab("performers") }),
               h(NavButton, {
                 active: false,
@@ -3533,7 +3620,7 @@
                 },
               }),
               h(NavButton, { active: tab === "tags", icon: "tag", label: "Tags", onClick: () => { setTab("tags"); goTo("tags"); } }),
-              h(NavButton, { active: tab === "folders", icon: "folder", label: "Folders", onClick: () => { setTab("folders"); goTo("folders"); } })
+              h(NavButton, { active: tab === "folders" || tab === "folder", icon: "folder", label: "Folders", onClick: () => { setTab("folders"); goTo("folders"); } })
             )
           : null,
 

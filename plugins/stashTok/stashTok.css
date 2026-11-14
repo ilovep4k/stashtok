@@ -1141,3 +1141,33 @@
 }
 .stk-search-thumb-round { border-radius: 50%; }
 .stk-search-body { min-width: 0; }
+
+/* video / image switch under the performer tabs */
+.stk-media-row {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px 10px;
+}
+.stk-media-toggle {
+  grid-column: 2;
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+}
+.stk-media-toggle button {
+  width: 46px;
+  height: 30px;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: rgba(255, 255, 255, 0.6);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.stk-media-toggle button.stk-on { background: #fff; color: #000; }
+.stk-media-actions { grid-column: 3; display: flex; gap: 6px; justify-self: end; }
