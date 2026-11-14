@@ -666,6 +666,7 @@
     favoritesSort: "updated_at",
     favoritesOpen: "gallery",
     feedWindow: "all",
+    folderView: "list",
   };
 
   function loadPrefs() {
@@ -3340,9 +3341,13 @@
     ["random", "Random"],
   ];
 
-  function FolderProfile({ name, folder, onBack, onPlay }) {
+  function FolderProfile({ name, folder, onBack, onPlay, prefs }) {
     const [tab, setTab] = useState("scenes");
     const folderSortKey = "stashTok.folderSort." + folder;
+    const [fvSort, setFvSort] = useState(() => {
+      const saved = readSortPref(folderSortKey, "date");
+      return ["name", "date", "size", "type"].indexOf(saved) >= 0 ? saved : "date";
+    });
     const [isFav, setIsFav] = useState(() => loadFolderFavs().indexOf(folder) !== -1);
     const [media, setMedia] = useState("videos");
     const [viewer, setViewer] = useState(null);
@@ -3368,9 +3373,9 @@
       gql(
         `query StashTokFolderScenes($path: String!) {
           findScenes(scene_filter: { path: { value: $path, modifier: INCLUDES } },
-                     filter: { per_page: 60, ${sortArg} }) {
+                     filter: { per_page: 200, ${sortArg} }) {
             count
-            scenes { id title paths { screenshot } files { duration } }
+            scenes { id title created_at date paths { screenshot } files { path size duration } }
           }
         }`,
         { path: folder }
@@ -3452,6 +3457,139 @@
         alive = false;
       };
     }, [folder, tab, media]);
+
+    if (!prefs || prefs.folderView !== "gallery") {
+      const base = String(folder || "").replace(/\/+$/, "");
+      const relOf = (scene) => {
+        const path = String(((scene.files && scene.files[0]) || {}).path || "");
+        return path.indexOf(base + "/") === 0 ? path.slice(base.length + 1) : path.split("/").pop();
+      };
+      const dirs = new Map();
+      const files = [];
+      // the profile keeps rows as {scene} wrappers; accept either shape
+      const plain = scenes.map((row) => (row && row.scene ? row.scene : row)).filter((row) => row && row.id);
+      plain.forEach((scene) => {
+        const file = (scene.files && scene.files[0]) || {};
+        const rel = relOf(scene);
+        const parts = rel.split("/");
+        if (parts.length > 1) {
+          const key = parts[0];
+          const row = dirs.get(key) || { key, count: 0, size: 0, at: "" };
+          row.count += 1;
+          row.size += Number(file.size) || 0;
+          const stamp = scene.created_at || scene.date || "";
+          if (stamp > row.at) row.at = stamp;
+          dirs.set(key, row);
+        } else {
+          files.push({
+            scene,
+            name: rel,
+            size: Number(file.size) || 0,
+            at: scene.created_at || scene.date || "",
+            type: (rel.split(".").pop() || "").toLowerCase(),
+          });
+        }
+      });
+
+      const cmp = (a, b) => String(a).localeCompare(String(b));
+      const sortRows = (list, keyOf) => {
+        const copy = list.slice();
+        if (fvSort === "name") copy.sort((x, y) => cmp(keyOf(x).name, keyOf(y).name));
+        else if (fvSort === "type") copy.sort((x, y) => cmp(keyOf(x).type || "", keyOf(y).type || "") || cmp(keyOf(x).name, keyOf(y).name));
+        else if (fvSort === "size") copy.sort((x, y) => (keyOf(y).size || 0) - (keyOf(x).size || 0));
+        else copy.sort((x, y) => cmp(keyOf(y).at || "", keyOf(x).at || ""));
+        return copy;
+      };
+
+      const folderRows = sortRows(Array.from(dirs.values()), (row) => ({ name: row.key, size: row.size, at: row.at, type: "" }));
+      const fileRows = sortRows(files, (row) => row);
+      const fmtSize = (bytes) => {
+        const n = Number(bytes) || 0;
+        if (!n) return "";
+        if (n >= 1024 * 1024 * 1024) return (n / (1024 * 1024 * 1024)).toFixed(1) + " GB";
+        return (n / (1024 * 1024)).toFixed(1) + " MB";
+      };
+      const stamp = (value) => String(value || "").slice(0, 10);
+
+      return h(
+        "div",
+        { className: "stk-page stk-fv", style: { padding: 0 } },
+        h(
+          "div",
+          { className: "stk-fv-head" },
+          h(
+            "button",
+            { className: "stk-fv-back", onClick: onBack, title: "Back" },
+            h(Icon, { name: "chevron", size: 18, className: "stk-back-icon" })
+          ),
+          h("div", { className: "stk-fv-title" }, h("strong", null, name), h("small", null, base))
+        ),
+        h(
+          "div",
+          { className: "stk-fv-sorts" },
+          [["name", "Name"], ["date", "Date"], ["size", "Size"], ["type", "Type"]].map(([key, label]) =>
+            h(
+              "button",
+              {
+                key,
+                className: "stk-fv-sort" + (fvSort === key ? " stk-active" : ""),
+                onClick: () => {
+                  setFvSort(key);
+                  writeSortPref(folderSortKey, key);
+                },
+              },
+              label,
+              fvSort === key ? "↓" : ""
+            )
+          )
+        ),
+        loading
+          ? h("div", { className: "stk-state" }, h("div", { className: "stk-spinner" }))
+          : h(
+              "div",
+              { className: "stk-fv-list" },
+              folderRows.map((row) =>
+                h(
+                  "button",
+                  {
+                    key: "d-" + row.key,
+                    className: "stk-fv-row",
+                    onClick: () => {
+                      const next = base + "/" + row.key;
+                      goTo("folder/" + encodeURIComponent(next));
+                    },
+                  },
+                  h("span", { className: "stk-fv-ico stk-fv-ico-dir" }, h(Icon, { name: "folder", size: 19 })),
+                  h(
+                    "span",
+                    { className: "stk-fv-copy" },
+                    h("span", { className: "stk-fv-name" }, row.key),
+                    h("span", { className: "stk-fv-meta" }, [stamp(row.at), row.count + " item" + (row.count === 1 ? "" : "s"), fmtSize(row.size)].filter(Boolean).join("  ·  "))
+                  ),
+                  h(Icon, { name: "chevron", size: 16, className: "stk-fv-caret" })
+                )
+              ),
+              fileRows.map((row) =>
+                h(
+                  "button",
+                  {
+                    key: "f-" + row.scene.id,
+                    className: "stk-fv-row",
+                    onClick: () => onPlay({ sceneId: row.scene.id, tab: "scenes", sort }),
+                  },
+                  h("span", { className: "stk-fv-ico stk-fv-ico-vid" }, h(Icon, { name: "video", size: 18 })),
+                  h(
+                    "span",
+                    { className: "stk-fv-copy" },
+                    h("span", { className: "stk-fv-name" }, row.name),
+                    h("span", { className: "stk-fv-meta" }, [stamp(row.at), fmtSize(row.size)].filter(Boolean).join("  ·  "))
+                  )
+                )
+              ),
+              !folderRows.length && !fileRows.length && h("div", { className: "stk-state" }, h("p", null, "Nothing in this folder."))
+            )
+      );
+    }
 
     return h(
       "div",
@@ -4526,6 +4664,7 @@
       body = h(FolderProfile, {
         name: folderView.name,
         folder: folderView.folder,
+        prefs,
         onBack: () => {
           setFolderView(null);
           setTab("home");
