@@ -3399,7 +3399,7 @@
                 {
                   key: marker.id,
                   className: "stk-tile",
-                  onClick: () => onPlay({ sceneId: marker.scene && marker.scene.id, startAt: marker.seconds, tab: "markers" }),
+                  onClick: () => onPlay({ sceneId: marker.scene && marker.scene.id, startAt: marker.seconds, tab: "markers", sort }),
                 },
                 h("div", {
                   className: "stk-tile-photo",
@@ -3415,7 +3415,7 @@
             scenes.map((scene) =>
               h(
                 "button",
-                { key: scene.id, className: "stk-tile", onClick: () => onPlay({ sceneId: scene.id }) },
+                { key: scene.id, className: "stk-tile", onClick: () => onPlay({ sceneId: scene.id, sort }) },
                 h("div", { className: "stk-tile-photo", style: { backgroundImage: `url("${rel(scene.paths && scene.paths.screenshot)}")` } }),
                 h("span", { className: "stk-tile-dur" }, fmtTime((scene.files && scene.files[0] && scene.files[0].duration) || 0))
               )
@@ -3947,6 +3947,9 @@
 
     const liveRef = useRef({});
     liveRef.current = { tab, activeFeed };
+    /* a feed we just opened on a scene, so the scene route does not replace it
+       with a one-clip feed (the URL write lands before React re-renders) */
+    const selfSceneRef = useRef(null);
 
     const applyRoute = useCallback((rest) => {
       const live = liveRef.current || {};
@@ -4012,6 +4015,10 @@
       if (rest.indexOf("scene/") === 0) {
         const id = rest.slice("scene/".length).replace(/\D/g, "");
         if (live.tab === "home" && feedNow && feedNow.type === "scene" && String(feedNow.sceneId) === String(id)) return;
+        if (String(selfSceneRef.current || "") === String(id)) {
+          selfSceneRef.current = null;
+          return;
+        }
         resolveSceneId(id);
         return;
       }
@@ -4071,6 +4078,10 @@
     }
 
     async function resolveSceneId(id) {
+      // if a real feed is already sitting on this clip (opened from a folder or
+      // profile), keep it: rebuilding a single-scene feed would kill swiping
+      const cur = (liveRef.current || {}).activeFeed;
+      if (cur && cur.type !== "scene" && String(cur.startSceneId || "") === String(id)) return;
       try {
         const data = await gql(
           `query StashTokScenePerformer($id: ID!) { findScene(id: $id) { id performers { id name image_path scene_count } } }`,
@@ -4112,8 +4123,8 @@
         name: performer.name,
         type: "performer",
         performerId: performer.id,
-        sort: "date",
-        direction: "DESC",
+        sort: (payload && payload.sort) || "date",
+        direction: (payload && payload.sort) === "title" ? "ASC" : "DESC",
         startSceneId: (payload && payload.sceneId) || null,
         startAt: (payload && payload.startAt) || null,
         origin: { kind: "performer", id: performer.id },
@@ -4195,12 +4206,13 @@
             type: payload && payload.tab === "markers" ? "markers" : "foryou",
             name: folderView.name,
             pathIncludes: folderView.folder,
-            sort: "date",
-            direction: "DESC",
+            sort: (payload && payload.sort) || "date",
+            direction: (payload && payload.sort) === "title" ? "ASC" : "DESC",
             startSceneId: sceneId,
             startAt: (payload && payload.startAt) || null,
           });
           // the folder route would otherwise keep re-selecting the folder page
+          selfSceneRef.current = sceneId ? String(sceneId) : null;
           goTo(sceneId ? "scene/" + sceneId : "");
         },
       });
