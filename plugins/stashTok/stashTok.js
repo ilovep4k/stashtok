@@ -341,6 +341,7 @@
     id
     title
     date
+    created_at
     details
     rating100
     o_counter
@@ -419,6 +420,8 @@
     );
     const scene = data.findScene;
     if (!scene) return { count: 0, items: [] };
+    // a remembered clip whose file has gone missing must not strand the feed
+    if (!scene.files || !scene.files.length) return { count: 0, items: [] };
     return { count: 1, items: [{ key: "s" + scene.id, scene, startAt: Number(spec.startAt) || 0, endAt: 0 }] };
   }
 
@@ -580,6 +583,115 @@
     }
   }
 
+  /* Leaving a feed (tap a performer, open search) must not cost the user their place:
+     remember the clip and the playhead for an hour, and reopen there. */
+  const RESUME_KEY = "stashTok.resume.v1";
+  const RESUME_TTL_MS = 60 * 60 * 1000;
+
+  function readResumeMap() {
+    try {
+      const parsed = JSON.parse(window.localStorage.getItem(RESUME_KEY) || "{}");
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch (e) {
+      return {};
+    }
+  }
+
+  function writeResume(key, sceneId, time) {
+    try {
+      const map = readResumeMap();
+      map[key] = { sceneId, time: Number(time) || 0, at: Date.now() };
+      window.localStorage.setItem(RESUME_KEY, JSON.stringify(map));
+    } catch (e) {
+      /* ignore quota errors */
+    }
+  }
+
+  function readResume(key) {
+    const row = readResumeMap()[key];
+    if (!row || !row.sceneId) return null;
+    if (Date.now() - (row.at || 0) > RESUME_TTL_MS) return null;
+    return row;
+  }
+
+  /** A chosen sort sticks for the page it was chosen on, then lapses after a day. */
+  const SORT_TTL_MS = 24 * 60 * 60 * 1000;
+
+  function readSortPref(key, fallback) {
+    try {
+      const raw = JSON.parse(window.localStorage.getItem(key) || "null");
+      if (!raw || typeof raw.at !== "number") return fallback;
+      if (Date.now() - raw.at > SORT_TTL_MS) {
+        window.localStorage.removeItem(key);
+        return fallback;
+      }
+      return raw.value === undefined || raw.value === null ? fallback : raw.value;
+    } catch (e) {
+      return fallback;
+    }
+  }
+
+  function writeSortPref(key, value) {
+    try {
+      window.localStorage.setItem(key, JSON.stringify({ value, at: Date.now() }));
+    } catch (e) {
+      /* ignore quota errors */
+    }
+  }
+
+  /** /O/username/videos/sub — the path as the filesystem sees it, minus the library root */
+  function prettyPath(full) {
+    const raw = String(full || "");
+    if (!raw) return "";
+    const dir = raw.slice(0, raw.lastIndexOf("/"));
+    return dir.replace(/^\/data(?=\/)/, "") || dir;
+  }
+
+  function shortDate(value) {
+    const raw = String(value || "").slice(0, 10);
+    return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : "";
+  }
+
+  /** one popover for every sort control: same shape, different options */
+  function sortMenuTree({ options, value, onPick, onClose, favorite }) {
+    return h(
+      React.Fragment,
+      null,
+      h("div", { className: "stk-pop-backdrop", onClick: onClose }),
+      h(
+        "div",
+        { className: "stk-pop", role: "menu" },
+        favorite &&
+          h(
+            "button",
+            {
+              className: "stk-pop-toggle" + (favorite.on ? " stk-on" : ""),
+              role: "menuitemcheckbox",
+              "aria-checked": !!favorite.on,
+              onClick: favorite.onToggle,
+            },
+            h("span", null, favorite.label || "Favorites first"),
+            h("span", { className: "stk-pop-check" }, favorite.on ? "✓" : "")
+          ),
+        favorite && h("div", { className: "stk-pop-sep" }),
+        options.map(([key, label]) =>
+          h(
+            "button",
+            {
+              key,
+              role: "menuitemradio",
+              "aria-checked": key === value,
+              className: "stk-pop-item" + (key === value ? " stk-on" : ""),
+              onClick: () => onPick(key),
+            },
+            h("span", null, label),
+            key === value && h("span", { className: "stk-pop-check" }, "✓")
+          )
+        )
+      )
+    );
+  }
+
   function loadFolderFavs() {
     try {
       const parsed = JSON.parse(window.localStorage.getItem(FOLDER_FAV_KEY) || "[]");
@@ -716,6 +828,40 @@
     const item = items[index] || null;
     const [, setRootsReady] = useState(0);
 
+    const feedKey = String(spec.key || spec.id || (spec.type + ":" + (spec.name || spec.sort || "")));
+    const resumeRef = useRef(undefined);
+    if (resumeRef.current === undefined) {
+      const saved = spec.startSceneId || spec.startAt ? null : readResume(feedKey);
+      resumeRef.current = saved ? { sceneId: saved.sceneId, time: saved.time } : null;
+    }
+    const itemsRef = useRef(items);
+    itemsRef.current = items;
+    const indexRef = useRef(index);
+    indexRef.current = index;
+    const timeRef = useRef(time);
+    timeRef.current = time;
+    const hydratedRef = useRef(false);
+
+    /* remember the seat as we move, not only on the way out */
+    useEffect(() => {
+      if (!hydratedRef.current) return;
+      const cur = items[index];
+      if (!cur || !cur.scene) return;
+      const kept = readResume(feedKey);
+      const same = kept && String(kept.sceneId) === String(cur.scene.id);
+      writeResume(feedKey, cur.scene.id, same ? kept.time : 0);
+    }, [feedKey, index, items]);
+
+    /* walking away must not reset the feed: remember where we were */
+    useEffect(
+      () => () => {
+        const cur = itemsRef.current[indexRef.current];
+        // the element may already be detached by now; the state mirror is reliable
+        if (cur && cur.scene) writeResume(feedKey, cur.scene.id, timeRef.current);
+      },
+      [feedKey, activeVideo]
+    );
+
     useEffect(() => {
       loadLibraryRoots().then(() => setRootsReady((n) => n + 1));
     }, []);
@@ -735,23 +881,27 @@
             pageRef.current = 2;
             exhaustedRef.current = result.items.length === 0;
             let list = result.items.slice();
-            if (spec.startSceneId) {
+            const resume = resumeRef.current;
+            const startId = spec.startSceneId || (resume && resume.sceneId);
+            const startTime = spec.startAt || (resume && resume.time) || null;
+            if (startId) {
               // open on the scene the user tapped, wherever it sits in the list
-              const at = list.findIndex((entry) => String(entry.scene.id) === String(spec.startSceneId));
+              const at = list.findIndex((entry) => String(entry.scene.id) === String(startId));
               if (at > 0) list.unshift(list.splice(at, 1)[0]);
               else if (at < 0) {
                 // it may not be on page 1 at all: fetch it and lead with it
                 try {
-                  const single = await fetchSceneById({ sceneId: spec.startSceneId, startAt: spec.startAt });
+                  const single = await fetchSceneById({ sceneId: startId, startAt: startTime });
                   if (single.items.length) list.unshift(single.items[0]);
                 } catch (err) {
                   /* fall through to the normal order */
                 }
               }
             }
-            if (reset && spec.startAt && list.length) list[0] = Object.assign({}, list[0], { startAt: spec.startAt });
+            if (reset && startTime && list.length) list[0] = Object.assign({}, list[0], { startAt: startTime });
             setItems(list);
             setIndex(0);
+            hydratedRef.current = true;
           } else {
             pageRef.current = page + 1;
             exhaustedRef.current = result.items.length === 0;
@@ -850,8 +1000,11 @@
       if (!video || !item) return;
       const start = Number(item.startAt) || 0;
       const onLoaded = () => {
-        setDuration(video.duration || 0);
-        seekThenPlay(video, start, playGuarded);
+        const total = video.duration || 0;
+        setDuration(total);
+        // a remembered playhead can outlive the file it came from: never seek past the end
+        const seekTo = total > 0 ? Math.min(start, Math.max(0, total - 3)) : start;
+        seekThenPlay(video, seekTo, playGuarded);
       };
       video.addEventListener("loadedmetadata", onLoaded);
       video.addEventListener("canplay", onLoaded);
@@ -1622,18 +1775,14 @@
             const scene = item && item.scene;
             if (!scene) return null;
             const file = (scene.files && scene.files[0]) || {};
-            const line =
-              scene.title ||
-              scene.details ||
-              [
-                file.width && file.height ? Math.min(file.width, file.height) + "p" : "",
-                file.duration ? fmtTime(file.duration) : "",
-              ]
-                .filter(Boolean)
-                .join(" · ") ||
-              scene.date ||
-              "";
-            return line ? h("div", { className: "stk-caption-line" }, line) : null;
+            const bits = [
+              prettyPath(file.path),
+              shortDate(scene.created_at || scene.date),
+              file.duration ? fmtTime(file.duration) : "",
+              file.width && file.height ? Math.min(file.width, file.height) + "p" : "",
+            ].filter(Boolean);
+            if (scene.title) bits.unshift(scene.title);
+            return bits.length ? h("div", { className: "stk-caption-line" }, bits.join(" • ")) : null;
           })(),
           performers.length > 1 &&
             h("div", { className: "stk-info-with" }, "with " + performers.slice(1, 4).map((performer) => performer.name).join(", ")),
@@ -2280,20 +2429,10 @@
     const [viewer, setViewer] = useState(null);
     const [stuck, setStuck] = useState(false);
     const pageRef = useRef(null);
-    const [sort, setSort] = useState(() => {
-      try {
-        return window.localStorage.getItem("stashTok.perfSort") || "filesize";
-      } catch (e) {
-        return "filesize";
-      }
-    });
-    const [favFirst, setFavFirst] = useState(() => {
-      try {
-        return window.localStorage.getItem("stashTok.perfFavFirst") === "1";
-      } catch (e) {
-        return false;
-      }
-    });
+    const sortKey = "stashTok.perfSort." + performerId;
+    const favKey = "stashTok.perfFavFirst." + performerId;
+    const [sort, setSort] = useState(() => readSortPref(sortKey, "filesize"));
+    const [favFirst, setFavFirst] = useState(() => readSortPref(favKey, false));
     const [sortOpen, setSortOpen] = useState(false);
     const [density, setDensity] = useState(3);
     const [error, setError] = useState("");
@@ -2556,49 +2695,24 @@
           )
         ),
         sortOpen &&
-          h(
-            React.Fragment,
-            null,
-            h("div", { className: "stk-pop-backdrop", onClick: () => setSortOpen(false) }),
-            h(
-              "div",
-              { className: "stk-pop", role: "menu" },
-              h(
-                "button",
-                {
-                  className: "stk-pop-toggle" + (favFirst ? " stk-on" : ""),
-                  role: "menuitemcheckbox",
-                  "aria-checked": !!favFirst,
-                  onClick: () => {
-                    const next = !favFirst;
-                    setFavFirst(next);
-                    try { window.localStorage.setItem("stashTok.perfFavFirst", next ? "1" : "0"); } catch (e) { /* ignore */ }
-                  },
-                },
-                h("span", null, "Favorites first"),
-                h("span", { className: "stk-pop-check" }, favFirst ? "✓" : "")
-              ),
-              h("div", { className: "stk-pop-sep" }),
-              SCENE_SORTS.map(([key, label]) =>
-                h(
-                  "button",
-                  {
-                    key,
-                    role: "menuitemradio",
-                    "aria-checked": key === sort,
-                    className: "stk-pop-item" + (key === sort ? " stk-on" : ""),
-                    onClick: () => {
-                      setSort(key);
-                      try { window.localStorage.setItem("stashTok.perfSort", key); } catch (e) { /* ignore */ }
-                      setSortOpen(false);
-                    },
-                  },
-                  h("span", null, label),
-                  key === sort && h("span", { className: "stk-pop-check" }, "✓")
-                )
-              )
-            )
-          )
+          sortMenuTree({
+            options: SCENE_SORTS,
+            value: sort,
+            onPick: (key) => {
+              setSort(key);
+              writeSortPref(sortKey, key);
+              setSortOpen(false);
+            },
+            onClose: () => setSortOpen(false),
+            favorite: {
+              on: favFirst,
+              onToggle: () => {
+                const next = !favFirst;
+                setFavFirst(next);
+                writeSortPref(favKey, next);
+              },
+            },
+          })
       ),
 
       media === "images" || tab === "images"
@@ -2681,7 +2795,7 @@
   function PerformersPage({ onPick, onBack, onOpenTag, initialPerformer }) {
     const [rows, setRows] = useState(null);
     const [query, setQuery] = useState("");
-    const [sort, setSort] = useState("updated_at");
+    const [sort, setSort] = useState(() => readSortPref("stashTok.performerListSort", "updated_at"));
     const [sortOpen, setSortOpen] = useState(false);
     const [selected, setSelected] = useState(initialPerformer || null);
     const holdTimer = useRef(0);
@@ -2857,9 +2971,9 @@
     const [query, setQuery] = useState("");
     const [listSort, setListSort] = useState(() => {
       try {
-        return window.localStorage.getItem("stashTok.folderListSort") || "az";
+        return window.localStorage.getItem("stashTok.folderListSort") || "modified";
       } catch (e) {
-        return "az";
+        return "modified";
       }
     });
     const [sortOpen, setSortOpen] = useState(false);
@@ -3183,12 +3297,13 @@
 
   function FolderProfile({ name, folder, onBack, onPlay }) {
     const [tab, setTab] = useState("scenes");
+    const folderSortKey = "stashTok.folderSort." + folder;
     const [isFav, setIsFav] = useState(() => loadFolderFavs().indexOf(folder) !== -1);
     const [media, setMedia] = useState("videos");
     const [viewer, setViewer] = useState(null);
     const [stuck, setStuck] = useState(false);
     const pageRef = useRef(null);
-    const [sort, setSort] = useState("updated_at");
+    const [sort, setSort] = useState(() => readSortPref(folderSortKey, "updated_at"));
     const [sortOpen, setSortOpen] = useState(false);
     const [scenes, setScenes] = useState([]);
     const [images, setImages] = useState([]);
@@ -3403,32 +3518,16 @@
           )
         ),
         sortOpen &&
-          h(
-            React.Fragment,
-            null,
-            h("div", { className: "stk-pop-backdrop", onClick: () => setSortOpen(false) }),
-            h(
-              "div",
-              { className: "stk-pop", role: "menu" },
-              FOLDER_SORTS.map(([value, label]) =>
-                h(
-                  "button",
-                  {
-                    key: value,
-                    role: "menuitemradio",
-                    "aria-checked": value === sort,
-                    className: "stk-pop-item" + (value === sort ? " stk-on" : ""),
-                    onClick: () => {
-                      setSort(value);
-                      setSortOpen(false);
-                    },
-                  },
-                  h("span", null, label),
-                  value === sort && h("span", { className: "stk-pop-check" }, "✓")
-                )
-              )
-            )
-          )
+          sortMenuTree({
+            options: FOLDER_SORTS,
+            value: sort,
+            onPick: (key) => {
+              setSort(key);
+              writeSortPref(folderSortKey, key);
+              setSortOpen(false);
+            },
+            onClose: () => setSortOpen(false),
+          })
       ),
 
       media === "images" || tab === "images"
