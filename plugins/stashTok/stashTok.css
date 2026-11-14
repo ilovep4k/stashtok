@@ -1137,6 +1137,14 @@
   background-color: #141414;
 }
 .stk-search-thumb-round { border-radius: 50%; }
+/* folder rows: no screenshot to show, so a flat tile with the glyph */
+.stk-search-thumb-folder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.62);
+  background-color: rgba(255, 255, 255, 0.07);
+}
 .stk-search-body { min-width: 0; }
 
 /* video / image switch under the performer tabs */

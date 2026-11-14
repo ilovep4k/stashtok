@@ -2849,14 +2849,14 @@
 
   /* ---- global search ------------------------------------------------ */
 
-  function SearchPage({ onPickScene, onPickPerformer, onBack }) {
+  function SearchPage({ onPickScene, onPickPerformer, onPickFolder, onBack }) {
     const [query, setQuery] = useState("");
-    const [results, setResults] = useState({ performers: [], markers: [], scenes: [], busy: false, term: "" });
+    const [results, setResults] = useState({ folders: [], performers: [], markers: [], scenes: [], busy: false, term: "" });
 
     useEffect(() => {
       const term = query.trim();
       if (term.length < 2) {
-        setResults({ performers: [], markers: [], scenes: [], busy: false, term: "" });
+        setResults({ folders: [], performers: [], markers: [], scenes: [], busy: false, term: "" });
         return undefined;
       }
       let alive = true;
@@ -2864,6 +2864,9 @@
       const timer = window.setTimeout(() => {
         gql(
           `query StashTokSearch($q: String!) {
+            findFolders(filter: { q: $q, per_page: 6 }) {
+              folders { path }
+            }
             findPerformers(filter: { q: $q, per_page: 8, sort: "scenes_count", direction: DESC }) {
               performers { id name image_path scene_count }
             }
@@ -2879,6 +2882,10 @@
           .then((data) => {
             if (!alive) return;
             setResults({
+              folders: ((data.findFolders && data.findFolders.folders) || []).map((row) => ({
+                name: String(row.path).split("/").filter(Boolean).pop() || row.path,
+                folder: row.path,
+              })),
               performers: (data.findPerformers && data.findPerformers.performers) || [],
               markers: (data.findSceneMarkers && data.findSceneMarkers.scene_markers) || [],
               scenes: (data.findScenes && data.findScenes.scenes) || [],
@@ -2886,7 +2893,7 @@
               term,
             });
           })
-          .catch(() => alive && setResults({ performers: [], markers: [], scenes: [], busy: false, term }));
+          .catch(() => alive && setResults({ folders: [], performers: [], markers: [], scenes: [], busy: false, term }));
       }, 280);
       return () => {
         alive = false;
@@ -2914,7 +2921,7 @@
         h("input", {
           type: "search",
           autoFocus: true,
-          placeholder: "Search scenes, performers, markers",
+          placeholder: "Search folders, scenes, performers, markers",
           value: query,
           onChange: (event) => setQuery(event.currentTarget.value),
           className: "stk-search-input",
@@ -2927,6 +2934,23 @@
         : h(
             "div",
             null,
+            section(
+              "Folders",
+              results.folders.map((row) =>
+                h(
+                  "button",
+                  { key: "folder-" + row.folder, className: "stk-search-row", onClick: () => onPickFolder(row) },
+                  h("div", { className: "stk-search-thumb stk-search-thumb-round stk-search-thumb-folder" },
+                    h(Icon, { name: "folder", size: 18 })),
+                  h(
+                    "div",
+                    { className: "stk-search-body" },
+                    h("div", { className: "stk-account-name" }, row.name),
+                    h("div", { className: "stk-account-meta" }, row.folder)
+                  )
+                )
+              )
+            ),
             section(
               "Performers",
               results.performers.map((performer) =>
@@ -4109,6 +4133,12 @@
           }
         },
         onPickPerformer: openPerformer,
+        onPickFolder: (row) => {
+          if (!row || !row.folder) return;
+          setFolderView(row);
+          setTab("folder");
+          goTo("folder/" + encodeURIComponent(row.folder));
+        },
         onPickScene: (sceneId, startAt, title) => {
           if (!sceneId) return;
           setPerformerFilter(null);
