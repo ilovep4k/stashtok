@@ -639,6 +639,7 @@
     const [rating, setRating] = useState(null);
     const [zoom, setZoom] = useState(1);
     const [scrubbing, setScrubbing] = useState(false);
+    const [tip, setTip] = useState(null);
     const [scrubTime, setScrubTime] = useState(0);
     const [duration, setDuration] = useState(0);
     const [time, setTime] = useState(0);
@@ -1139,6 +1140,10 @@
         g.seekTo = target;
         setScrubTime(target);
         setScrubbing(true);
+        setTip({
+          x: clamp(event.clientX - rect.left, 78, Math.max(78, rect.width - 78)),
+          y: event.clientY - rect.top,
+        });
         if (activeVideo()) activeVideo().currentTime = target;
       }
     }
@@ -1214,7 +1219,10 @@
           }, duration);
         }
       }
-      if (g.mode === "seek") setScrubbing(false);
+      if (g.mode === "seek") {
+        setScrubbing(false);
+        setTip(null);
+      }
       if (g.mode === "pan") poke();
       poke();
     }
@@ -1449,6 +1457,25 @@
             }),
         ),
 
+
+        scrubbing &&
+          tip &&
+          h(
+            "div",
+            {
+              className: "stk-scrub-hud",
+              style: { left: `${tip.x}px`, top: `${Math.max(56, tip.y - 84)}px` },
+            },
+            h("div", { className: "stk-scrub-time" }, `${fmtTime(scrubTime)} / ${fmtTime(duration)}`),
+            h(
+              "div",
+              { className: "stk-scrub-bar" },
+              h("div", {
+                className: "stk-scrub-bar-fill",
+                style: { width: `${duration ? clamp(scrubTime / duration, 0, 1) * 100 : 0}%` },
+              })
+            )
+          ),
 
         onBack &&
           h("button", { className: "stk-feed-back", onClick: onBack }, h(Icon, { name: "chevron", size: 22 })),

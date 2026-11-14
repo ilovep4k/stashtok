@@ -1238,3 +1238,38 @@
   transition: transform 140ms ease-out;
 }
 .stk-switch-row.stk-on .stk-knob { transform: translateX(18px); }
+
+/* floating readout while scrubbing by dragging across the video */
+.stk-scrub-hud {
+  position: absolute;
+  z-index: 7;
+  transform: translate(-50%, -100%);
+  pointer-events: none;
+  display: inline-block;
+  min-width: 96px;
+  padding: 8px 11px 9px;
+  border-radius: 11px;
+  background: rgba(0, 0, 0, 0.74);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+.stk-scrub-time {
+  font-size: 15px;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+.stk-scrub-bar {
+  margin-top: 7px;
+  height: 3px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.28);
+}
+.stk-scrub-bar-fill {
+  height: 100%;
+  background: #fff;
+  border-radius: 2px;
+}
