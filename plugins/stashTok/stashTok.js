@@ -1141,8 +1141,8 @@
         setScrubTime(target);
         setScrubbing(true);
         setTip({
-          x: clamp(event.clientX - rect.left, 78, Math.max(78, rect.width - 78)),
-          y: event.clientY - rect.top,
+          x: clamp(event.clientX - rect.left, 86, Math.max(86, rect.width - 86)),
+          y: clamp(event.clientY - rect.top, 104, Math.max(104, rect.height - 86)),
         });
         if (activeVideo()) activeVideo().currentTime = target;
       }
@@ -1460,22 +1460,43 @@
 
         scrubbing &&
           tip &&
-          h(
-            "div",
-            {
-              className: "stk-scrub-hud",
-              style: { left: `${tip.x}px`, top: `${Math.max(56, tip.y - 84)}px` },
-            },
-            h("div", { className: "stk-scrub-time" }, `${fmtTime(scrubTime)} / ${fmtTime(duration)}`),
-            h(
+          (() => {
+            const R = 66;
+            const ring = 2 * Math.PI * R;
+            const ratio = duration ? clamp(scrubTime / duration, 0, 1) : 0;
+            const box = (R + 10) * 2;
+            return h(
               "div",
-              { className: "stk-scrub-bar" },
-              h("div", {
-                className: "stk-scrub-bar-fill",
-                style: { width: `${duration ? clamp(scrubTime / duration, 0, 1) * 100 : 0}%` },
-              })
-            )
-          ),
+              { className: "stk-touch-hud", style: { left: `${tip.x}px`, top: `${tip.y}px` } },
+              h(
+                "svg",
+                { className: "stk-touch-ring", width: box, height: box, viewBox: `0 0 ${box} ${box}` },
+                h("circle", { cx: box / 2, cy: box / 2, r: R, className: "stk-ring-track" }),
+                h("circle", {
+                  cx: box / 2,
+                  cy: box / 2,
+                  r: R,
+                  className: "stk-ring-fill",
+                  style: {
+                    strokeDasharray: `${ring * ratio} ${ring}`,
+                    transform: `rotate(-90deg)`,
+                    transformOrigin: `${box / 2}px ${box / 2}px`,
+                  },
+                }),
+                h("circle", {
+                  cx: box / 2,
+                  cy: box / 2 - R,
+                  r: 4,
+                  className: "stk-ring-dot",
+                  style: {
+                    transform: `rotate(${ratio * 360}deg)`,
+                    transformOrigin: `${box / 2}px ${box / 2}px`,
+                  },
+                })
+              ),
+              h("div", { className: "stk-touch-time" }, `${fmtTime(scrubTime)} / ${fmtTime(duration)}`)
+            );
+          })(),
 
         onBack &&
           h("button", { className: "stk-feed-back", onClick: onBack }, h(Icon, { name: "chevron", size: 22 })),
