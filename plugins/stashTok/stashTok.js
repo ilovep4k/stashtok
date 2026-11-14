@@ -26,6 +26,7 @@
   const ROUTE = "/stash-tok";
   const LEGACY_ROUTE = "/plugin/stashTok";
   const FEEDS_KEY = "stashTok.feeds.v1";
+  const FOLDER_FAV_KEY = "stashTok.folderFavs.v1";
   const PAGE_SIZE = 8;
   const HOLD_MS = 380;
   const SWIPE_PX = 70;
@@ -54,6 +55,7 @@
     sort: "M7 4v16M4 17l3 3 3-3M17 20V4M14 7l3-3 3 3",
     search: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20.5 20.5 16 16",
     folder: "M3.5 7.5A1.5 1.5 0 0 1 5 6h3.6l1.9 2.4H19a1.5 1.5 0 0 1 1.5 1.5V18A1.5 1.5 0 0 1 19 19.5H5A1.5 1.5 0 0 1 3.5 18V7.5z",
+    chapter: "M6.5 4.5h11v15.2l-5.5-3.9-5.5 3.9V4.5z",
     video: "M3.5 6.5h11.5v11H3.5zM15 10.2l5.5-2.7v9l-5.5-2.7",
     music: "M9 18.5V7.2l10-2v11.1M9 18.5a2.4 2.4 0 1 1-4.8 0 2.4 2.4 0 0 1 4.8 0zM19 16.3a2.4 2.4 0 1 1-4.8 0 2.4 2.4 0 0 1 4.8 0z",
     image: "M3.5 5.5h17v13h-17zM8.2 11.2a1.6 1.6 0 1 0 0-3.2 1.6 1.6 0 0 0 0 3.2zM4.2 17.2l5-5 3.6 3.6 2.6-2.6 4.4 4.4",
@@ -555,6 +557,23 @@
       return Array.isArray(parsed) ? parsed.filter((f) => f && f.type) : [];
     } catch (e) {
       return [];
+    }
+  }
+
+  function loadFolderFavs() {
+    try {
+      const parsed = JSON.parse(window.localStorage.getItem(FOLDER_FAV_KEY) || "[]");
+      return Array.isArray(parsed) ? parsed.filter((row) => typeof row === "string") : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function saveFolderFavs(list) {
+    try {
+      window.localStorage.setItem(FOLDER_FAV_KEY, JSON.stringify(list));
+    } catch (e) {
+      /* ignore quota errors */
     }
   }
 
@@ -2403,7 +2422,15 @@
         "div",
         { className: "stk-cover", style: { backgroundImage: `url("${cover}")` } },
         h("button", { className: "stk-cover-back", onClick: onBack }, h(Icon, { name: "chevron", size: 20 })),
-        performer.favorite && h("div", { className: "stk-cover-badge" }, h(Icon, { name: "heart", size: 13, filled: true }), " Following")
+        h(
+          "button",
+          {
+            className: "stk-cover-fav" + (performer.favorite ? " stk-cover-fav-on" : ""),
+            title: performer.favorite ? "Remove favorite" : "Add to favorites",
+            onClick: toggleFollow,
+          },
+          h(Icon, { name: "heart", size: 19, filled: !!performer.favorite })
+        )
       ),
       h(
         "div",
@@ -2419,11 +2446,6 @@
           performer.birthdate || performer.country
             ? h("div", { className: "stk-account-meta" }, [performer.birthdate, performer.country].filter(Boolean).join(" · "))
             : null
-        ),
-        h(
-          "button",
-          { className: "stk-follow" + (performer.favorite ? " stk-follow-on" : ""), onClick: toggleFollow },
-          performer.favorite ? "Following" : "Follow"
         )
       ),
       h(
@@ -2442,66 +2464,54 @@
 
       h(
         "div",
-        { className: "stk-tabs stk-tabs-wide" },
+        { className: "stk-tabs stk-tabbar" },
         h(
           "button",
-          { className: tab === "scenes" && media === "videos" ? "stk-active" : "", onClick: () => { setTab("scenes"); setMedia("videos"); } },
-          `Scenes ${performer.scene_count}`
+          {
+            className: tab === "scenes" && media === "videos" ? "stk-active" : "",
+            title: "Scenes",
+            onClick: () => { setTab("scenes"); setMedia("videos"); },
+          },
+          h(Icon, { name: "video", size: 21 })
         ),
         h(
           "button",
-          { className: tab === "markers" && media === "videos" ? "stk-active" : "", onClick: () => { setTab("markers"); setMedia("videos"); } },
-          markerCount ? `Markers ${markerCount}` : "Markers"
-        )
-      ),
-
-      h(
-        "div",
-        { className: "stk-media-row" },
-        h(
-          "div",
-          { className: "stk-media-toggle", role: "tablist" },
-          h(
-            "button",
-            {
-              className: media === "videos" ? "stk-on" : "",
-              title: "Videos",
-              onClick: () => setMedia("videos"),
-            },
-            h(Icon, { name: "video", size: 16 })
-          ),
-          h(
-            "button",
-            {
-              className: media === "images" ? "stk-on" : "",
-              title: "Images",
-              onClick: () => setMedia("images"),
-            },
-            h(Icon, { name: "image", size: 16 })
-          )
+          {
+            className: tab === "images" ? "stk-active" : "",
+            title: "Images",
+            onClick: () => { setTab("images"); setMedia("images"); },
+          },
+          h(Icon, { name: "image", size: 21 })
         ),
         h(
-          "div",
-          { className: "stk-media-actions" },
-          h(
-            "button",
-            { className: "stk-sort-btn stk-sort-pill", onClick: () => setSortOpen(!sortOpen) },
-            h(Icon, { name: "sort", size: 13 }),
-            sortLabel,
-            " ▾"
-          ),
-          h(
-            "button",
-            { className: "stk-sort-btn stk-sort-pill", onClick: () => setDensity(density === 3 ? 5 : 3) },
-            density === 3 ? "▦" : "▥"
-          )
+          "button",
+          {
+            className: tab === "markers" && media === "videos" ? "stk-active" : "",
+            title: markerCount ? "Markers " + markerCount : "Markers",
+            onClick: () => { setTab("markers"); setMedia("videos"); },
+          },
+          h(Icon, { name: "chapter", size: 21 })
+        ),
+        h(
+          "button",
+          {
+            className: sortOpen ? "stk-active" : "",
+            title: "Sort: " + sortLabel,
+            onClick: () => setSortOpen(!sortOpen),
+          },
+          h(Icon, { name: "sort", size: 20 })
+        ),
+        h(
+          "button",
+          { className: "stk-density", title: "Grid density", onClick: () => setDensity(density === 3 ? 5 : 3) },
+          density === 3 ? "▦" : "▥"
         )
       ),
 
       sortOpen &&
         h(
           "div",
-          { className: "stk-sort-menu" },
+          { className: "stk-sort-menu stk-sort-drop" },
           SCENE_SORTS.map(([key, label]) =>
             h(
               "button",
@@ -2510,11 +2520,7 @@
                 className: key === sort ? "stk-sort-on" : "",
                 onClick: () => {
                   setSort(key);
-                  try {
-                    window.localStorage.setItem("stashTok.perfSort", key);
-                  } catch (e) {
-                    /* ignore */
-                  }
+                  try { window.localStorage.setItem("stashTok.perfSort", key); } catch (e) { /* ignore */ }
                   setSortOpen(false);
                 },
               },
@@ -2523,7 +2529,7 @@
           )
         ),
 
-      media === "images"
+      media === "images" || tab === "images"
         ? h(
             "div",
             { className: gridClass },
@@ -3043,6 +3049,7 @@
 
   function FolderProfile({ name, folder, onBack, onPlay }) {
     const [tab, setTab] = useState("scenes");
+    const [isFav, setIsFav] = useState(() => loadFolderFavs().indexOf(folder) !== -1);
     const [media, setMedia] = useState("videos");
     const [viewer, setViewer] = useState(null);
     const [stuck, setStuck] = useState(false);
@@ -3185,7 +3192,21 @@
       h(
         "div",
         { className: "stk-cover", style: cover ? { backgroundImage: `url("${cover}")` } : undefined },
-        h("button", { className: "stk-cover-back", onClick: onBack }, h(Icon, { name: "chevron", size: 20 }))
+        h("button", { className: "stk-cover-back", onClick: onBack }, h(Icon, { name: "chevron", size: 20 })),
+        h(
+          "button",
+          {
+            className: "stk-cover-fav" + (isFav ? " stk-cover-fav-on" : ""),
+            title: isFav ? "Remove favorite" : "Add to favorites",
+            onClick: () => {
+              const current = loadFolderFavs();
+              const next = current.indexOf(folder) === -1 ? current.concat([folder]) : current.filter((row) => row !== folder);
+              saveFolderFavs(next);
+              setIsFav(next.indexOf(folder) !== -1);
+            },
+          },
+          h(Icon, { name: "heart", size: 19, filled: isFav })
+        )
       ),
       h(
         "div",
@@ -3206,65 +3227,49 @@
 
       h(
         "div",
-        { className: "stk-tabs stk-tabs-wide" },
+        { className: "stk-tabs stk-tabbar" },
         h(
           "button",
           {
             className: tab === "scenes" && media === "videos" ? "stk-active" : "",
-            onClick: () => {
-              setTab("scenes");
-              setMedia("videos");
-            },
+            title: "Scenes",
+            onClick: () => { setTab("scenes"); setMedia("videos"); },
           },
-          `Scenes ${count}`
+          h(Icon, { name: "video", size: 21 })
+        ),
+        h(
+          "button",
+          {
+            className: tab === "images" ? "stk-active" : "",
+            title: "Images",
+            onClick: () => { setTab("images"); setMedia("images"); },
+          },
+          h(Icon, { name: "image", size: 21 })
         ),
         h(
           "button",
           {
             className: tab === "markers" && media === "videos" ? "stk-active" : "",
-            onClick: () => {
-              setTab("markers");
-              setMedia("videos");
-            },
+            title: markerCount ? "Markers " + markerCount : "Markers",
+            onClick: () => { setTab("markers"); setMedia("videos"); },
           },
-          `Markers ${markerCount}`
-        )
-      ),
-
-      h(
-        "div",
-        { className: "stk-media-row" },
-        h(
-          "div",
-          { className: "stk-media-toggle", role: "tablist" },
-          h(
-            "button",
-            { className: media === "videos" ? "stk-on" : "", title: "Videos", onClick: () => setMedia("videos") },
-            h(Icon, { name: "video", size: 16 })
-          ),
-          h(
-            "button",
-            { className: media === "images" ? "stk-on" : "", title: "Images", onClick: () => setMedia("images") },
-            h(Icon, { name: "image", size: 16 })
-          )
+          h(Icon, { name: "chapter", size: 21 })
         ),
         h(
-          "div",
-          { className: "stk-media-actions" },
-          h(
-            "button",
-            { className: "stk-sort-btn stk-sort-pill", onClick: () => setSortOpen(!sortOpen) },
-            h(Icon, { name: "sort", size: 13 }),
-            sortLabel,
-            " ▾"
-          )
+          "button",
+          {
+            className: sortOpen ? "stk-active" : "",
+            title: "Sort: " + sortLabel,
+            onClick: () => setSortOpen(!sortOpen),
+          },
+          h(Icon, { name: "sort", size: 20 })
         )
       ),
 
       sortOpen &&
         h(
           "div",
-          { className: "stk-sort-menu" },
+          { className: "stk-sort-menu stk-sort-drop" },
           FOLDER_SORTS.map(([value, label]) =>
             h(
               "button",
@@ -3281,7 +3286,7 @@
           )
         ),
 
-      media === "images"
+      media === "images" || tab === "images"
         ? h(
             "div",
             { className: "stk-grid-3" },
