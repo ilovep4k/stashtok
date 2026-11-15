@@ -59,6 +59,8 @@
     x: "M6 6l12 12M18 6 6 18",
     plus: "M12 5v14M5 12h14",
     chevron: "M9 6l6 6-6 6",
+    chevronUp: "M6 15l6-6 6 6",
+    chevronDown: "M6 9l6 6 6-6",
     sort: "M7 4v16M4 17l3 3 3-3M17 20V4M14 7l3-3 3 3",
     search: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20.5 20.5 16 16",
     folder: "M3.5 7.5A1.5 1.5 0 0 1 5 6h3.6l1.9 2.4H19a1.5 1.5 0 0 1 1.5 1.5V18A1.5 1.5 0 0 1 19 19.5H5A1.5 1.5 0 0 1 3.5 18V7.5z",
@@ -910,6 +912,11 @@ void main() {
 
   /* what a scene's video actually is: null | "vr180" | "equirect" */
   function vrLayout(scene) {
+    /* ?vr=1 forces the VR path on any clip: handy for testing the shader on a device
+       that cannot decode the 8K master */
+    try {
+      if (/(^|[?&])vr=1/.test(window.location.search)) return "vr180";
+    } catch (e) { /* ignore */ }
     const file = (scene && scene.files && scene.files[0]) || {};
     const w = Number(file.width) || 0;
     const hgt = Number(file.height) || 0;
@@ -929,11 +936,22 @@ void main() {
     return null;
   }
 
-  function VrCanvas({ videoRef, layout, sceneKey, yaw, pitch, onFail }) {
+  /* the view is a ref, not state: panning must not re-render react 60 times a second */
+  const VR_FOV_MIN = 0.55;
+  const VR_FOV_MAX = 2.9;
+
+  function VrCanvas({ videoRef, layout, sceneKey, previewUrl, onTap }) {
     const canvasRef = useRef(null);
-    const stateRef = useRef({ yaw: yaw || 0, pitch: pitch || 0 });
-    stateRef.current.yaw = yaw || 0;
-    stateRef.current.pitch = pitch || 0;
+    const tapRef = useRef(onTap);
+    tapRef.current = onTap;
+    const viewRef = useRef({ yaw: 0, pitch: 0, fov: 1.75 });
+    const touchRef = useRef({ points: new Map(), moved: 0, lastDist: 0, started: 0 });
+
+    useEffect(() => {
+      viewRef.current.yaw = 0;
+      viewRef.current.pitch = 0;
+      viewRef.current.fov = 1.75;
+    }, [sceneKey]);
 
     useEffect(() => {
       if (!layout) return undefined;
@@ -941,31 +959,21 @@ void main() {
       const video = videoRef.current;
       if (!canvas) return undefined;
       const gl = canvas.getContext("webgl", { alpha: false, antialias: false });
-      if (!gl) {
-        onFail && onFail();
-        return undefined;
-      }
+      if (!gl) return undefined;
       const shader = (type, src) => {
         const sh = gl.createShader(type);
         gl.shaderSource(sh, src);
         gl.compileShader(sh);
-        if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) return null;
-        return sh;
+        return gl.getShaderParameter(sh, gl.COMPILE_STATUS) ? sh : null;
       };
       const vs = shader(gl.VERTEX_SHADER, VR_VS);
       const fs = shader(gl.FRAGMENT_SHADER, VR_FS);
-      if (!vs || !fs) {
-        onFail && onFail();
-        return undefined;
-      }
+      if (!vs || !fs) return undefined;
       const prog = gl.createProgram();
       gl.attachShader(prog, vs);
       gl.attachShader(prog, fs);
       gl.linkProgram(prog);
-      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-        onFail && onFail();
-        return undefined;
-      }
+      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) return undefined;
       gl.useProgram(prog);
       const buf = gl.createBuffer();
       gl.bindBuffer(gl.ARRAY_BUFFER, buf);
@@ -986,61 +994,186 @@ void main() {
         aspect: gl.getUniformLocation(prog, "aspect"),
         kind: gl.getUniformLocation(prog, "kind"),
       };
-      /* 8K VR sources are common here: downscale once into a scratch canvas before
-         uploading, or the texture upload alone eats the frame budget */
       const scratch = document.createElement("canvas");
       scratch.width = 3840;
       scratch.height = 1920;
       const sctx = scratch.getContext("2d");
 
+      /* Safari will not decode an 8K HEVC master (and refuses to sample some
+         hardware-decoded streams at all), which shows up as a black canvas. Stash
+         already renders a small H.264 preview per scene: use it as the texture
+         whenever the master has no frames to give. */
+      let fallback = null;
+      if (previewUrl) {
+        fallback = document.createElement("video");
+        fallback.src = previewUrl;
+        fallback.muted = true;
+        fallback.loop = true;
+        fallback.playsInline = true;
+        fallback.setAttribute("playsinline", "");
+        fallback.preload = "auto";
+        fallback.style.cssText = "position:absolute;width:1px;height:1px;opacity:0;pointer-events:none";
+        document.body.appendChild(fallback);
+        const kick = () => {
+          const p = fallback.play();
+          if (p && p.catch) p.catch(() => {});
+        };
+        fallback.addEventListener("canplay", kick, { once: true });
+        kick();
+      }
+      const usable = (el) => el && el.readyState >= 2 && el.videoWidth > 0;
+      const pickSource = () => {
+        const master = videoRef.current;
+        if (usable(master)) return master;
+        if (usable(fallback)) return fallback;
+        return null;
+      };
+
       let raf = 0;
       let last = 0;
       const draw = (now) => {
         raf = requestAnimationFrame(draw);
-        if (!video || video.readyState < 2 || now - last < 28) return;
+        if (now - last < 28) return;
         last = now;
         const dpr = Math.min(2, window.devicePixelRatio || 1);
-        /* render at the real pixel size: downscaling here is what made 8K sources look jagged */
         const w = Math.max(320, Math.round((canvas.clientWidth || 640) * dpr));
         const h = Math.max(180, Math.round((canvas.clientHeight || 360) * dpr));
         if (canvas.width !== w || canvas.height !== h) {
           canvas.width = w;
           canvas.height = h;
         }
-        const vw = video.videoWidth || 1920;
-        const vh = video.videoHeight || 960;
-        /* keep as much of the source as the GPU comfortably takes: full width up to 4K,
-           never upscale a small file */
+        const source = pickSource();
+        if (!source) return;
+        const vw = source.videoWidth || 1920;
+        const vh = source.videoHeight || 960;
         const scratchW = Math.max(720, Math.min(3840, vw));
         if (scratch.width !== scratchW) {
           scratch.width = scratchW;
           scratch.height = Math.max(2, Math.round((scratchW * vh) / Math.max(1, vw)));
         }
+        const master = videoRef.current;
+        if (source === fallback && master && master.currentTime > 1 && fallback.duration > 2) {
+          /* keep the stand-in roughly where the timeline says we are */
+          const want = master.currentTime % fallback.duration;
+          if (Math.abs(fallback.currentTime - want) > 1.5) fallback.currentTime = want;
+        }
         try {
-          sctx.drawImage(video, 0, 0, scratch.width, scratch.height);
+          sctx.drawImage(source, 0, 0, scratch.width, scratch.height);
         } catch (err) {
           return;
         }
+        const view = viewRef.current;
         gl.bindTexture(gl.TEXTURE_2D, tex);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, scratch);
         gl.viewport(0, 0, canvas.width, canvas.height);
         gl.uniform1i(u.tex, 0);
-        gl.uniform1f(u.yaw, stateRef.current.yaw);
-        gl.uniform1f(u.pitch, stateRef.current.pitch);
-        gl.uniform1f(u.fov, 1.75);            /* ~100 deg horizontal */
+        gl.uniform1f(u.yaw, view.yaw);
+        gl.uniform1f(u.pitch, view.pitch);
+        gl.uniform1f(u.fov, view.fov);
         gl.uniform1f(u.aspect, canvas.width / canvas.height);
         gl.uniform1i(u.kind, layout === "equirect" ? 1 : 0);
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       };
       raf = requestAnimationFrame(draw);
+
+      /* desktop wheel is the zoom. react attaches wheel as passive, so preventDefault
+         has to come from a native non-passive listener. */
+      const onWheel = (event) => {
+        event.preventDefault();
+        const view = viewRef.current;
+        view.fov = Math.max(VR_FOV_MIN, Math.min(VR_FOV_MAX, view.fov + event.deltaY * 0.0016));
+      };
+      canvas.addEventListener("wheel", onWheel, { passive: false });
+
+      /* pointer handling is native and stops propagation: the feed's swipe-to-next
+         gesture sits on ancestor React handlers and would otherwise treat a pan
+         as a swipe. */
+      const points = new Map();
+      let moved = 0;
+      let started = 0;
+      let lastDist = 0;
+
+      const down = (event) => {
+        event.stopPropagation();
+        if (canvas.setPointerCapture) {
+          try { canvas.setPointerCapture(event.pointerId); } catch (err) { /* ignore */ }
+        }
+        if (points.size === 0) {
+          moved = 0;
+          started = Date.now();
+          lastDist = 0;
+        }
+        points.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      };
+
+      const move = (event) => {
+        const point = points.get(event.pointerId);
+        if (!point) return;
+        event.stopPropagation();
+        const dx = event.clientX - point.x;
+        const dy = event.clientY - point.y;
+        point.x = event.clientX;
+        point.y = event.clientY;
+        moved += Math.abs(dx) + Math.abs(dy);
+        const view = viewRef.current;
+        if (points.size === 1) {
+          view.yaw -= dx * 0.0052;
+          view.pitch = Math.max(-1.15, Math.min(1.15, view.pitch - dy * 0.0042));
+        } else if (points.size >= 2) {
+          const entries = Array.from(points.values());
+          const dist = Math.hypot(entries[0].x - entries[1].x, entries[0].y - entries[1].y) || 1;
+          if (lastDist) {
+            view.fov = Math.max(VR_FOV_MIN, Math.min(VR_FOV_MAX, view.fov * (lastDist / dist)));
+          }
+          lastDist = dist;
+        }
+      };
+
+      const up = (event) => {
+        if (!points.has(event.pointerId)) return;
+        event.stopPropagation();
+        points.delete(event.pointerId);
+        if (points.size === 0) {
+          lastDist = 0;
+          if (Date.now() - started < 260 && moved < 9 && tapRef.current) tapRef.current();
+        }
+      };
+
+      const reset = (event) => {
+        event.stopPropagation();
+        viewRef.current.yaw = 0;
+        viewRef.current.pitch = 0;
+        viewRef.current.fov = 1.75;
+      };
+      const swallow = (event) => event.stopPropagation();
+
+      canvas.addEventListener("pointerdown", down);
+      canvas.addEventListener("pointermove", move);
+      canvas.addEventListener("pointerup", up);
+      canvas.addEventListener("pointercancel", up);
+      canvas.addEventListener("dblclick", reset);
+      canvas.addEventListener("click", swallow);
+
       return () => {
+        canvas.removeEventListener("wheel", onWheel);
+        canvas.removeEventListener("pointerdown", down);
+        canvas.removeEventListener("pointermove", move);
+        canvas.removeEventListener("pointerup", up);
+        canvas.removeEventListener("pointercancel", up);
+        canvas.removeEventListener("dblclick", reset);
+        canvas.removeEventListener("click", swallow);
+        if (fallback) {
+          try { fallback.pause(); } catch (e) { /* ignore */ }
+          if (fallback.parentNode) fallback.parentNode.removeChild(fallback);
+        }
         cancelAnimationFrame(raf);
         const lose = gl.getExtension("WEBGL_lose_context");
         if (lose) lose.loseContext();
       };
-    }, [layout, sceneKey, videoRef, onFail]);
+    }, [layout, sceneKey, videoRef, previewUrl]);
 
     if (!layout) return null;
+
     return h("canvas", { className: "stk-vr-canvas", ref: canvasRef });
   }
 
@@ -1061,7 +1194,6 @@ void main() {
     const [muted, setMuted] = useState(cfg.autoplayMuted);
     /* VR clips default to the 2D rectilinear view; v toggles back to raw */
     const [vrMode, setVrMode] = useState(true);
-    const [vrYaw, setVrYaw] = useState(0);
     const [scrubPreview, setScrubPreview] = useState(null);
     const spriteRef = useRef({ key: "", cues: [], ok: false });
     const [spriteTick, setSpriteTick] = useState(0);
@@ -1569,16 +1701,6 @@ void main() {
         } else if (key === "v" || key === "V") {
           event.preventDefault();
           setVrMode((on) => !on);
-          setVrYaw(0);
-        } else if (key === "[" ) {
-          event.preventDefault();
-          setVrYaw((y) => Math.max(-2.6, y - 0.12));
-        } else if (key === "]") {
-          event.preventDefault();
-          setVrYaw((y) => Math.min(2.6, y + 0.12));
-        } else if (key === "\\") {
-          event.preventDefault();
-          setVrYaw(0);
         } else if (key === "m" || key === "M") {
           event.preventDefault();
           if (!video) return;
@@ -2139,7 +2261,16 @@ void main() {
           videoRef,
           layout: vrMode ? vrLayout(scene) : null,
           sceneKey: item.key,
-          yaw: vrYaw,
+          previewUrl: rel(scene.paths && scene.paths.preview),
+          onTap: () => {
+            const video = activeVideo();
+            if (!video) return;
+            if (video.paused) playGuarded(video);
+            else {
+              video.pause();
+              setPlaying(false);
+            }
+          },
         }),
 
         h(
@@ -2451,6 +2582,35 @@ void main() {
         h(
           "div",
           { className: "stk-rail" },
+          desktop &&
+            h(
+              "div",
+              { className: "stk-rail-nav" },
+              h(
+                "button",
+                {
+                  className: "stk-rail-arrow",
+                  title: "Previous clip",
+                  onClick: (event) => {
+                    event.stopPropagation();
+                    goPrev();
+                  },
+                },
+                h(Icon, { name: "chevronUp", size: 20 })
+              ),
+              h(
+                "button",
+                {
+                  className: "stk-rail-arrow",
+                  title: "Next clip",
+                  onClick: (event) => {
+                    event.stopPropagation();
+                    goNext();
+                  },
+                },
+                h(Icon, { name: "chevronDown", size: 20 })
+              )
+            ),
           h(
             "button",
             {
