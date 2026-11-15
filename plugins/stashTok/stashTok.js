@@ -1896,14 +1896,20 @@
             const scene = item && item.scene;
             if (!scene) return null;
             const file = (scene.files && scene.files[0]) || {};
-            const bits = [
-              prettyPath(file.path),
+            const path = prettyPath(file.path);
+            const meta = [
               shortDate(scene.created_at || scene.date),
               file.duration ? fmtTime(file.duration) : "",
               file.width && file.height ? Math.min(file.width, file.height) + "p" : "",
             ].filter(Boolean);
-            if (scene.title) bits.unshift(scene.title);
-            return bits.length ? h("div", { className: "stk-caption-line" }, bits.join(" • ")) : null;
+            if (!path && !meta.length) return null;
+            return h(
+              "div",
+              { className: "stk-caption" },
+              scene.title && h("div", { className: "stk-caption-line" }, scene.title),
+              path && h("div", { className: "stk-caption-line stk-caption-path" }, path),
+              meta.length && h("div", { className: "stk-caption-line stk-caption-meta" }, meta.join(" • "))
+            );
           })(),
           performers.length > 1 &&
             h("div", { className: "stk-info-with" }, "with " + performers.slice(1, 4).map((performer) => performer.name).join(", ")),
@@ -4121,6 +4127,27 @@
     return h(
       "div",
       { className: "stk-settings", style: { marginTop: "16px" } },
+      h("h4", null, "Blur (safe for work)"),
+      h(
+        "button",
+        {
+          className: "stk-switch-row" + (sfw ? " stk-on" : ""),
+          onClick: () => onToggleSfw(!sfw),
+        },
+        h(
+          "span",
+          { className: "stk-switch-copy" },
+          sfw ? "On — frames only" : "Off — playback",
+          h(
+            "small",
+            null,
+            sfw
+              ? "Videos are never requested or played; the feed shows still frames."
+              : "Videos stream and autoplay as usual."
+          )
+        ),
+        h("span", { className: "stk-switch" }, h("span", { className: "stk-knob" }))
+      ),
       h("h4", null, "Feed"),
       h(
         PrefRow,
@@ -4171,27 +4198,6 @@
         PrefRow,
         { title: "Folders on top in any sort", hint: "Subfolders always lead, whatever the sort" },
         h(PrefToggle, { label: "Folders first", on: prefs.foldersOnTop, onChange: (value) => setPref("foldersOnTop", value) })
-      ),
-      h("h4", null, "Safe for work"),
-      h(
-        "button",
-        {
-          className: "stk-switch-row" + (sfw ? " stk-on" : ""),
-          onClick: () => onToggleSfw(!sfw),
-        },
-        h(
-          "span",
-          { className: "stk-switch-copy" },
-          sfw ? "On — frames only" : "Off — playback",
-          h(
-            "small",
-            null,
-            sfw
-              ? "Videos are never requested or played; the feed shows still frames."
-              : "Videos stream and autoplay as usual."
-          )
-        ),
-        h("span", { className: "stk-switch" }, h("span", { className: "stk-knob" }))
       ),
       h("h4", { style: { marginTop: "18px" } }, "Privacy lock"),
       h(
@@ -4903,6 +4909,22 @@
         "div",
         { style: { position: "fixed", inset: 0, zIndex: 9000, display: "flex", flexDirection: "column", background: "#000" } },
         body,
+
+        /* one settings entry point for every screen that isn't the feed itself */
+        tab !== "settings" &&
+          tab !== "home" &&
+          h(
+            "button",
+            {
+              className: "stk-gear-fab",
+              title: "Settings",
+              onClick: () => {
+                setTab("settings");
+                goTo("settings");
+              },
+            },
+            h(Icon, { name: "gear", size: 18 })
+          ),
 
         (tab === "feed" || tab === "home") &&
           h(
