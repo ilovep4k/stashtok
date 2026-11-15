@@ -49,6 +49,7 @@
     user: "M4.5 21a7.5 7.5 0 0 1 15 0M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
     tag: "M3.5 11.5v8a1 1 0 0 0 1 1h8L21 12 12 3l-8.5 8.5zM7.5 8.5h.01",
     gear: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.2a1.6 1.6 0 0 0-2.7-1.1l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 3 15H3a2 2 0 1 1 0-4h.2A1.6 1.6 0 0 0 4.3 8L4.2 8a2 2 0 1 1 2.8-2.8l.1.1A1.6 1.6 0 0 0 9 4.3V3a2 2 0 1 1 4 0v.2a1.6 1.6 0 0 0 2.7 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0 1.1 2.7H21a2 2 0 1 1 0 4h-.2a1.6 1.6 0 0 0-1.4.9z",
+    back: "M15 4.5 7.5 12 15 19.5",
     play: "M8 5.5v13l11-6.5-11-6.5z",
     pause: "M9 5v14M15 5v14",
     info: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 11v5M12 7.6h.01",
@@ -1211,12 +1212,11 @@
     function flagCurrent() {
       if (!item) return;
       setSheet(null);
+      buzz(40);
+      /* advance either way: a failed flag must not leave the user parked on the clip */
       flagScene(item.scene, cfg)
-        .then(() => {
-          buzz(40);
-          goNext();
-        })
-        .catch(() => {});
+        .catch(() => {})
+        .then(() => goNext());
     }
 
     function rotate(delta) {
@@ -1341,11 +1341,18 @@
         } else if (key === "ArrowUp" || key === "PageUp") {
           event.preventDefault();
           goPrev();
+        } else if (key === "Tab") {
+          event.preventDefault();
+          if (event.shiftKey) goPrev();
+          else goNext();
         } else if (key === "ArrowRight" || key === "ArrowLeft") {
           if (!video) return;
           event.preventDefault();
-          const step = key === "ArrowRight" ? 5 : -5;
-          video.currentTime = Math.max(0, Math.min((video.duration || 0) - 0.2, video.currentTime + step));
+          /* shift = a tenth of the clip, plain = five seconds */
+          const total = video.duration || 0;
+          const step = event.shiftKey ? total * 0.1 : 5;
+          const delta = key === "ArrowRight" ? step : -step;
+          video.currentTime = Math.max(0, Math.min(total - 0.2, video.currentTime + delta));
           setScrubTime(video.currentTime);
         } else if (key === " " || key === "k") {
           event.preventDefault();
@@ -1950,18 +1957,29 @@
               style: { left: `${quick.x}px`, top: `${quick.y}px` },
             },
             h(
-              "button",
-              {
-                onClick: () => {
-                  const order = [0.5, 1, 2];
-                  const at = order.indexOf(speed);
-                  setSpeed(order[(at + 1) % order.length]);
-                  setQuick(null);
-                },
-              },
+              "div",
+              { className: "stk-qm-speed" },
               h(Icon, { name: "play", size: 15 }),
-              "Speed",
-              h("span", { className: "stk-qm-key" }, `${speed}x`)
+              h("span", { className: "stk-qm-speed-label" }, "Speed"),
+              h(
+                "div",
+                { className: "stk-qm-seg" },
+                [0.5, 1, 2].map((value) =>
+                  h(
+                    "button",
+                    {
+                      key: value,
+                      className: "stk-qm-seg-btn" + (speed === value ? " stk-on" : ""),
+                      onClick: (event) => {
+                        event.stopPropagation();
+                        setSpeed(value);
+                        buzz(8);
+                      },
+                    },
+                    `${value}x`
+                  )
+                )
+              )
             ),
             h(
               "button",
@@ -2007,7 +2025,8 @@
           })(),
 
         onBack &&
-          h("button", { className: "stk-feed-back", onClick: onBack }, h(Icon, { name: "chevron", size: 22 })),
+          (spec.origin && ["performer", "folder", "tag", "markers"].indexOf(spec.origin.kind) >= 0) &&
+          h("button", { className: "stk-feed-back", onClick: onBack, title: "Back" }, h(Icon, { name: "back", size: 22 })),
 
         h(
           "div",

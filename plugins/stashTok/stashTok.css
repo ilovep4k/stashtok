@@ -457,7 +457,6 @@
 
 .stk-hud-hidden .stk-top,
 .stk-hud-hidden .stk-rail,
-.stk-hud-hidden .stk-timeline,
 .stk-hud-hidden .stk-nav,
 .stk-hud-hidden .stk-time { opacity: 0; pointer-events: none; }
 .stk-top, .stk-rail, .stk-timeline, .stk-nav, .stk-time { transition: opacity 200ms ease; }
@@ -2102,4 +2101,46 @@ body.stk-anim .stk-account:active {
 .stk-desktop .stk-timeline {
   left: 0;
   right: 0;
+}
+
+/* quick menu: speed is a three-way selector, not a cycle */
+.stk-qm-speed {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+}
+.stk-qm-speed-label {
+  flex: 1 1 auto;
+  font-size: 13px;
+  opacity: 0.85;
+}
+.stk-qm-seg {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.12);
+}
+.stk-qm-seg-btn {
+  border: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.62);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 9px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.stk-qm-seg-btn.stk-on {
+  background: #fff;
+  color: #111;
+}
+
+/* performers list on a wide screen: thumbnails keep their size, more per row */
+.stk-desktop .stk-page .stk-grid {
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+  padding: 8px;
 }
