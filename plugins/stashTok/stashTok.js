@@ -41,6 +41,8 @@
   const ICONS = {
     home: "M3 10.5 12 3l9 7.5M5.5 9.5V21h13V9.5",
     /* a post sitting on top of another card */
+    /* a checklist: the operations screen */
+    ops: "M4 7.5l2 2 3.2-3.4M12.5 8h7.5M4 16.5l2 2 3.2-3.4M12.5 17h7.5",
     /* a fanned deck: two cards peeking behind the front one */
     feed: "M11.2 4.1h4.6a3 3 0 0 1 3 3v4.6M9.4 6.3h4.5a3 3 0 0 1 3 3v4.5M6.6 8.5h4.8a3 3 0 0 1 3 3v6.9a3 3 0 0 1-3 3H6.6a3 3 0 0 1-3-3v-6.9a3 3 0 0 1 3-3zM7.3 13.4h3.4M7.3 16.3h2.2",
     heart: "M12 20.5S3.5 15 3.5 9.4A4.9 4.9 0 0 1 12 6.4a4.9 4.9 0 0 1 8.5 3c0 5.6-8.5 11.1-8.5 11.1z",
@@ -2203,6 +2205,7 @@
     { id: "markers", label: "Markers", icon: "chapter" },
     { id: "random", label: "Random", icon: "sparkle" },
     { id: "settings", label: "Settings", icon: "gear" },
+    { id: "ops", label: "Ops", icon: "ops" },
   ];
   const DEFAULT_NAV_SLOTS = ["favorites", "tags", "folders"];
 
@@ -4267,6 +4270,156 @@
     );
   }
 
+  /* --------------------------------------------------------------- operations */
+  const OPS_ACTIONS = [
+    { id: "scan", label: "Scan library", hint: "Pick up new folders and files", icon: "search" },
+    { id: "rescan", label: "Full rescan", hint: "Re-read every file on disk", icon: "sort" },
+    { id: "generate", label: "Generate", hint: "Sprites, previews, phashes", icon: "play" },
+    { id: "markers", label: "Detect markers", hint: "Marker images and screenshots", icon: "flag" },
+    { id: "identify", label: "Identify", hint: "Match scenes against stash-box", icon: "tag" },
+    { id: "clean", label: "Clean", hint: "Drop entries whose files are gone", icon: "x" },
+  ];
+
+  const OPS_MUTATIONS = {
+    scan: "mutation { metadataScan(input: { rescan: false }) }",
+    rescan: "mutation { metadataScan(input: { rescan: true }) }",
+    generate:
+      "mutation { metadataGenerate(input: { sprites: true, previews: true, phashes: true, imagePreviews: true, imageThumbnails: true }) }",
+    markers:
+      "mutation { metadataGenerate(input: { markers: true, markerImagePreviews: true, markerScreenshots: true }) }",
+    identify: "mutation { metadataIdentify(input: {}) }",
+    clean: "mutation { metadataClean }",
+  };
+
+  function OperationsPanel() {
+    const [jobs, setJobs] = useState(null);
+    const [boxes, setBoxes] = useState([]);
+    const [note, setNote] = useState("");
+    const [busy, setBusy] = useState("");
+
+    const load = useCallback(() => {
+      gql(`query StashTokJobs { jobQueue { id status description progress startTime endTime error } }`)
+        .then((data) => setJobs(data.jobQueue || []))
+        .catch(() => setJobs((cur) => cur || []));
+    }, []);
+
+    useEffect(() => {
+      load();
+      gql(`query StashTokBoxes { configuration { general { stashBoxes { endpoint api_key } } } }`)
+        .then((data) => {
+          const general = (data && data.configuration && data.configuration.general) || {};
+          setBoxes(general.stashBoxes || []);
+        })
+        .catch(() => {});
+      const tick = window.setInterval(load, 2500);
+      return () => window.clearInterval(tick);
+    }, [load]);
+
+    function run(id) {
+      setBusy(id);
+      setNote("");
+      gql(OPS_MUTATIONS[id])
+        .then(() => {
+          setNote("Queued. It runs on the server — this window keeps polling.");
+          load();
+        })
+        .catch((err) => setNote(String((err && err.message) || err)))
+        .finally(() => setBusy(""));
+    }
+
+    function stop(jobId) {
+      gql(`mutation StashTokStopJob($id: ID!) { stopJob(input: { job_id: $id }) }`, { id: jobId })
+        .then(load)
+        .catch((err) => setNote(String((err && err.message) || err)));
+    }
+
+    return h(
+      "div",
+      { className: "stk-page stk-ops" },
+      h(
+        "div",
+        { className: "stk-ops-actions" },
+        OPS_ACTIONS.map((action) =>
+          h(
+            "button",
+            {
+              key: action.id,
+              className: "stk-ops-btn" + (busy === action.id ? " stk-on" : ""),
+              onClick: () => run(action.id),
+            },
+            h(Icon, { name: action.icon, size: 17 }),
+            h("span", { className: "stk-ops-label" }, action.label),
+            h("span", { className: "stk-ops-hint" }, action.hint)
+          )
+        )
+      ),
+
+      note ? h("p", { className: "stk-ops-note" }, note) : null,
+
+      h("h4", { style: { marginTop: "18px" } }, "Tasks"),
+      !jobs || jobs.length === 0
+        ? h("p", { className: "stk-sub" }, jobs ? "Nothing running." : "Loading…")
+        : h(
+            "div",
+            { className: "stk-ops-jobs" },
+            jobs.map((job) =>
+              h(
+                "div",
+                { key: job.id, className: "stk-ops-job" },
+                h(
+                  "div",
+                  { className: "stk-ops-job-top" },
+                  h("span", { className: "stk-ops-job-desc" }, job.description || job.status),
+                  h("span", { className: "stk-ops-job-status" }, job.status)
+                ),
+                h(
+                  "div",
+                  { className: "stk-ops-bar" },
+                  h("div", { className: "stk-ops-bar-fill", style: { width: `${Math.round((job.progress || 0) * 100)}%` } })
+                ),
+                h(
+                  "div",
+                  { className: "stk-ops-job-foot" },
+                  h("span", null, `${Math.round((job.progress || 0) * 100)}%`),
+                  job.error ? h("span", { className: "stk-ops-err" }, job.error) : null,
+                  h("button", { className: "stk-btn", onClick: () => stop(job.id) }, "Stop")
+                )
+              )
+            )
+          ),
+
+      h("h4", { style: { marginTop: "18px" } }, "StashDB"),
+      h(
+        "p",
+        { className: "stk-sub" },
+        boxes.length
+          ? "Connected endpoints on this server:"
+          : "No stash-box endpoint configured on this server yet."
+      ),
+      boxes.length
+        ? h(
+            "div",
+            { className: "stk-ops-boxes" },
+            boxes.map((box) =>
+              h(
+                "div",
+                { key: box.endpoint, className: "stk-ops-box" },
+                h("span", { className: "stk-ops-box-url" }, box.endpoint.replace("https://", "").replace("/graphql", "")),
+                h("span", { className: "stk-ops-box-key" }, box.api_key ? "key set" : "no key")
+              )
+            )
+          )
+        : null,
+      h(
+        "ol",
+        { className: "stk-ops-steps" },
+        h("li", null, "Make a stashdb.org account, then Settings → API Keys → create a key."),
+        h("li", null, "In Stash: Settings → Metadata Providers → Add stash-box → endpoint https://stashdb.org/graphql, paste the key."),
+        h("li", null, "Come back here and tap Identify to pull titles, performers, tags and markers into matching scenes.")
+      )
+    );
+  }
+
   function SettingsPanel({ cfg, feeds, onEdit, pin, onSetPin, onClearPin, sfw, onToggleSfw, prefs, setPref }) {
     const [draft, setDraft] = useState("");
     const [saved, setSaved] = useState(false);
@@ -4594,6 +4747,9 @@
       } else if (id === "settings") {
         setTab("settings");
         goTo("settings");
+      } else if (id === "ops") {
+        setTab("ops");
+        goTo("ops");
       }
     }
 
@@ -4750,6 +4906,10 @@
       }
       if (rest === "settings") {
         setTab("settings");
+        return;
+      }
+      if (rest === "ops") {
+        setTab("ops");
         return;
       }
       if (rest === "folders") {
@@ -5059,6 +5219,22 @@
           goTo("scene/" + sceneId);
         },
       });
+    } else if (tab === "ops") {
+      body = h(
+        "div",
+        { className: "stk-page" },
+        h(
+          "div",
+          { className: "stk-page-head" },
+          "Operations",
+          h(
+            "button",
+            { className: "stk-page-x", title: "Close", onClick: () => { setTab("home"); goTo(""); } },
+            h(Icon, { name: "x", size: 18 })
+          )
+        ),
+        h(OperationsPanel, null)
+      );
     } else if (tab === "settings") {
       body = h(
         "div",
@@ -5146,8 +5322,23 @@
         { style: { position: "fixed", inset: 0, zIndex: 9000, display: "flex", flexDirection: "column", background: "#000" } },
         body,
 
+        /* operations sits beside settings: one tap, never buried in settings */
+        tab !== "settings" && tab !== "ops" && tab !== "home" &&
+          h(
+            "button",
+            {
+              className: "stk-gear-fab stk-ops-fab",
+              title: "Operations",
+              onClick: () => {
+                setTab("ops");
+                goTo("ops");
+              },
+            },
+            h(Icon, { name: "ops", size: 18 })
+          ),
+
         /* one settings entry point for every screen that isn't the feed itself */
-        tab !== "settings" &&
+        tab !== "settings" && tab !== "ops" &&
           tab !== "home" &&
           h(
             "button",
