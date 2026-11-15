@@ -1441,7 +1441,12 @@
           if (!gesture.current || gesture.current.moved || gesture.current.mode !== "press") return;
           gesture.current.mode = "menu";
           setPress(null);
-          setQuick({ x: event.clientX - rect.left, y: event.clientY - rect.top });
+          setQuick({
+            x: event.clientX - rect.left,
+            y: event.clientY - rect.top,
+            /* open upward unless the thumb is near the top of the video */
+            below: event.clientY - rect.top < 190,
+          });
         }, LONG_PRESS_MS);
       }
     }
@@ -1864,7 +1869,10 @@
         quick &&
           h(
             "div",
-            { className: "stk-quick-menu", style: { left: `${quick.x}px`, top: `${quick.y}px` } },
+            {
+              className: "stk-quick-menu" + (quick.below ? " stk-below" : ""),
+              style: { left: `${quick.x}px`, top: `${quick.y}px` },
+            },
             h(
               "button",
               {
@@ -4511,6 +4519,51 @@
     const baseCfg = usePluginConfig();
     const [prefs, setPrefs] = useState(loadPrefs);
     const [navPicker, setNavPicker] = useState(null);
+
+    /* tiles fade and rise as they scroll into view: one entrance each, never replayed */
+    useEffect(() => {
+      if (!("IntersectionObserver" in window)) return;
+      const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      document.body.classList.add("stk-anim");
+      const seen = new WeakSet();
+      const watcher = new IntersectionObserver(
+        (entries) => {
+          entries.forEach((entry) => {
+            if (!entry.isIntersecting) return;
+            const el = entry.target;
+            const parent = el.parentElement;
+            const index = parent ? Array.prototype.indexOf.call(parent.children, el) : 0;
+            if (!reduced) el.style.transitionDelay = `${Math.min(index, 7) * 38}ms`;
+            el.classList.add("stk-in");
+            watcher.unobserve(el);
+          });
+        },
+        { rootMargin: "0px 0px -6% 0px", threshold: 0.06 }
+      );
+      const scan = () => {
+        document.querySelectorAll(".stk-tile, .stk-account, .stk-fv-row").forEach((el) => {
+          if (seen.has(el) || el.classList.contains("stk-in")) return;
+          seen.add(el);
+          watcher.observe(el);
+        });
+      };
+      let queued = 0;
+      const scanSoon = () => {
+        if (queued) return;
+        queued = window.requestAnimationFrame(() => {
+          queued = 0;
+          scan();
+        });
+      };
+      scan();
+      const mutations = new MutationObserver(scanSoon);
+      mutations.observe(document.body, { childList: true, subtree: true });
+      return () => {
+        watcher.disconnect();
+        mutations.disconnect();
+        document.body.classList.remove("stk-anim");
+      };
+    }, []);
     const navSlots = (prefs.navSlots && prefs.navSlots.length === 3 ? prefs.navSlots : DEFAULT_NAV_SLOTS).slice();
 
     function runNav(id) {
