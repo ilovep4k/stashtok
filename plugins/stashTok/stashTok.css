@@ -1276,13 +1276,13 @@
 }
 .stk-ring-track {
   fill: none;
-  stroke: rgba(255, 255, 255, 0.16);
-  stroke-width: 3;
+  stroke: rgba(255, 255, 255, 0.18);
+  stroke-width: 2;
 }
 .stk-ring-fill {
   fill: none;
   stroke: #fff;
-  stroke-width: 3;
+  stroke-width: 2;
   stroke-linecap: round;
   filter: drop-shadow(0 0 6px rgba(255, 255, 255, 0.55));
 }
@@ -1768,3 +1768,53 @@
 /* flush with the tab bar, edge to edge */
 .stk-timeline-inner { border-radius: 0; }
 .stk-timeline-fill { border-radius: 0; }
+
+/* ---------------- long press: pip, then a quick menu at the thumb ---------------- */
+
+.stk-press-pip {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  margin: -8px 0 0 -8px;
+  border-radius: 50%;
+  background: #fff;
+  opacity: 0.9;
+  transform: scale(0.45);
+  transition: transform 750ms linear, opacity 200ms linear;
+  pointer-events: none;
+  z-index: 45;
+}
+
+.stk-press-pip.stk-grow {
+  transform: scale(2.1);
+  opacity: 0.32;
+}
+
+.stk-quick-menu {
+  position: absolute;
+  z-index: 60;
+  min-width: 168px;
+  padding: 6px;
+  background: rgba(16, 16, 16, 0.97);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 14px;
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.66);
+  transform: translate(-50%, -50%);
+}
+
+.stk-quick-menu button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 10px 11px;
+  background: none;
+  border: 0;
+  color: #fff;
+  font-size: 13.5px;
+  border-radius: 10px;
+}
+
+.stk-quick-menu button:active { background: rgba(255, 255, 255, 0.12); }
+.stk-quick-menu button + button { margin-top: 1px; }
+.stk-qm-key { margin-left: auto; color: #9d9d9d; font-size: 11.5px; letter-spacing: .02em; }

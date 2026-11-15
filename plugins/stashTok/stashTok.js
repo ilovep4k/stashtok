@@ -29,6 +29,7 @@
   const FOLDER_FAV_KEY = "stashTok.folderFavs.v1";
   const PAGE_SIZE = 8;
   const HOLD_MS = 380;
+  const LONG_PRESS_MS = 750;
   const SWIPE_PX = 70;
   const MAX_ZOOM = 8;
   const HEART_POP_MS = 700;
@@ -39,6 +40,9 @@
 
   const ICONS = {
     home: "M3 10.5 12 3l9 7.5M5.5 9.5V21h13V9.5",
+    /* a post sitting on top of another card */
+    /* a fanned deck: two cards peeking behind the front one */
+    feed: "M11.2 4.1h4.6a3 3 0 0 1 3 3v4.6M9.4 6.3h4.5a3 3 0 0 1 3 3v4.5M6.6 8.5h4.8a3 3 0 0 1 3 3v6.9a3 3 0 0 1-3 3H6.6a3 3 0 0 1-3-3v-6.9a3 3 0 0 1 3-3zM7.3 13.4h3.4M7.3 16.3h2.2",
     heart: "M12 20.5S3.5 15 3.5 9.4A4.9 4.9 0 0 1 12 6.4a4.9 4.9 0 0 1 8.5 3c0 5.6-8.5 11.1-8.5 11.1z",
     user: "M4.5 21a7.5 7.5 0 0 1 15 0M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
     tag: "M3.5 11.5v8a1 1 0 0 0 1 1h8L21 12 12 3l-8.5 8.5zM7.5 8.5h.01",
@@ -685,12 +689,25 @@
   }
 
   function loadPrefs() {
+    return migratePrefs();
+  }
+
+  /* older builds saved performerSort: "updated_at" on its own, which then beat the
+     default forever on the user's device. One-time: drop that override. */
+  function migratePrefs() {
+    let parsed = {};
     try {
-      const parsed = JSON.parse(window.localStorage.getItem(PREFS_KEY) || "{}");
-      return Object.assign({}, PREF_DEFAULTS, parsed && typeof parsed === "object" ? parsed : {});
+      parsed = JSON.parse(window.localStorage.getItem(PREFS_KEY) || "{}") || {};
     } catch (e) {
-      return Object.assign({}, PREF_DEFAULTS);
+      parsed = {};
     }
+    const merged = Object.assign({}, PREF_DEFAULTS, parsed && typeof parsed === "object" ? parsed : {});
+    if (merged.sortDefaultsV !== 2) {
+      merged.performerSort = "filesize";
+      merged.sortDefaultsV = 2;
+      savePrefs(merged);
+    }
+    return merged;
   }
 
   function savePrefs(prefs) {
@@ -841,6 +858,8 @@
     const [hud, setHud] = useState(true);
     const [hudTick, setHudTick] = useState(0);
     const [sheet, setSheet] = useState(null); // 'actions' | 'details'
+    const [press, setPress] = useState(null); // {x,y} pip while a long press builds
+    const [quick, setQuick] = useState(null); // {x,y} quick menu anchored at the thumb
     const [rating, setRating] = useState(null);
     const [zoom, setZoom] = useState(1);
     const [scrubbing, setScrubbing] = useState(false);
@@ -863,6 +882,7 @@
     const pts = useRef(new Map());
     const gesture = useRef(null);
     const holdTimer = useRef(null);
+    const pressTimer = useRef(0);
     const tapTimer = useRef(null);
     const lastTapAt = useRef(0);
     const rafRef = useRef(0);
@@ -1350,6 +1370,10 @@
 
     function onPointerDown(event) {
       if (sheet) return;
+      if (quick) {
+        setQuick(null);
+        return;
+      }
       // a tap on a rail button / HUD must not also toggle playback
       if (event.target && event.target.closest && event.target.closest("button, input, .stk-rail, .stk-nav, .stk-timeline, .stk-sheet, .stk-top, a")) return;
       const stage = stageRef.current;
@@ -1399,11 +1423,27 @@
       };
       window.clearTimeout(holdTimer.current);
       holdTimer.current = window.setTimeout(() => {
-        if (gesture.current && !gesture.current.moved && gesture.current.mode === "press") {
-          gesture.current.mode = "hold";
-          startHold(gesture.current.side);
+        const cur = gesture.current;
+        /* the middle press is the quick-menu gesture, not a fast-forward */
+        if (cur && !cur.moved && cur.mode === "press" && cur.side !== "center") {
+          cur.mode = "hold";
+          startHold(cur.side);
         }
       }, HOLD_MS);
+
+      /* a still thumb in the middle: grow a pip, then pop a quick menu under it */
+      if (side === "center") {
+        const pip = { x: event.clientX - rect.left, y: event.clientY - rect.top };
+        setPress(pip);
+        window.setTimeout(() => setPress((cur) => (cur ? Object.assign({}, cur, { grow: true }) : cur)), 24);
+        window.clearTimeout(pressTimer.current);
+        pressTimer.current = window.setTimeout(() => {
+          if (!gesture.current || gesture.current.moved || gesture.current.mode !== "press") return;
+          gesture.current.mode = "menu";
+          setPress(null);
+          setQuick({ x: event.clientX - rect.left, y: event.clientY - rect.top });
+        }, LONG_PRESS_MS);
+      }
     }
 
     function onPointerMove(event) {
@@ -1440,6 +1480,7 @@
       if (!g.moved) return;
 
       if (g.mode === "press") {
+        clearPress();
         if (tf.current.s > 1.02) {
           g.mode = "pan";
           g.panX = tf.current.x;
@@ -1475,9 +1516,15 @@
       }
     }
 
+    function clearPress() {
+      window.clearTimeout(pressTimer.current);
+      setPress((current) => (current ? null : current));
+    }
+
     function onPointerUp(event) {
       const g = gesture.current;
       window.clearTimeout(holdTimer.current);
+      clearPress();
       // a fast-forward hold must end even when the finger lifts over a control,
       // otherwise the clip keeps playing at holdSpeed while the badge says 1x
       if (g && g.mode === "hold") stopHold();
@@ -1808,40 +1855,67 @@
         ),
 
 
+        press &&
+          h("div", {
+            className: "stk-press-pip" + (press.grow ? " stk-grow" : ""),
+            style: { left: `${press.x}px`, top: `${press.y}px` },
+          }),
+
+        quick &&
+          h(
+            "div",
+            { className: "stk-quick-menu", style: { left: `${quick.x}px`, top: `${quick.y}px` } },
+            h(
+              "button",
+              {
+                onClick: () => {
+                  const order = [0.5, 1, 2];
+                  const at = order.indexOf(speed);
+                  setSpeed(order[(at + 1) % order.length]);
+                  setQuick(null);
+                },
+              },
+              h(Icon, { name: "play", size: 15 }),
+              "Speed",
+              h("span", { className: "stk-qm-key" }, `${speed}x`)
+            ),
+            h(
+              "button",
+              {
+                onClick: () => {
+                  setQuick(null);
+                  flagCurrent();
+                },
+              },
+              h(Icon, { name: "flag", size: 15 }),
+              "Flag",
+              h("span", { className: "stk-qm-key" }, "mark for delete")
+            ),
+            h("button", { onClick: () => setQuick(null) }, h(Icon, { name: "x", size: 15 }), "Close")
+          ),
+
         scrubbing &&
           tip &&
           (() => {
-            const R = 66;
-            const ring = 2 * Math.PI * R;
+            /* a 90 degree arc that fills above the thumb, not a full circle */
+            const R = 26;
+            const box = (R + 6) * 2;
+            const mid = box / 2;
+            const len = (Math.PI / 2) * R;
             const ratio = duration ? clamp(scrubTime / duration, 0, 1) : 0;
-            const box = (R + 10) * 2;
+            const leg = R * Math.SQRT1_2;
+            const d = `M ${mid - leg} ${mid - leg} A ${R} ${R} 0 0 1 ${mid + leg} ${mid - leg}`;
             return h(
               "div",
               { className: "stk-touch-hud", style: { left: `${tip.x}px`, top: `${tip.y}px` } },
               h(
                 "svg",
                 { className: "stk-touch-ring", width: box, height: box, viewBox: `0 0 ${box} ${box}` },
-                h("circle", { cx: box / 2, cy: box / 2, r: R, className: "stk-ring-track" }),
-                h("circle", {
-                  cx: box / 2,
-                  cy: box / 2,
-                  r: R,
+                h("path", { d, className: "stk-ring-track" }),
+                h("path", {
+                  d,
                   className: "stk-ring-fill",
-                  style: {
-                    strokeDasharray: `${ring * ratio} ${ring}`,
-                    transform: `rotate(-90deg)`,
-                    transformOrigin: `${box / 2}px ${box / 2}px`,
-                  },
-                }),
-                h("circle", {
-                  cx: box / 2,
-                  cy: box / 2 - R,
-                  r: 4,
-                  className: "stk-ring-dot",
-                  style: {
-                    transform: `rotate(${ratio * 360}deg)`,
-                    transformOrigin: `${box / 2}px ${box / 2}px`,
-                  },
+                  style: { strokeDasharray: `${len * ratio} ${len}` },
                 })
               ),
               h("div", { className: "stk-touch-time" }, `${fmtTime(scrubTime)} / ${fmtTime(duration)}`)
@@ -5048,7 +5122,7 @@
             }),
           h(NavButton, {
             active: tab === "home" && activeFeed.type !== "performer",
-            icon: "home",
+            icon: "feed",
             label: "Feed",
             onClick: goHome,
           }),
