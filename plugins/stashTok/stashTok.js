@@ -667,6 +667,7 @@
     favoritesOpen: "gallery",
     feedWindow: "all",
     folderView: "list",
+    navSlots: ["favorites", "tags", "folders"],
   };
 
   function loadPrefs() {
@@ -2099,14 +2100,49 @@
     );
   }
 
-  function NavButton({ active, icon, label, onClick }) {
+  const NAV_OPTIONS = [
+    { id: "favorites", label: "Favorites", icon: "heart" },
+    { id: "tags", label: "Tags", icon: "tag" },
+    { id: "folders", label: "Folders", icon: "folder" },
+    { id: "markers", label: "Markers", icon: "chapter" },
+    { id: "random", label: "Random", icon: "sparkle" },
+    { id: "settings", label: "Settings", icon: "gear" },
+  ];
+  const DEFAULT_NAV_SLOTS = ["favorites", "tags", "folders"];
+
+  function NavButton({ active, icon, label, onClick, onLongPress }) {
+    const timer = useRef(0);
+    const fired = useRef(false);
     return h(
       "button",
-      { className: active ? "stk-active" : "", onClick },
+      {
+        className: active ? "stk-active" : "",
+        onPointerDown: () => {
+          if (!onLongPress) return;
+          fired.current = false;
+          window.clearTimeout(timer.current);
+          timer.current = window.setTimeout(() => {
+            fired.current = true;
+            onLongPress();
+          }, 480);
+        },
+        onPointerUp: () => window.clearTimeout(timer.current),
+        onPointerLeave: () => window.clearTimeout(timer.current),
+        onPointerCancel: () => window.clearTimeout(timer.current),
+        onClick: () => {
+          if (fired.current) {
+            fired.current = false;
+            return;
+          }
+          onClick();
+        },
+      },
       h(Icon, { name: icon, size: 21 }),
       h("span", null, label)
     );
   }
+
+
 
   /* ------------------------------------------------------------------ */
   /* sheet                                                              */
@@ -4215,6 +4251,16 @@
         { title: "Folders on top in any sort", hint: "Subfolders always lead, whatever the sort" },
         h(PrefToggle, { label: "Folders first", on: prefs.foldersOnTop, onChange: (value) => setPref("foldersOnTop", value) })
       ),
+      h("h4", { style: { marginTop: "18px" } }, "Navigation"),
+      h(
+        PrefRow,
+        { title: "Bottom bar", hint: "Long-press the last three buttons to change what they open" },
+        h(
+          "button",
+          { className: "stk-btn", onClick: () => setPref("navSlots", DEFAULT_NAV_SLOTS.slice()) },
+          "Reset"
+        )
+      ),
       h("h4", { style: { marginTop: "18px" } }, "Privacy lock"),
       h(
         "p",
@@ -4377,6 +4423,40 @@
   function StashTokApp() {
     const baseCfg = usePluginConfig();
     const [prefs, setPrefs] = useState(loadPrefs);
+    const [navPicker, setNavPicker] = useState(null);
+    const navSlots = (prefs.navSlots && prefs.navSlots.length === 3 ? prefs.navSlots : DEFAULT_NAV_SLOTS).slice();
+
+    function runNav(id) {
+      if (id === "favorites") {
+        setPerformerFilter(null);
+        setActiveFeed({ id: "favorites", name: "Favorites", type: "favorites" });
+        setTab("home");
+        setRefreshKey((n) => n + 1);
+        goTo("favorites");
+      } else if (id === "tags") {
+        setTab("tags");
+        goTo("tags");
+      } else if (id === "folders") {
+        setTab("folders");
+        goTo("folders");
+      } else if (id === "markers") {
+        setPerformerFilter(null);
+        setActiveFeed({ id: "markers", name: "Markers", type: "markers", sort: "random" });
+        setTab("home");
+        setRefreshKey((n) => n + 1);
+        goTo("markers");
+      } else if (id === "random") {
+        setPerformerFilter(null);
+        setActiveFeed({ id: "foryou", name: "Random", type: "foryou", sort: "random" });
+        setTab("home");
+        setRefreshKey((n) => n + 1);
+        goTo("");
+      } else if (id === "settings") {
+        setTab("settings");
+        goTo("settings");
+      }
+    }
+
     const setPref = useCallback((key, value) => {
       setPrefs((cur) => {
         const next = Object.assign({}, cur, { [key]: value });
@@ -4942,10 +5022,10 @@
             h(Icon, { name: "gear", size: 18 })
           ),
 
-        (tab === "feed" || tab === "home") &&
-          h(
-            "nav",
-            { className: "stk-nav" },
+                h(
+          "nav",
+          { className: "stk-nav" },
+          (tab === "home" || tab === "feed") &&
             h("div", {
               className: "stk-nav-scrub",
               onPointerDown: (event) => {
@@ -4953,59 +5033,69 @@
                 document.dispatchEvent(new CustomEvent("stashtok-scrub", { detail: { x: event.clientX } }));
               },
             }),
-            h(NavButton, {
-              active: tab === "home" && activeFeed.type !== "performer",
-              icon: "home",
-              label: "Home",
-              onClick: goHome,
-            }),
-            h(NavButton, {
-              active: activeFeed.type === "performer",
-              icon: "user",
-              label: "Performers",
-              onClick: () => {
-                setTab("performers");
-                goTo("performers");
-              },
-            }),
-            h(NavButton, {
-              active: activeFeed.type === "favorites",
-              icon: "heart",
-              label: "Favorites",
-              onClick: () => {
-                setPerformerFilter(null);
-                setActiveFeed({ id: "favorites", name: "Favorites", type: "favorites" });
-                setTab("home");
-                setRefreshKey((n) => n + 1);
-                goTo("favorites");
-              },
-            }),
-            h(NavButton, { active: false, icon: "tag", label: "Tags", onClick: () => { setTab("tags"); goTo("tags"); } }),
-            h(NavButton, { active: false, icon: "folder", label: "Folders", onClick: () => { setTab("folders"); goTo("folders"); } })
-          ),
+          h(NavButton, {
+            active: tab === "home" && activeFeed.type !== "performer",
+            icon: "home",
+            label: "Feed",
+            onClick: goHome,
+          }),
+          h(NavButton, {
+            active: tab === "performers",
+            icon: "user",
+            label: "Performers",
+            onClick: () => {
+              setTab("performers");
+              goTo("performers");
+            },
+          }),
+          navSlots.map((id, slot) => {
+            const option = NAV_OPTIONS.find((entry) => entry.id === id) || NAV_OPTIONS[0];
+            return h(NavButton, {
+              key: "slot-" + slot,
+              active: false,
+              icon: option.icon,
+              label: option.label,
+              onClick: () => runNav(option.id),
+              onLongPress: () => setNavPicker({ slot, id: option.id }),
+            });
+          })
+        ),
 
-        tab === "performers" || tab === "tags" || tab === "settings" || tab === "folder" || tab === "folders"
-          ? h(
-              "nav",
-              { className: "stk-nav" },
-              h(NavButton, { active: false, icon: "home", label: "Home", onClick: goHome }),
-              h(NavButton, { active: tab === "performers", icon: "user", label: "Performers", onClick: () => setTab("performers") }),
-              h(NavButton, {
-                active: false,
-                icon: "heart",
-                label: "Favorites",
-                onClick: () => {
-                  setPerformerFilter(null);
-                  setActiveFeed({ id: "favorites", name: "Favorites", type: "favorites" });
-                  setTab("home");
-                  setRefreshKey((n) => n + 1);
-                  goTo("favorites");
-                },
-              }),
-              h(NavButton, { active: tab === "tags", icon: "tag", label: "Tags", onClick: () => { setTab("tags"); goTo("tags"); } }),
-              h(NavButton, { active: tab === "folders" || tab === "folder", icon: "folder", label: "Folders", onClick: () => { setTab("folders"); goTo("folders"); } })
+        navPicker &&
+          h(
+            React.Fragment,
+            null,
+            h("div", { className: "stk-sheet-backdrop", onClick: () => setNavPicker(null) }),
+            h(
+              "div",
+              { className: "stk-sheet", onClick: (event) => event.stopPropagation() },
+              h(
+                "h3",
+                null,
+                h("span", null, "Navigation button"),
+                h("button", { className: "stk-btn", onClick: () => setNavPicker(null) }, h(Icon, { name: "x", size: 16 }))
+              ),
+              h("p", { className: "stk-sub" }, "Long-press the last three nav buttons to change what they open."),
+              NAV_OPTIONS.map((option) =>
+                h(
+                  "button",
+                  {
+                    key: option.id,
+                    className: "stk-marker-row" + (option.id === navPicker.id ? " stk-on" : ""),
+                    onClick: () => {
+                      const next = navSlots.slice();
+                      next[navPicker.slot] = option.id;
+                      setPref("navSlots", next);
+                      setNavPicker(null);
+                    },
+                  },
+                  h(Icon, { name: option.icon, size: 15 }),
+                  option.label,
+                  h("span", null, option.id === navPicker.id ? "current" : "")
+                )
+              )
             )
-          : null,
+          ),
 
         tab !== "settings" && tab !== "home" && tab !== "feed" &&
           h(
