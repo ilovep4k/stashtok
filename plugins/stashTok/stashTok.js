@@ -1547,17 +1547,33 @@
 
     /* ---- timeline -------------------------------------------------- */
 
-    function seekFromEvent(event) {
+    function seekAt(clientX) {
       const video = activeVideo();
-      const bar = event.currentTarget.querySelector(".stk-timeline-inner") || event.currentTarget;
-      const rect = bar.getBoundingClientRect();
-      const ratio = clamp((event.clientX - rect.left) / rect.width, 0, 1);
+      const bar = document.querySelector(".stk-timeline-inner");
+      const rect = (bar || stageRef.current || document.body).getBoundingClientRect();
+      const ratio = clamp((clientX - rect.left) / (rect.width || 1), 0, 1);
       const total = duration || (video && video.duration) || 0;
       const target = ratio * total;
       if (video) video.currentTime = target;
       setScrubTime(target);
       return target;
     }
+
+    function seekFromEvent(event) {
+      return seekAt(event.clientX);
+    }
+
+    /* taps in the top third of the tab bar scrub instead of switching tabs */
+    const seekAtRef = useRef(seekAt);
+    seekAtRef.current = seekAt;
+    useEffect(() => {
+      const onScrub = (event) => {
+        const x = event.detail && event.detail.x;
+        if (typeof x === "number") seekAtRef.current(x);
+      };
+      document.addEventListener("stashtok-scrub", onScrub);
+      return () => document.removeEventListener("stashtok-scrub", onScrub);
+    }, []);
 
     function onTimelineDown(event) {
       event.stopPropagation();
@@ -4930,6 +4946,13 @@
           h(
             "nav",
             { className: "stk-nav" },
+            h("div", {
+              className: "stk-nav-scrub",
+              onPointerDown: (event) => {
+                event.stopPropagation();
+                document.dispatchEvent(new CustomEvent("stashtok-scrub", { detail: { x: event.clientX } }));
+              },
+            }),
             h(NavButton, {
               active: tab === "home" && activeFeed.type !== "performer",
               icon: "home",
