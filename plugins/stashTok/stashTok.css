@@ -1951,7 +1951,9 @@ body.stk-anim .stk-account:active {
   display: flex;
   align-items: baseline;
   gap: 10px;
-  max-width: 100%;
+  /* reach past the action rail's gutter so the time pins to the screen edge */
+  width: calc(100% + 76px);
+  max-width: none;
 }
 
 .stk-caption-metatext {
