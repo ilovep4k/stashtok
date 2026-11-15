@@ -3301,6 +3301,146 @@ void main() {
     );
   }
 
+
+  /* ---- scrubber sprite index (shared: timeline hover + contact sheets) ---- */
+  const SPRITE_STAMP = /(\d{2}):(\d{2}):(\d{2})\.(\d{3})/;
+  function spriteSeconds(line) {
+    const m = SPRITE_STAMP.exec(line);
+    return m ? Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]) + Number(m[4]) / 1000 : 0;
+  }
+
+  function fetchSpriteCues(scene) {
+    const vttPath = rel(scene && scene.paths && scene.paths.vtt);
+    const spritePath = rel(scene && scene.paths && scene.paths.sprite);
+    if (!vttPath || !spritePath) return Promise.resolve(null);
+    return fetch(vttPath, { credentials: "same-origin" })
+      .then((res) => (res.ok ? res.text() : ""))
+      .then((text) => {
+        if (!text) return null;
+        const cues = [];
+        text.split(/\n\n/).forEach((block) => {
+          const box = /#xywh=(\d+),(\d+),(\d+),(\d+)/.exec(block);
+          const range = /^(\d{2}:\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}\.\d{3})/m.exec(block);
+          if (!box || !range) return;
+          cues.push({
+            start: spriteSeconds(range[1]),
+            end: spriteSeconds(range[2]),
+            x: Number(box[1]),
+            y: Number(box[2]),
+            w: Number(box[3]),
+            h: Number(box[4]),
+          });
+        });
+        if (!cues.length) return null;
+        let sheetW = 0;
+        let sheetH = 0;
+        cues.forEach((cue) => {
+          sheetW = Math.max(sheetW, cue.x + cue.w);
+          sheetH = Math.max(sheetH, cue.y + cue.h);
+        });
+        return { cues, src: spritePath, sheetW, sheetH };
+      })
+      .catch(() => null);
+  }
+
+  /* A 3x4 contact sheet built from the sprite Stash already rendered: twelve frames
+     at even marks, no new assets and no ffmpeg calls. */
+  function ContactSheet({ scene, duration, onClose, onPick }) {
+    const [tiles, setTiles] = useState(null);
+    const COLS = 3;
+    const ROWS = 4;
+
+    useEffect(() => {
+      let alive = true;
+      if (!scene) return undefined;
+      const total = Number(duration) || Number((scene.files && scene.files[0] && scene.files[0].duration) || 0);
+      fetchSpriteCues(scene).then((sheet) => {
+        if (!alive) return;
+        const count = COLS * ROWS;
+        const out = [];
+        for (let i = 0; i < count; i += 1) {
+          const at = total ? ((i + 0.5) / count) * total : 0;
+          if (sheet) {
+            const cue = sheet.cues.find((c) => at >= c.start && at < c.end) || sheet.cues[Math.min(sheet.cues.length - 1, Math.floor((i / count) * sheet.cues.length))];
+            out.push({ at, cue, sheet });
+          } else {
+            out.push({ at, cue: null, sheet: null });
+          }
+        }
+        setTiles(out);
+      });
+      return () => {
+        alive = false;
+      };
+    }, [scene && scene.id, duration]);
+
+    /* keep the popup inside the viewport with a 10% margin on every side */
+    const vw = (typeof window !== "undefined" ? window.innerWidth : 380) || 380;
+    const vh = (typeof window !== "undefined" ? window.innerHeight : 700) || 700;
+    const boxW = Math.min(380, vw * 0.8);
+    const boxH = vh * 0.8;
+    const byWidth = Math.floor((boxW - 46) / COLS);
+    const byHeight = Math.floor((boxH - 90) / ROWS / 0.5625);
+    const TILE = Math.max(64, Math.min(104, byWidth, byHeight));
+    return h(
+      React.Fragment,
+      null,
+      h("div", { className: "stk-sheet-backdrop", onClick: onClose }),
+      h(
+        "div",
+        { className: "stk-sheet stk-contact-sheet", onClick: (event) => event.stopPropagation() },
+        h(
+          "h3",
+          null,
+          h("span", null, "Contact sheet"),
+          h("button", { className: "stk-btn", onClick: onClose }, h(Icon, { name: "x", size: 16 }))
+        ),
+        !tiles
+          ? h("div", { className: "stk-state" }, h("div", { className: "stk-spinner" }))
+          : h(
+              "div",
+              { className: "stk-contact-grid" },
+              tiles.map((tile, index) => {
+                const scale = tile.cue ? TILE / tile.cue.w : 1;
+                return h(
+                  "button",
+                  {
+                    key: index,
+                    className: "stk-contact-cell",
+                    title: "Jump to " + fmtTime(tile.at),
+                    onClick: () => {
+                      if (onPick) onPick(tile.at);
+                      else onClose();
+                    },
+                    style: { width: TILE + "px", height: Math.round(TILE * 0.5625) + "px" },
+                  },
+                  tile.cue
+                    ? h("div", {
+                        className: "stk-contact-img",
+                        style: {
+                          width: TILE + "px",
+                          height: Math.round(tile.cue.h * scale) + "px",
+                          backgroundImage: `url("${tile.sheet.src}")`,
+                          backgroundSize: `${Math.round(tile.sheet.sheetW * scale)}px ${Math.round(tile.sheet.sheetH * scale)}px`,
+                          backgroundPosition: `-${Math.round(tile.cue.x * scale)}px -${Math.round(tile.cue.y * scale)}px`,
+                        },
+                      })
+                    : h("img", {
+                        className: "stk-contact-img",
+                        alt: "",
+                        src: `/scene/${tile.sheet ? scene.id : scene.id}/screenshot?t=${Math.round(tile.at)}`,
+                      }),
+                  h("span", { className: "stk-contact-at" }, fmtTime(tile.at))
+                );
+              })
+            )
+      )
+    );
+  }
+
+  /* which clip the user just opened: coming back should land the keyboard cursor on it */
+  let lastOpenedSceneId = "";
+
   function PerformerProfile({ performerId, folder, onBack, onPlay, onOpenTag, prefs }) {
     /* one view for both: a performer record, or a bare folder standing in for one */
     const isFolder = !!folder;
@@ -3326,6 +3466,22 @@ void main() {
     const [folderPick, setFolderPick] = useState(null);
     const [hoverScene, setHoverScene] = useState(null);
     const [sel, setSel] = useState(-1);
+    /* long press = contact sheet instead of opening the clip */
+    const [contactScene, setContactScene] = useState(null);
+    const holdRef = useRef({ timer: 0, fired: false });
+
+    /* coming back from a clip: put the cursor on the tile that was opened */
+    useEffect(() => {
+      if (!scenes.length || !lastOpenedSceneId) return undefined;
+      const index = scenes.findIndex((entry) => String(entry.id) === lastOpenedSceneId);
+      if (index < 0) return undefined;
+      setSel(index);
+      const timer = window.setTimeout(() => {
+        const tile = document.querySelector(".stk-tile.stk-sel");
+        if (tile && tile.scrollIntoView) tile.scrollIntoView({ block: "nearest" });
+      }, 120);
+      return () => window.clearTimeout(timer);
+    }, [scenes]);
     const [error, setError] = useState("");
 
     useEffect(() => {
@@ -3411,7 +3567,7 @@ void main() {
             findScenes(scene_filter: { path: { value: $p, modifier: INCLUDES } },
                        filter: { per_page: 200, sort: $sort, direction: $dir }) {
               count
-              scenes { id title date rating100 paths { screenshot preview } files { duration size width height } }
+              scenes { id title date rating100 paths { screenshot preview vtt sprite } files { duration size width height } }
             }
           }`,
           { p: folder, sort, dir: direction }
@@ -3437,7 +3593,7 @@ void main() {
             count
             scenes {
               id title date rating100
-              paths { screenshot preview }
+              paths { screenshot preview vtt sprite }
               files { duration size width height }
             }
           }
@@ -3588,9 +3744,11 @@ void main() {
         : ""
       : (performer.alias_list || []).slice(0, 3).join(" · ");
     const gridClass = density === 5 ? "stk-grid-5" : "stk-grid-3";
+
     const sortLabel = (SCENE_SORTS.find((entry) => entry[0] === sort) || SCENE_SORTS[0])[1];
 
     function openScene(scene) {
+      lastOpenedSceneId = String(scene.id);
       // the URL names the performer and the exact clip, like tiktok.com/@user/video/<id>
       /* one history entry: this goTo below is the push, the feed switch must not add another */
       onPlay({ sceneId: scene.id, tab: "scenes", sort, noPush: true });
@@ -3783,7 +3941,23 @@ void main() {
                   className: "stk-tile" + (sel === tileIndex ? " stk-sel" : ""),
                   "data-scene": scene.id,
                   style: tileStyle,
+                  onPointerDown: () => {
+                    holdRef.current.fired = false;
+                    window.clearTimeout(holdRef.current.timer);
+                    holdRef.current.timer = window.setTimeout(() => {
+                      holdRef.current.fired = true;
+                      setContactScene(scene);
+                    }, 380);
+                  },
+                  onPointerUp: () => window.clearTimeout(holdRef.current.timer),
+                  onPointerLeave: () => window.clearTimeout(holdRef.current.timer),
+                  onPointerCancel: () => window.clearTimeout(holdRef.current.timer),
                   onClick: () => {
+                    window.clearTimeout(holdRef.current.timer);
+                    if (holdRef.current.fired) {
+                      holdRef.current.fired = false;
+                      return;
+                    }
                     setSel(tileIndex);
                     openScene(scene);
                   },
@@ -3851,7 +4025,19 @@ void main() {
             )
           ),
 
-      viewer && h(ImageViewer, { image: viewer.image, rect: viewer.rect, onClose: () => setViewer(null) })
+      viewer && h(ImageViewer, { image: viewer.image, rect: viewer.rect, onClose: () => setViewer(null) }),
+      contactScene &&
+        h(ContactSheet, {
+          scene: contactScene,
+          duration: Number((contactScene.files && contactScene.files[0] && contactScene.files[0].duration) || 0),
+          onClose: () => setContactScene(null),
+          onPick: (at) => {
+            const scene = contactScene;
+            lastOpenedSceneId = String(scene && scene.id);
+            setContactScene(null);
+            if (scene && onPlay) onPlay({ sceneId: scene.id, startAt: at, tab: "performers", sort });
+          },
+        })
     );
   }
 

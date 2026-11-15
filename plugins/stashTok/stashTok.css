@@ -2294,3 +2294,51 @@ img.stk-scrub-cell {
   border-radius: 999px;
   padding: 2px 7px;
 }
+
+/* ---- long-press contact sheet (3x4 from the scrubber sprites) ---- */
+.stk-sheet.stk-contact-sheet {
+  /* centred in the viewport with a 10% gutter all round, never clipped at an edge */
+  position: fixed;
+  inset: 10%;
+  margin: auto;
+  width: auto;
+  max-width: 380px;
+  height: -moz-fit-content;
+  height: fit-content;
+  max-height: 100%;
+  overflow: auto;
+}
+.stk-contact-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 96px);
+  gap: 6px;
+  justify-content: center;
+  padding: 2px 0 4px;
+}
+.stk-contact-cell {
+  position: relative;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  cursor: pointer;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #000;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+.stk-contact-img {
+  display: block;
+  background-repeat: no-repeat;
+  object-fit: cover;
+  width: 100%;
+}
+.stk-contact-at {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.66);
+  border-radius: 3px;
+  padding: 0 3px;
+}
