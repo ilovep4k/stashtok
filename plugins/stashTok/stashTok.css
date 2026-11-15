@@ -2277,3 +2277,20 @@ img.stk-scrub-cell {
 /* VR canvas owns the pointer: it must not be treated as a swipe surface */
 .stk-vr-canvas { touch-action: none; pointer-events: auto; cursor: grab; }
 .stk-vr-canvas:active { cursor: grabbing; }
+
+/* tells you the VR view is running off Stash's preview, not the master */
+.stk-vr-chip {
+  position: absolute;
+  right: 10px;
+  top: 52px;
+  z-index: 4;
+  pointer-events: none;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+  padding: 2px 7px;
+}

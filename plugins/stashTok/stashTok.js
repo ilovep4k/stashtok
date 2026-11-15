@@ -940,10 +940,12 @@ void main() {
   const VR_FOV_MIN = 0.55;
   const VR_FOV_MAX = 2.9;
 
-  function VrCanvas({ videoRef, layout, sceneKey, previewUrl, onTap }) {
+  function VrCanvas({ videoRef, layout, sceneKey, previewUrl, onTap, onSource }) {
     const canvasRef = useRef(null);
     const tapRef = useRef(onTap);
     tapRef.current = onTap;
+    const srcRef = useRef(onSource);
+    srcRef.current = onSource;
     const viewRef = useRef({ yaw: 0, pitch: 0, fov: 1.75 });
     const touchRef = useRef({ points: new Map(), moved: 0, lastDist: 0, started: 0 });
 
@@ -1031,9 +1033,11 @@ void main() {
 
       let raf = 0;
       let last = 0;
+      let lastFrame = -1;
+      let lastKind = "";
       const draw = (now) => {
         raf = requestAnimationFrame(draw);
-        if (now - last < 28) return;
+        if (now - last < 16) return;
         last = now;
         const dpr = Math.min(2, window.devicePixelRatio || 1);
         const w = Math.max(320, Math.round((canvas.clientWidth || 640) * dpr));
@@ -1044,9 +1048,22 @@ void main() {
         }
         const source = pickSource();
         if (!source) return;
+        const kind = source === fallback ? "preview" : "master";
+        if (kind !== lastKind) {
+          lastKind = kind;
+          lastFrame = -1;
+          if (srcRef.current) srcRef.current(kind);
+        }
+        /* a 30fps source does not need 60 uploads a second: the texture is only
+           re-uploaded when a new frame has actually been decoded */
+        if (source.currentTime === lastFrame) {
+          gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+          return;
+        }
+        lastFrame = source.currentTime;
         const vw = source.videoWidth || 1920;
         const vh = source.videoHeight || 960;
-        const scratchW = Math.max(720, Math.min(3840, vw));
+        const scratchW = Math.max(720, Math.min(2048, Math.round(w * 1.15), vw));
         if (scratch.width !== scratchW) {
           scratch.width = scratchW;
           scratch.height = Math.max(2, Math.round((scratchW * vh) / Math.max(1, vw)));
@@ -1194,6 +1211,7 @@ void main() {
     const [muted, setMuted] = useState(cfg.autoplayMuted);
     /* VR clips default to the 2D rectilinear view; v toggles back to raw */
     const [vrMode, setVrMode] = useState(true);
+    const [vrSource, setVrSource] = useState("");
     const [scrubPreview, setScrubPreview] = useState(null);
     const spriteRef = useRef({ key: "", cues: [], ok: false });
     const [spriteTick, setSpriteTick] = useState(0);
@@ -2257,11 +2275,14 @@ void main() {
             style: { backgroundImage: `url("${rel(scene.paths && scene.paths.screenshot)}")` },
           }),
         h("div", { className: "stk-scan" }),
+        vrMode && vrSource === "preview" && vrLayout(scene) &&
+          h("div", { className: "stk-vr-chip" }, "preview"),
         h(VrCanvas, {
           videoRef,
           layout: vrMode ? vrLayout(scene) : null,
           sceneKey: item.key,
           previewUrl: rel(scene.paths && scene.paths.preview),
+          onSource: setVrSource,
           onTap: () => {
             const video = activeVideo();
             if (!video) return;
