@@ -842,7 +842,7 @@
     video.addEventListener("loadedmetadata", landOnStart, { once: true });
   }
 
-  function FeedView({ spec, cfg, refreshKey, onBack, onSearch, onSettings, onOpenPerformer, onOpenTag, onDeriveFeed, onEditFeed, onOpenFolder, feeds, onSwitchFeed, onNewFeed }) {
+  function FeedView({ spec, cfg, refreshKey, onBack, onSearch, onSettings, onOpenPerformer, onOpenTag, onDeriveFeed, onEditFeed, onOpenFolder, feeds, onSwitchFeed, onNewFeed, desktop }) {
     const sfw = !!cfg.sfw;
     const [items, setItems] = useState([]);
     const [index, setIndex] = useState(0);
@@ -931,6 +931,9 @@
     const speedRef = useRef(speed);
     speedRef.current = Number(speed) || 1;
     const hydratedRef = useRef(false);
+    /* which scene we already restored a start time for: paging in more items must
+       never re-seek the clip the user is watching */
+    const seekedSceneRef = useRef(null);
 
     useEffect(() => {
       const onResize = () => {
@@ -1040,7 +1043,9 @@
         Array.from(stage.querySelectorAll("video")).forEach((video) => {
           if (video.classList.contains("stk-active")) {
             const start = Number(item && item.startAt) || 0;
-            if (video.paused) {
+            const activeKey = item ? item.key : null;
+            if (video.paused && seekedSceneRef.current !== activeKey) {
+              seekedSceneRef.current = activeKey;
               seekThenPlay(video, start, playGuarded);
               window.setTimeout(() => {
                 const nowActive = stage.querySelector(".stk-video.stk-active");
@@ -1272,6 +1277,7 @@
       setIndex((i) => Math.max(0, i - 1));
     }, [resetZoom]);
 
+
     /* ---- rating ---------------------------------------------------- */
 
     const commitRating = useCallback(
@@ -1294,6 +1300,46 @@
       if (next != null) setHeartBurst((n) => n + 1);
       buzz(12);
     }, [item, rating, cfg.heartRating, commitRating]);
+
+    /* desktop keyboard map: arrows scroll and scrub, space pauses, L likes, M mutes */
+    useEffect(() => {
+      if (!desktop) return undefined;
+      function onKey(event) {
+        const tag = (event.target && event.target.tagName) || "";
+        if (tag === "INPUT" || tag === "TEXTAREA" || (event.target && event.target.isContentEditable)) return;
+        const video = activeVideo ? activeVideo() : null;
+        const key = event.key;
+        if (key === "ArrowDown" || key === "PageDown") {
+          event.preventDefault();
+          goNext();
+        } else if (key === "ArrowUp" || key === "PageUp") {
+          event.preventDefault();
+          goPrev();
+        } else if (key === "ArrowRight" || key === "ArrowLeft") {
+          if (!video) return;
+          event.preventDefault();
+          const step = key === "ArrowRight" ? 5 : -5;
+          video.currentTime = Math.max(0, Math.min((video.duration || 0) - 0.2, video.currentTime + step));
+          setScrubTime(video.currentTime);
+        } else if (key === " " || key === "k") {
+          event.preventDefault();
+          if (!video) return;
+          if (video.paused) playGuarded(video);
+          else video.pause();
+        } else if (key === "l" || key === "L") {
+          event.preventDefault();
+          toggleHeart();
+        } else if (key === "m" || key === "M") {
+          event.preventDefault();
+          if (!video) return;
+          const next = !video.muted;
+          video.muted = next;
+          setMuted(next);
+        }
+      }
+      window.addEventListener("keydown", onKey);
+      return () => window.removeEventListener("keydown", onKey);
+    }, [desktop, goNext, goPrev, toggleHeart]);
 
     /* ---- hold to speed -------------------------------------------- */
 
@@ -1751,6 +1797,8 @@
     const tags = scene.tags || [];
     const handle = resolveHandle(scene, file);
 
+
+
     return h(
       "div",
       { className: "stash-tok stk-embedded" + (hud ? "" : " stk-hud-hidden") },
@@ -2004,7 +2052,7 @@
             h(
               "button",
               { className: "stk-handle-at", onClick: (event) => { event.stopPropagation(); openHandle(); } },
-              "@" + String(handle.name || "").replace(/\s+/g, "").toLowerCase()
+              String(handle.name || "").replace(/\s+/g, " ").trim()
             )
           ),
           (() => {
@@ -4676,6 +4724,21 @@
     const [prefs, setPrefs] = useState(loadPrefs);
     const [navPicker, setNavPicker] = useState(null);
 
+    /* wide screens get the desktop shell: sidebar + one rounded video pane */
+    const [desktop, setDesktop] = useState(
+      () => typeof window !== "undefined" && window.matchMedia("(min-width: 900px)").matches
+    );
+    useEffect(() => {
+      const mq = window.matchMedia("(min-width: 900px)");
+      const onChange = () => setDesktop(mq.matches);
+      if (mq.addEventListener) mq.addEventListener("change", onChange);
+      else if (mq.addListener) mq.addListener(onChange);
+      return () => {
+        if (mq.removeEventListener) mq.removeEventListener("change", onChange);
+        else if (mq.removeListener) mq.removeListener(onChange);
+      };
+    }, []);
+
     /* tiles fade and rise as they scroll into view: one entrance each, never replayed */
     useEffect(() => {
       if (!("IntersectionObserver" in window)) return;
@@ -5273,6 +5336,7 @@
     } else {
       body = h(FeedView, {
         key: activeFeed.id + ":" + refreshKey,
+        desktop,
         spec: activeFeed,
         cfg: Object.assign({}, cfg, { windowDays: prefs.feedWindow === "all" ? 0 : Number(prefs.feedWindow) || 0 }),
         refreshKey,
@@ -5317,12 +5381,45 @@
     return h(
       "div",
       {
-        className: "stash-tok-wrap" + (locked ? " stk-locked" : "") + (sfw ? " stk-sfw" : ""),
+        className:
+          "stash-tok-wrap" +
+          (locked ? " stk-locked" : "") +
+          (sfw ? " stk-sfw" : "") +
+          (desktop ? " stk-desktop" : ""),
         ref: shellRef,
       },
       h(
         "div",
-        { style: { position: "fixed", inset: 0, zIndex: 9000, display: "flex", flexDirection: "column", background: "#000" } },
+        {
+          className: "stk-fixed",
+          style: { position: "fixed", inset: 0, zIndex: 9000, display: "flex", flexDirection: "column", background: "#000" },
+        },
+        desktop &&
+          h(
+            "aside",
+            { className: "stk-desk-rail" },
+            h("div", { className: "stk-desk-logo" }, "StashTok"),
+            [
+              ["feed", "Feed"],
+              ["performers", "Performers"],
+              ["favorites", "Favorites"],
+              ["tags", "Tags"],
+              ["markers", "Markers"],
+              ["folders", "Folders"],
+            ].map(([id, label]) =>
+              h(
+                "button",
+                {
+                  key: id,
+                  className:
+                    "stk-desk-link" +
+                    ((id === "feed" && tab === "home") || tab === id ? " stk-on" : ""),
+                  onClick: () => (id === "feed" ? goHome() : runNav(id)),
+                },
+                label
+              )
+            )
+          ),
         body,
 
         /* operations sits beside settings: one tap, never buried in settings */
