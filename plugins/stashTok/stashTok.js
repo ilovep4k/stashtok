@@ -1213,12 +1213,19 @@
 
     function flagCurrent() {
       if (!item) return;
+      const key = item.key;
       setSheet(null);
       buzz(40);
-      /* advance either way: a failed flag must not leave the user parked on the clip */
-      flagScene(item.scene, cfg)
-        .catch(() => {})
-        .then(() => goNext());
+      /* flagged clips leave the feed immediately: the next one slides into this slot,
+         so there is nothing to "scroll" and nothing to come back to when swiping up */
+      setItems((prev) => {
+        const at = prev.findIndex((entry) => entry.key === key);
+        if (at < 0) return prev;
+        return prev.slice(0, at).concat(prev.slice(at + 1));
+      });
+      /* the next clip slides into this slot; only clamp when we flagged the last one */
+      setIndex((cur) => Math.max(0, Math.min(cur, items.length - 2)));
+      flagScene(item.scene, cfg).catch(() => {});
     }
 
     function rotate(delta) {
@@ -1371,6 +1378,9 @@
         } else if (key === "l" || key === "L") {
           event.preventDefault();
           toggleHeart();
+        } else if (key === "f" || key === "F") {
+          event.preventDefault();
+          flagCurrent();
         } else if (key === "m" || key === "M") {
           event.preventDefault();
           if (!video) return;
@@ -1381,7 +1391,7 @@
       }
       window.addEventListener("keydown", onKey);
       return () => window.removeEventListener("keydown", onKey);
-    }, [desktop, goNext, goPrev, toggleHeart]);
+    }, [desktop, goNext, goPrev, toggleHeart, flagCurrent]);
 
     /* ---- hold to speed -------------------------------------------- */
 
@@ -3302,6 +3312,10 @@
                     muted: true,
                     loop: true,
                     playsInline: true,
+                    /* only reveal the preview once it can actually paint a frame */
+                    onLoadedData: (event) => {
+                      if (event && event.currentTarget) event.currentTarget.classList.add("stk-preview-ready");
+                    },
                     onError: (event) => {
                       /* no generated preview for this scene: keep the still, don't blank the tile */
                       if (event && event.currentTarget) event.currentTarget.style.display = "none";

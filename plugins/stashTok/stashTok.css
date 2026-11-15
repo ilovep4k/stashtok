@@ -2086,6 +2086,13 @@ body.stk-anim .stk-account:active {
   object-fit: cover;
   pointer-events: none;
   border-radius: inherit;
+  /* stays invisible until a frame has decoded: a preview that never paints must not
+     blank the still underneath */
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+.stk-tile-preview.stk-preview-ready {
+  opacity: 1;
 }
 
 /* a profile page brings its own buttons; the floating gear lands on the heart */
