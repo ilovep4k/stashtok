@@ -654,7 +654,7 @@
   bottom: 44px;
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 3px;
   pointer-events: none;
   text-shadow: 0 1px 4px rgba(0,0,0,.85);
 }
@@ -792,9 +792,9 @@
   border: 0;
   padding: 0;
   margin: 0;
-  color: #8ecdf5;
+  color: rgba(255, 255, 255, 0.55);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 400;
   cursor: pointer;
 }
 .stk-feed-pill-sm {
@@ -1353,7 +1353,7 @@
   max-height: 40px;
   overflow: hidden;
 }
-.stk-hashtext { color: #fff; font-weight: 600; }
+.stk-hashtext { color: rgba(255, 255, 255, 0.55); font-weight: 400; }
 
 /* right rail: avatar first, tighter rhythm, text shadow like theirs */
 .stk-rail {
@@ -1735,7 +1735,7 @@
 /* caption: path on its own line, date/duration/res under it */
 .stk-caption { display: flex; flex-direction: column; gap: 1px; }
 .stk-caption-path { color: #fff; }
-.stk-caption-meta { color: rgba(255, 255, 255, 0.72); }
+.stk-caption-meta { color: rgba(255, 255, 255, 0.72); font-weight: 400 !important; }
 
 /* settings reachable from every screen */
 .stk-gear-fab {
@@ -2216,3 +2216,38 @@ img.stk-scrub-cell {
   padding: 1px 6px;
   border-radius: 4px;
 }
+
+/* ---- feed handle: verified marker, caption title, folder path ---- */
+.stk-handle-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.stk-verified {
+  display: inline-flex;
+  align-items: center;
+  color: #4da3ff;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.75));
+  flex: 0 0 auto;
+}
+.stk-verified svg { stroke-width: 2; }
+
+/* the caption reads as a caption: no weight, sits right under the name */
+.stk-caption-title {
+  font-weight: 400 !important;
+  font-size: 12.5px;
+  line-height: 1.32;
+  color: rgba(255, 255, 255, 0.88) !important;
+  letter-spacing: 0;
+}
+.stk-caption { gap: 2px; margin-top: -2px; }
+.stk-caption-path {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  font-weight: 400 !important;
+  color: rgba(255, 255, 255, 0.72) !important;
+}
+.stk-caption-path svg { opacity: 0.7; flex: 0 0 auto; }
+.stk-caption-path span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

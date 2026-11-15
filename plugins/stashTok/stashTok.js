@@ -71,6 +71,7 @@
     image: "M3.5 5.5h17v13h-17zM8.2 11.2a1.6 1.6 0 1 0 0-3.2 1.6 1.6 0 0 0 0 3.2zM4.2 17.2l5-5 3.6 3.6 2.6-2.6 4.4 4.4",
     sparkle: "M12 3.5 13.8 9l5.7 1.8L13.8 13 12 18.5 10.2 13 4.5 10.8 10.2 9 12 3.5z",
     rotate: "M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4",
+    verified: "M12 2.3l2.5 1.4 2.9-.2 1.2 2.6 2.4 1.6-1 2.8 1 2.8-2.4 1.6-1.2 2.6-2.9-.2L12 21.7l-2.5-1.4-2.9.2-1.2-2.6-2.4-1.6 1-2.8-1-2.8 2.4-1.6 1.2-2.6 2.9.2L12 2.3zM8.5 12.1l2.3 2.3 4.7-4.8",
   };
 
   function Icon({ name, size = 22, className = "", filled = false }) {
@@ -2385,7 +2386,13 @@ void main() {
               "button",
               { className: "stk-handle-at", onClick: (event) => { event.stopPropagation(); openHandle(); } },
               String(handle.name || "").replace(/\s+/g, " ").trim()
-            )
+            ),
+            handle.performer &&
+              h(
+                "span",
+                { className: "stk-verified", title: "Performer", "aria-label": "Performer" },
+                h(Icon, { name: "verified", size: 14 })
+              )
           ),
           (() => {
             const scene = item && item.scene;
@@ -2401,15 +2408,21 @@ void main() {
             return h(
               "div",
               { className: "stk-caption" },
-              scene.title && h("div", { className: "stk-caption-line" }, scene.title),
-              path && h("div", { className: "stk-caption-line stk-caption-path" }, path),
+              scene.title && h("div", { className: "stk-caption-line stk-caption-title" }, scene.title),
               h(
                 "div",
                 { className: "stk-caption-line stk-caption-meta" },
                 h("span", { className: "stk-caption-metatext" }, meta.join(" • ")),
                 !sfw &&
                   h("span", { className: "stk-caption-time" }, `${fmtTime(time)} / ${fmtTime(duration)}`)
-              )
+              ),
+              path &&
+                h(
+                  "div",
+                  { className: "stk-caption-line stk-caption-path" },
+                  h(Icon, { name: "folder", size: 11 }),
+                  h("span", null, path)
+                )
             );
           })(),
           performers.length > 1 &&
