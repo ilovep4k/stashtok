@@ -670,6 +670,20 @@
     navSlots: ["favorites", "tags", "folders"],
   };
 
+  /* one-time: earlier builds stored a sort per performer, which kept resurrecting
+     "recently added" on pages the user had opened before. Drop them. */
+  const SORT_PURGE_KEY = "stashTok.sortReset.v3";
+  try {
+    if (!window.localStorage.getItem(SORT_PURGE_KEY)) {
+      Object.keys(window.localStorage)
+        .filter((key) => /^stashTok\.perfSort/.test(key))
+        .forEach((key) => window.localStorage.removeItem(key));
+      window.localStorage.setItem(SORT_PURGE_KEY, "1");
+    }
+  } catch (e) {
+    /* ignore */
+  }
+
   function loadPrefs() {
     try {
       const parsed = JSON.parse(window.localStorage.getItem(PREFS_KEY) || "{}");
@@ -2612,7 +2626,7 @@
     // would keep overriding the file-size default for a day after this change
     const sortKey = "stashTok.perfSort.v2." + performerId;
     const favKey = "stashTok.perfFavFirst." + performerId;
-    const [sort, setSort] = useState(() => readSortPref(sortKey, (prefs && prefs.performerSort) || "filesize"));
+    const [sort, setSort] = useState(() => (prefs && prefs.performerSort) || "filesize");
     const [favFirst, setFavFirst] = useState(() => readSortPref(favKey, false));
     const [sortOpen, setSortOpen] = useState(false);
     const [density, setDensity] = useState(3);
@@ -2884,7 +2898,6 @@
             value: sort,
             onPick: (key) => {
               setSort(key);
-              writeSortPref(sortKey, key);
               setSortOpen(false);
             },
             onClose: () => setSortOpen(false),
