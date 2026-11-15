@@ -1732,6 +1732,8 @@
   position: fixed;
   top: calc(8px + env(safe-area-inset-top));
   right: 10px;
+  left: auto;
+  margin: 0;
   z-index: 9500;
   width: 38px;
   height: 38px;
