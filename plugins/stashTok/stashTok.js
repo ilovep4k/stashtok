@@ -842,7 +842,7 @@
     video.addEventListener("loadedmetadata", landOnStart, { once: true });
   }
 
-  function FeedView({ spec, cfg, refreshKey, onBack, onSearch, onSettings, onOpenPerformer, onOpenTag, onDeriveFeed, onEditFeed, onOpenFolder, feeds, onSwitchFeed, onNewFeed, desktop }) {
+  function FeedView({ spec, cfg, refreshKey, onBack, onSearch, onSettings, onOpenPerformer, onOpenTag, onDeriveFeed, onEditFeed, onOpenFolder, onOpenFolderProfile, feeds, onSwitchFeed, onNewFeed, desktop }) {
     const sfw = !!cfg.sfw;
     const [items, setItems] = useState([]);
     const [index, setIndex] = useState(0);
@@ -2747,7 +2747,10 @@
     );
   }
 
-  function PerformerProfile({ performerId, onBack, onPlay, onOpenTag, prefs }) {
+  function PerformerProfile({ performerId, folder, onBack, onPlay, onOpenTag, prefs }) {
+    /* one view for both: a performer record, or a bare folder standing in for one */
+    const isFolder = !!folder;
+    const profileKey = isFolder ? "folder:" + folder : performerId;
     const [performer, setPerformer] = useState(null);
     const [scenes, setScenes] = useState([]);
     const [markers, setMarkers] = useState([]);
@@ -2760,16 +2763,54 @@
     const pageRef = useRef(null);
     // v2: older builds stored their own default ("updated_at") per performer, which
     // would keep overriding the file-size default for a day after this change
-    const sortKey = "stashTok.perfSort.v2." + performerId;
-    const favKey = "stashTok.perfFavFirst." + performerId;
+    const sortKey = "stashTok.perfSort.v2." + profileKey;
+    const favKey = "stashTok.perfFavFirst." + profileKey;
     const [sort, setSort] = useState(() => (prefs && prefs.performerSort) || "filesize");
     const [favFirst, setFavFirst] = useState(() => readSortPref(favKey, false));
     const [sortOpen, setSortOpen] = useState(false);
     const [density, setDensity] = useState(3);
     const [folderPick, setFolderPick] = useState(null);
+    const [hoverScene, setHoverScene] = useState(null);
     const [error, setError] = useState("");
 
     useEffect(() => {
+      if (!isFolder) return undefined;
+      let alive = true;
+      const name = String(folder).split("/").filter(Boolean).pop() || folder;
+      const favs = loadFolderFavs();
+      setPerformer({
+        id: "folder:" + folder,
+        name,
+        folder,
+        favorite: favs.indexOf(folder) >= 0,
+        alias_list: [],
+        tags: [],
+        scene_count: null,
+        image_count: null,
+      });
+      gql(
+        `query StashTokFolderMarkers($p: String!) {
+          findSceneMarkers(filter: { per_page: 60, sort: "random" },
+                           scene_marker_filter: { scene_filter: { path: { value: $p, modifier: INCLUDES } } }) {
+            count
+            scene_markers { id seconds title primary_tag { id name } scene { id paths { screenshot } } }
+          }
+        }`,
+        { p: folder }
+      )
+        .then((data) => {
+          if (!alive) return;
+          setMarkers(data.findSceneMarkers.scene_markers || []);
+          setMarkerCount(data.findSceneMarkers.count || 0);
+        })
+        .catch(() => alive && setMarkers([]));
+      return () => {
+        alive = false;
+      };
+    }, [folder, isFolder]);
+
+    useEffect(() => {
+      if (isFolder) return undefined;
       let alive = true;
       gql(
         `query StashTokPerformer($id: ID!) {
@@ -2809,6 +2850,31 @@
     useEffect(() => {
       let alive = true;
       const direction = sort === "title" ? "ASC" : "DESC";
+      if (isFolder) {
+        gql(
+          `query StashTokFolderScenes($p: String!, $sort: String, $dir: SortDirectionEnum) {
+            findScenes(scene_filter: { path: { value: $p, modifier: INCLUDES } },
+                       filter: { per_page: 200, sort: $sort, direction: $dir }) {
+              count
+              scenes { id title date rating100 paths { screenshot preview } files { duration size width height } }
+            }
+          }`,
+          { p: folder, sort, dir: direction }
+        )
+          .then((data) => {
+            if (!alive) return;
+            const rows = data.findScenes.scenes || [];
+            const orderedRows = favFirst
+              ? rows.filter((row) => (row.rating100 || 0) > 0).concat(rows.filter((row) => !((row.rating100 || 0) > 0)))
+              : rows;
+            setScenes(orderedRows);
+            setPerformer((cur) => (cur ? Object.assign({}, cur, { scene_count: data.findScenes.count }) : cur));
+          })
+          .catch(() => alive && setScenes([]));
+        return () => {
+          alive = false;
+        };
+      }
       gql(
         `query StashTokPerformerScenes($id: ID!, $sort: String, $dir: SortDirectionEnum) {
           findScenes(scene_filter: { performers: { value: [$id], modifier: INCLUDES } },
@@ -2816,7 +2882,7 @@
             count
             scenes {
               id title date rating100
-              paths { screenshot }
+              paths { screenshot preview }
               files { duration size width height }
             }
           }
@@ -2836,11 +2902,32 @@
       return () => {
         alive = false;
       };
-    }, [performerId, sort, favFirst]);
+    }, [performerId, sort, favFirst, folder, isFolder]);
 
     useEffect(() => {
       if (media !== "images") return undefined;
       let alive = true;
+      if (isFolder) {
+        gql(
+          `query StashTokFolderImages($p: String!, $sort: String) {
+            findImages(image_filter: { path: { value: $p, modifier: INCLUDES } },
+                       filter: { per_page: 60, sort: $sort, direction: DESC }) {
+              count
+              images { id title paths { thumbnail image } }
+            }
+          }`,
+          { p: folder, sort: sort === "filesize" || sort === "resolution" ? sort : "updated_at" }
+        )
+          .then((data) => {
+            if (!alive) return;
+            setImages(data.findImages.images || []);
+            setPerformer((cur) => (cur ? Object.assign({}, cur, { image_count: data.findImages.count }) : cur));
+          })
+          .catch(() => alive && setImages([]));
+        return () => {
+          alive = false;
+        };
+      }
       gql(
         `query StashTokPerformerImages($id: ID!, $sort: String) {
           findImages(image_filter: { performers: { value: [$id], modifier: INCLUDES } },
@@ -2856,11 +2943,21 @@
       return () => {
         alive = false;
       };
-    }, [performerId, media, sort]);
+    }, [performerId, media, sort, folder, isFolder]);
 
     async function toggleFollow() {
       if (!performer) return;
       const next = !performer.favorite;
+      if (isFolder) {
+        const favs = loadFolderFavs();
+        const at = favs.indexOf(folder);
+        if (next && at < 0) favs.push(folder);
+        if (!next && at >= 0) favs.splice(at, 1);
+        saveFolderFavs(favs);
+        setPerformer(Object.assign({}, performer, { favorite: next }));
+        buzz(10);
+        return;
+      }
       setPerformer(Object.assign({}, performer, { favorite: next }));
       try {
         await gql(
@@ -2884,18 +2981,20 @@
 
     const cover = rel(performer.image_path);
     const stats = [
-      ["Scenes", performer.scene_count],
+      ["Scenes", performer.scene_count == null ? scenes.length : performer.scene_count],
       ["Markers", markerCount == null ? "—" : markerCount],
-      ["Images", performer.image_count],
-      ["O", performer.o_counter || 0],
+      ["Images", performer.image_count == null ? images.length : performer.image_count],
     ];
+    /* no location/birthdate: aliases for a performer, the path for a folder */
+    const metaLine = isFolder ? folder : (performer.alias_list || []).slice(0, 3).join(" · ");
     const gridClass = density === 5 ? "stk-grid-5" : "stk-grid-3";
     const sortLabel = (SCENE_SORTS.find((entry) => entry[0] === sort) || SCENE_SORTS[0])[1];
 
     function openScene(scene) {
       // the URL names the performer and the exact clip, like tiktok.com/@user/video/<id>
       onPlay({ sceneId: scene.id, tab: "scenes", sort });
-      goTo("performer/" + encodeURIComponent(performer.name) + "/" + scene.id);
+      if (isFolder) goTo("folder/" + encodeURIComponent(folder) + "/" + scene.id);
+      else goTo("performer/" + encodeURIComponent(performer.name) + "/" + scene.id);
     }
 
     return h(
@@ -2951,12 +3050,8 @@
           "div",
           { style: { flex: "1 1 auto", minWidth: 0 } },
           h("div", { className: "stk-profile-name" }, performer.name),
-          performer.alias_list && performer.alias_list.length > 0
-            ? h("div", { className: "stk-account-meta" }, performer.alias_list.slice(0, 3).join(" · "))
-            : null,
-          performer.birthdate || performer.country
-            ? h("div", { className: "stk-account-meta" }, [performer.birthdate, performer.country].filter(Boolean).join(" · "))
-            : null
+
+          metaLine ? h("div", { className: "stk-account-meta stk-account-path" }, metaLine) : null
         )
       ),
       h(
@@ -3088,8 +3183,27 @@
                   "data-scene": scene.id,
                   style: tileStyle,
                   onClick: () => openScene(scene),
+                  onMouseEnter: () => {
+                    if (window.innerWidth >= 900) setHoverScene(scene.id);
+                  },
+                  onMouseLeave: () => setHoverScene((cur) => (cur === scene.id ? null : cur)),
                 },
                 h("div", { className: "stk-tile-photo", style: { backgroundImage: `url("${rel(scene.paths && scene.paths.screenshot)}")` } }),
+                hoverScene === scene.id &&
+                  scene.paths &&
+                  scene.paths.preview &&
+                  h("video", {
+                    className: "stk-tile-preview",
+                    src: rel(scene.paths.preview),
+                    autoPlay: true,
+                    muted: true,
+                    loop: true,
+                    playsInline: true,
+                    onError: (event) => {
+                      /* no generated preview for this scene: keep the still, don't blank the tile */
+                      if (event && event.currentTarget) event.currentTarget.style.display = "none";
+                    },
+                  }),
                 h("span", { className: "stk-tile-dur" }, fmtTime((scene.files && scene.files[0] && scene.files[0].duration) || 0)),
                 scene.rating100 >= 60 && h("span", { className: "stk-tile-heart" }, h(Icon, { name: "heart", size: 12, filled: true }))
               );
@@ -3133,12 +3247,19 @@
     );
   }
 
-  function PerformersPage({ onPick, onBack, onOpenTag, initialPerformer, prefs }) {
+  function PerformersPage({ onPick, onBack, onOpenTag, initialPerformer, prefs, onProfileOpen }) {
+    /* the floating settings button sits on top of the profile's own buttons */
     const [rows, setRows] = useState(null);
     const [query, setQuery] = useState("");
     const [sort, setSort] = useState(() => readSortPref("stashTok.performerListSort", "updated_at"));
     const [sortOpen, setSortOpen] = useState(false);
     const [selected, setSelected] = useState(initialPerformer || null);
+
+    /* the floating settings button sits on top of the profile's own buttons */
+    useEffect(() => {
+      if (onProfileOpen) onProfileOpen(!!(selected || initialPerformer));
+    }, [selected, initialPerformer, onProfileOpen]);
+    useEffect(() => () => onProfileOpen && onProfileOpen(false), [onProfileOpen]);
     const holdTimer = useRef(0);
     const holdFired = useRef(false);
 
@@ -4911,6 +5032,8 @@
     const [performerFilter, setPerformerFilter] = useState(null);
     const [tagFilter, setTagFilter] = useState(null);
     const [folderView, setFolderView] = useState(null);
+    const [folderProfile, setFolderProfile] = useState(null);
+    const [profileOpen, setProfileOpen] = useState(false);
 
     /* thumbnails stay blurred; pressing one peeks at it, nothing switches the blur off */
     useEffect(() => {
@@ -4987,9 +5110,13 @@
         return;
       }
       if (rest.indexOf("folder/") === 0) {
-        const path = decodeURIComponent(rest.slice("folder/".length));
-        setFolderView({ name: path.split("/").filter(Boolean).pop() || path, folder: path });
-        setTab("folder");
+        const raw = rest.slice("folder/".length);
+        /* a trailing numeric segment is a scene id, not part of the folder path */
+        const parts = raw.split("/");
+        const tail = parts[parts.length - 1] || "";
+        const path = decodeURIComponent(/^\d+$/.test(tail) ? parts.slice(0, -1).join("/") : raw);
+        setFolderProfile(path);
+        setTab("folderProfile");
         return;
       }
       if (rest.indexOf("performer/") === 0) {
@@ -5214,6 +5341,7 @@
         onPick: openProfile,
         onBack: () => setTab("home"),
         onOpenTag: openTag,
+        onProfileOpen: setProfileOpen,
         initialPerformer: performerFilter,
         prefs,
       });
@@ -5284,6 +5412,35 @@
           setRefreshKey((n) => n + 1);
           goTo("scene/" + sceneId);
         },
+      });
+    } else if (tab === "folderProfile" && folderProfile) {
+      body = h(PerformerProfile, {
+        folder: folderProfile,
+        onBack: () => {
+          if (window.history.length > 1) window.history.back();
+          else {
+            setTab("home");
+            goHome();
+          }
+        },
+        onPlay: (payload) => {
+          const name = String(folderProfile).split("/").filter(Boolean).pop() || folderProfile;
+          setActiveFeed({
+            id: "folder-" + folderProfile,
+            name,
+            type: "foryou",
+            pathIncludes: folderProfile,
+            sort: (payload && payload.sort) || "filesize",
+            startSceneId: (payload && payload.sceneId) || null,
+            startAt: (payload && payload.startAt) || null,
+            origin: { kind: "folder", folder: folderProfile },
+          });
+          setTab("home");
+          setRefreshKey((n) => n + 1);
+          goTo(payload && payload.sceneId ? "scene/" + payload.sceneId : "folder/" + encodeURIComponent(folderProfile));
+        },
+        onOpenTag: openTag,
+        prefs,
       });
     } else if (tab === "ops") {
       body = h(
@@ -5423,7 +5580,7 @@
         body,
 
         /* operations sits beside settings: one tap, never buried in settings */
-        tab !== "settings" && tab !== "ops" && tab !== "home" &&
+        tab !== "settings" && tab !== "ops" && tab !== "home" && tab !== "folderProfile" && !profileOpen &&
           h(
             "button",
             {
@@ -5439,7 +5596,7 @@
 
         /* one settings entry point for every screen that isn't the feed itself */
         tab !== "settings" && tab !== "ops" &&
-          tab !== "home" &&
+          tab !== "home" && tab !== "folderProfile" && !profileOpen &&
           h(
             "button",
             {

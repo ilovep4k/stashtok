@@ -1419,6 +1419,7 @@
 
 .stk-cover-fav {
   position: absolute;
+  z-index: 70;
   top: calc(8px + env(safe-area-inset-top));
   right: 8px;
   z-index: 3;
@@ -2032,15 +2033,34 @@ body.stk-anim .stk-account:active {
   inset: auto;
 }
 
+/* profile / grid pages breathe on a wide screen instead of staying phone-sized */
 .stk-desktop .stk-page {
-  max-width: 560px;
-  margin: 10px auto 0;
-  height: calc(100vh - 96px);
+  width: 100%;
+  max-width: 1180px;
+  margin: 12px auto;
+  height: calc(100vh - 24px);
   border-radius: 18px;
   overflow-y: auto;
   background: #080808;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
 }
+
+.stk-desktop .stk-page .stk-grid-3,
+.stk-desktop .stk-page .stk-grid-5 {
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 8px;
+  padding: 8px;
+}
+
+.stk-desktop .stk-page .stk-cover {
+  height: 190px;
+  border-radius: 16px 16px 0 0;
+}
+
+/* desktop navigation lives in the sidebar; the phone tab bar is redundant */
+.stk-desktop .stk-nav { display: none; }
+
+.stk-desktop .stash-tok { height: calc(100vh - 24px); margin-bottom: 12px; }
 
 .stk-desktop .stk-nav {
   width: calc(100% - 32px);
@@ -2053,3 +2073,19 @@ body.stk-anim .stk-account:active {
 
 .stk-desktop .stk-timeline { border-radius: 0; }
 .stk-desktop .stk-touch-ring { transform: translate(-50%, -50%) scale(0.9); }
+
+/* desktop hover: play the generated preview instead of a still */
+.stk-tile-preview {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+  border-radius: inherit;
+}
+
+/* a profile page brings its own buttons; the floating gear lands on the heart */
+.stash-tok-wrap:has(.stk-profile-name) .stk-gear-fab {
+  display: none;
+}
