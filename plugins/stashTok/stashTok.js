@@ -536,12 +536,20 @@
     return window.location.hash.replace(/^#\/?/, "");
   }
 
+  let NAV_DEPTH = 0;
+  window.addEventListener("popstate", () => {
+    if (NAV_DEPTH > 0) NAV_DEPTH -= 1;
+  });
+
   function goTo(path, replace) {
     const clean = String(path || "").replace(/^\/+/, "");
     const next = clean ? "#/" + clean : "#/";
     if (window.location.hash === next) return;
     if (replace) window.history.replaceState({}, "", baseRoot() + next);
-    else window.location.hash = next;
+    else {
+      NAV_DEPTH += 1;
+      window.location.hash = next;
+    }
   }
 
   function fetchFeedPage(spec, cfg, page) {
@@ -4930,7 +4938,19 @@
     const navSlots = (prefs.navSlots && prefs.navSlots.length === 3 ? prefs.navSlots : DEFAULT_NAV_SLOTS).slice();
 
     function runNav(id) {
-      if (id === "favorites") {
+      /* every sidebar item is a fresh section: clear whatever page we were on first */
+      setBuilder(null);
+      setFolderProfile(null);
+      setFolderView(null);
+      setPerformersOpen(false);
+      if (id === "performers") {
+        setPerformerFilter(null);
+        setTab("performers");
+        goTo("performers");
+      } else if (id === "search") {
+        setTab("search");
+        goTo("search");
+      } else if (id === "favorites") {
         setPerformerFilter(null);
         setActiveFeed({ id: "favorites", name: "Favorites", type: "favorites" });
         setTab("home");
@@ -5216,6 +5236,49 @@
       };
     }, []);
 
+    /* scroll position per route: coming back lands where you left off, not at the top.
+       saved continuously on scroll, because a passive-effect cleanup runs after the
+       new page has already replaced the DOM (which would record a misleading 0). */
+    const scrollMemo = useRef(new Map());
+    const routeKeyRef = useRef("home");
+
+    useEffect(() => {
+      routeKeyRef.current = currentRoute() || "home";
+      const key = routeKeyRef.current;
+      let cancelled = false;
+      let tries = 0;
+      const apply = () => {
+        if (cancelled) return;
+        const node = document.querySelector(".stk-page");
+        if (!node) {
+          if (tries++ < 6) window.setTimeout(apply, 250);
+          return;
+        }
+        const target = scrollMemo.current.get(key) || 0;
+        if (target && Math.abs(node.scrollTop - target) > 4 && tries < 14) {
+          node.scrollTop = target;
+          tries += 1;
+          window.setTimeout(apply, 250);
+        }
+      };
+      apply();
+      return () => {
+        cancelled = true;
+      };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [tab, performerFilter, folderProfile]);
+
+    useEffect(() => {
+      const onScroll = (event) => {
+        const node = event.target;
+        if (node && node.classList && node.classList.contains("stk-page")) {
+          scrollMemo.current.set(routeKeyRef.current, node.scrollTop);
+        }
+      };
+      document.addEventListener("scroll", onScroll, true);
+      return () => document.removeEventListener("scroll", onScroll, true);
+    }, []);
+
     useEffect(() => {
       applyRoute(currentRoute());
       const onNav = () => applyRoute(currentRoute());
@@ -5270,8 +5333,23 @@
       }
     }
 
+    /* a feed opened from a page (folder, performer, markers, tag, single clip) is not "home" */
+    function scopedFeed(feed) {
+      if (!feed) return false;
+      if (feed.origin) return true;
+      if (feed.id === "markers" || feed.id === "favorites") return true;
+      return /^(folder-|perf-|scene-|tag-)/.test(String(feed.id || ""));
+    }
+
     function goHome() {
       if (tab === "home" && !builder) {
+        if (scopedFeed(activeFeed)) {
+          // you are on a scoped feed: Feed means the root For You, not "refresh this page"
+          setActiveFeed(defaultFeed());
+          setRefreshKey((n) => n + 1);
+          goTo("");
+          return;
+        }
         // second press on Feed: new clips, so forget where we were
         if (activeFeed) forgetResume(String(activeFeed.key || activeFeed.id || "foryou"));
         setActiveFeed((cur) =>
@@ -5280,6 +5358,11 @@
         setRefreshKey((n) => n + 1);
         return;
       }
+      setFolderProfile(null);
+      setFolderView(null);
+      setBuilder(null);
+      setPerformerFilter(null);
+      if (scopedFeed(activeFeed)) setActiveFeed(defaultFeed());
       setTab("home");
       goTo("");
     }
@@ -5569,20 +5652,24 @@
         onSwitchFeed: useFeed,
         onNewFeed: () => setBuilder({ spec: null }),
         onBack: () => {
+          /* go back the way the user came: same page entry, same scroll, no reload */
+          if (NAV_DEPTH > 0) {
+            window.history.back();
+            return;
+          }
           const origin = (activeFeed && activeFeed.origin) || null;
           if (origin && origin.kind === "performer" && origin.performer) {
             openProfile(origin.performer, false);
-            goTo("performer/" + encodeURIComponent(origin.performer.name));
+            goTo("performer/" + encodeURIComponent(origin.performer.name), true);
             return;
           }
           if (origin && origin.kind === "folder" && origin.folder) {
-            setFolderView({ name: origin.name, folder: origin.folder });
-            setTab("folder");
-            goTo("folder/" + encodeURIComponent(origin.folder));
+            setFolderProfile(origin.folder);
+            setTab("folderProfile");
+            goTo("folder/" + encodeURIComponent(origin.folder), true);
             return;
           }
-          if (window.history.length > 1) window.history.back();
-          else goHome();
+          goHome();
         },
       });
     }
@@ -5610,6 +5697,7 @@
             h("div", { className: "stk-desk-logo" }, "StashTok"),
             [
               ["feed", "Feed"],
+              ["search", "Search"],
               ["performers", "Performers"],
               ["favorites", "Favorites"],
               ["tags", "Tags"],

@@ -2025,9 +2025,9 @@ body.stk-anim .stk-account:active {
 /* the video pane: one rounded rectangle holding video, rail, caption, timeline */
 /* desktop: the whole player (video, handle, timeline) lives in one rounded card */
 .stk-desktop .stash-tok {
+  /* fills everything right of the sidebar: the clip stays centred, edges run outward */
   width: calc(100% - 40px);
-  /* grows with the window: the clip stays centred, the card edges run outward */
-  max-width: 1200px;
+  max-width: none;
   height: calc(100vh - 40px);
   margin: 20px auto;
   border-radius: 24px;
@@ -2094,11 +2094,12 @@ body.stk-anim .stk-account:active {
   display: none;
 }
 
-/* the overlay text and scrub bar hug the centred video, not the full card width */
-.stk-desktop .stk-info,
+/* like tiktok: the handle sits at the left edge of the player, not in a centred column */
+.stk-desktop .stk-info {
+  left: 20px;
+  right: 96px;
+}
 .stk-desktop .stk-timeline {
-  left: 50%;
-  right: auto;
-  transform: translateX(-50%);
-  width: min(604px, 100%);
+  left: 0;
+  right: 0;
 }
