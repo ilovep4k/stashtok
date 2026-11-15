@@ -865,6 +865,177 @@
     video.addEventListener("loadedmetadata", landOnStart, { once: true });
   }
 
+
+  /* ---------- VR: one fragment shader, no library ----------
+     A VR180 clip is two fisheye eyes side by side (3840x1920 = 1920x1920 each). A
+     rectilinear 2D view is the inverse projection of that fisheye: for every output
+     pixel, build a camera ray, rotate it by yaw/pitch, then map it back through an
+     equidistant fisheye into the left eye. That is the whole trick the web players
+     use; everything else in them is stereo, controllers and a 3D scene. */
+  const VR_FS = `
+precision mediump float;
+varying vec2 uv;
+uniform sampler2D tex;
+uniform float yaw, pitch, fov, aspect;
+uniform int kind;              /* 0 = vr180 fisheye SBS, 1 = equirect (360) */
+const float PI = 3.14159265;
+void main() {
+  vec2 q = uv * 2.0 - 1.0;
+  q.x *= aspect;
+  float t = tan(fov * 0.5);
+  vec3 d = normalize(vec3(q.x * t, -q.y * t, -1.0));
+  float cy = cos(yaw), sy = sin(yaw);
+  float cp = cos(pitch), sp = sin(pitch);
+  d = vec3(d.x * cy + d.z * sy, d.y, -d.x * sy + d.z * cy);
+  d = vec3(d.x, d.y * cp - d.z * sp, d.y * sp + d.z * cp);
+  d = normalize(d);
+  if (kind == 1) {
+    float lon = atan(d.x, -d.z);
+    float lat = asin(clamp(d.y, -1.0, 1.0));
+    gl_FragColor = texture2D(tex, clamp(vec2(lon / (2.0 * PI) + 0.5, 0.5 - lat / PI), 0.001, 0.999));
+    return;
+  }
+  if (d.z > -0.001) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
+  float theta = acos(clamp(-d.z, -1.0, 1.0));
+  float phi = atan(d.y, d.x);
+  float r = theta / (PI * 0.5);
+  if (r > 1.0) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
+  /* left eye occupies x in [0, 0.5]; its fisheye circle fills that half */
+  vec2 s = vec2(0.25 + 0.25 * r * cos(phi), 0.5 - 0.5 * r * sin(phi));
+  gl_FragColor = texture2D(tex, clamp(s, 0.001, 0.999));
+}`;
+
+  const VR_VS = "attribute vec2 p; varying vec2 uv; void main(){ uv = (p + 1.0) * 0.5; gl_Position = vec4(p, 0.0, 1.0); }";
+
+  /* what a scene's video actually is: null | "vr180" | "equirect" */
+  function vrLayout(scene) {
+    const file = (scene && scene.files && scene.files[0]) || {};
+    const w = Number(file.width) || 0;
+    const hgt = Number(file.height) || 0;
+    if (!w || !hgt) return null;
+    const ratio = w / hgt;
+    const hay = (
+      (scene.title || "") +
+      " " + ((scene.performers || []).map((p) => p.name).join(" ")) +
+      " " + ((scene.tags || []).map((t) => t.name).join(" "))
+    ).toLowerCase();
+    const is360 = /\b360\b|equirect/.test(hay);
+    const isVr = /\bvr\b|vr180|fisheye|stereoscop/.test(hay);
+    if (ratio > 3.7) return "equirect";                         /* 360 stereoscopic = 4:1 */
+    if (Math.abs(ratio - 2) <= 0.08 && (w >= 2400 || isVr || is360)) {
+      return is360 && !isVr ? "equirect" : "vr180";
+    }
+    return null;
+  }
+
+  function VrCanvas({ videoRef, layout, sceneKey, yaw, pitch, onFail }) {
+    const canvasRef = useRef(null);
+    const stateRef = useRef({ yaw: yaw || 0, pitch: pitch || 0 });
+    stateRef.current.yaw = yaw || 0;
+    stateRef.current.pitch = pitch || 0;
+
+    useEffect(() => {
+      if (!layout) return undefined;
+      const canvas = canvasRef.current;
+      const video = videoRef.current;
+      if (!canvas) return undefined;
+      const gl = canvas.getContext("webgl", { alpha: false, antialias: false });
+      if (!gl) {
+        onFail && onFail();
+        return undefined;
+      }
+      const shader = (type, src) => {
+        const sh = gl.createShader(type);
+        gl.shaderSource(sh, src);
+        gl.compileShader(sh);
+        if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) return null;
+        return sh;
+      };
+      const vs = shader(gl.VERTEX_SHADER, VR_VS);
+      const fs = shader(gl.FRAGMENT_SHADER, VR_FS);
+      if (!vs || !fs) {
+        onFail && onFail();
+        return undefined;
+      }
+      const prog = gl.createProgram();
+      gl.attachShader(prog, vs);
+      gl.attachShader(prog, fs);
+      gl.linkProgram(prog);
+      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+        onFail && onFail();
+        return undefined;
+      }
+      gl.useProgram(prog);
+      const buf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+      const pos = gl.getAttribLocation(prog, "p");
+      gl.enableVertexAttribArray(pos);
+      gl.vertexAttribPointer(pos, 2, gl.FLOAT, false, 0, 0);
+      const tex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      const u = {
+        tex: gl.getUniformLocation(prog, "tex"),
+        yaw: gl.getUniformLocation(prog, "yaw"),
+        pitch: gl.getUniformLocation(prog, "pitch"),
+        fov: gl.getUniformLocation(prog, "fov"),
+        aspect: gl.getUniformLocation(prog, "aspect"),
+        kind: gl.getUniformLocation(prog, "kind"),
+      };
+      /* 8K VR sources are common here: downscale once into a scratch canvas before
+         uploading, or the texture upload alone eats the frame budget */
+      const scratch = document.createElement("canvas");
+      scratch.width = 1920;
+      scratch.height = 960;
+      const sctx = scratch.getContext("2d");
+
+      let raf = 0;
+      let last = 0;
+      const draw = (now) => {
+        raf = requestAnimationFrame(draw);
+        if (!video || video.readyState < 2 || now - last < 28) return;
+        last = now;
+        const dpr = Math.min(2, window.devicePixelRatio || 1);
+        const w = Math.max(320, Math.round((canvas.clientWidth || 640) * dpr * 0.75));
+        const h = Math.max(180, Math.round((canvas.clientHeight || 360) * dpr * 0.75));
+        if (canvas.width !== w || canvas.height !== h) {
+          canvas.width = w;
+          canvas.height = h;
+        }
+        const vw = video.videoWidth || 1920;
+        const vh = video.videoHeight || 960;
+        scratch.height = Math.max(2, Math.round((1920 * vh) / Math.max(1, vw)));
+        try {
+          sctx.drawImage(video, 0, 0, scratch.width, scratch.height);
+        } catch (err) {
+          return;
+        }
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, scratch);
+        gl.viewport(0, 0, canvas.width, canvas.height);
+        gl.uniform1i(u.tex, 0);
+        gl.uniform1f(u.yaw, stateRef.current.yaw);
+        gl.uniform1f(u.pitch, stateRef.current.pitch);
+        gl.uniform1f(u.fov, 1.75);            /* ~100 deg horizontal */
+        gl.uniform1f(u.aspect, canvas.width / canvas.height);
+        gl.uniform1i(u.kind, layout === "equirect" ? 1 : 0);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      };
+      raf = requestAnimationFrame(draw);
+      return () => {
+        cancelAnimationFrame(raf);
+        const lose = gl.getExtension("WEBGL_lose_context");
+        if (lose) lose.loseContext();
+      };
+    }, [layout, sceneKey, videoRef, onFail]);
+
+    if (!layout) return null;
+    return h("canvas", { className: "stk-vr-canvas", ref: canvasRef });
+  }
+
   function FeedView({ spec, cfg, refreshKey, onBack, onSearch, onSettings, onOpenPerformer, onOpenTag, onDeriveFeed, onEditFeed, onOpenFolder, onOpenFolderProfile, feeds, onSwitchFeed, onNewFeed, desktop }) {
     const sfw = !!cfg.sfw;
     const [items, setItems] = useState([]);
@@ -880,6 +1051,9 @@
     const [rotation, setRotation] = useState(0);
     const [speed, setSpeed] = useState(() => Number(window.localStorage.getItem("stashTok.speed")) || 1);
     const [muted, setMuted] = useState(cfg.autoplayMuted);
+    /* VR clips default to the 2D rectilinear view; v toggles back to raw */
+    const [vrMode, setVrMode] = useState(true);
+    const [vrYaw, setVrYaw] = useState(0);
     const [hud, setHud] = useState(true);
     const [hudTick, setHudTick] = useState(0);
     const [sheet, setSheet] = useState(null); // 'actions' | 'details'
@@ -1381,6 +1555,19 @@
         } else if (key === "f" || key === "F") {
           event.preventDefault();
           flagCurrent();
+        } else if (key === "v" || key === "V") {
+          event.preventDefault();
+          setVrMode((on) => !on);
+          setVrYaw(0);
+        } else if (key === "[" ) {
+          event.preventDefault();
+          setVrYaw((y) => Math.max(-2.6, y - 0.12));
+        } else if (key === "]") {
+          event.preventDefault();
+          setVrYaw((y) => Math.min(2.6, y + 0.12));
+        } else if (key === "\\") {
+          event.preventDefault();
+          setVrYaw(0);
         } else if (key === "m" || key === "M") {
           event.preventDefault();
           if (!video) return;
@@ -1391,7 +1578,7 @@
       }
       window.addEventListener("keydown", onKey);
       return () => window.removeEventListener("keydown", onKey);
-    }, [desktop, goNext, goPrev, toggleHeart, flagCurrent]);
+    }, [desktop, goNext, goPrev, toggleHeart, flagCurrent, vrMode]);
 
     /* ---- hold to speed -------------------------------------------- */
 
@@ -1871,6 +2058,12 @@
             style: { backgroundImage: `url("${rel(scene.paths && scene.paths.screenshot)}")` },
           }),
         h("div", { className: "stk-scan" }),
+        h(VrCanvas, {
+          videoRef,
+          layout: vrMode ? vrLayout(scene) : null,
+          sceneKey: item.key,
+          yaw: vrYaw,
+        }),
 
         h(
           "div",
