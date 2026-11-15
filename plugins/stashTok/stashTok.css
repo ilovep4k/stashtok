@@ -1709,3 +1709,15 @@
 }
 .stk-fv-meta { font-size: 11.5px; color: rgba(255, 255, 255, 0.45); }
 .stk-fv-caret { color: rgba(255, 255, 255, 0.3); transform: rotate(180deg); }
+
+/* the bottom vignette is z-index 3: the caption painted under it, which is why
+   pure-white text still rendered grey. Lift the info block above the scrim. */
+.stk-info {
+  z-index: 5;
+}
+.stk-info .stk-handle-at {
+  color: #fff;
+}
+.stk-caption-line {
+  color: #fff;
+}
