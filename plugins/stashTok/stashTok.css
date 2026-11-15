@@ -1945,3 +1945,26 @@ body.stk-anim .stk-account:active {
 }
 .stk-ops-box-key { color: #9a9a9a; font-size: 11px; }
 .stk-ops-steps { margin: 8px 0 0; padding-left: 18px; font-size: 12px; color: #b9b9b9; line-height: 1.5; }
+
+/* the elapsed time rides the meta line: same font, same baseline, far right */
+.stk-caption-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  max-width: 100%;
+}
+
+.stk-caption-metatext {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stk-caption-time {
+  margin-left: auto;
+  flex: 0 0 auto;
+  font-size: inherit;
+  color: rgba(255, 255, 255, 0.72);
+  font-variant-numeric: tabular-nums;
+}

@@ -2014,7 +2014,7 @@
             const path = prettyPath(file.path);
             const meta = [
               shortDate(scene.created_at || scene.date),
-              file.duration ? fmtTime(file.duration) : "",
+              file.size ? fmtBytes(file.size) : "",
               file.width && file.height ? Math.min(file.width, file.height) + "p" : "",
             ].filter(Boolean);
             if (!path && !meta.length) return null;
@@ -2023,7 +2023,13 @@
               { className: "stk-caption" },
               scene.title && h("div", { className: "stk-caption-line" }, scene.title),
               path && h("div", { className: "stk-caption-line stk-caption-path" }, path),
-              meta.length && h("div", { className: "stk-caption-line stk-caption-meta" }, meta.join(" • "))
+              h(
+                "div",
+                { className: "stk-caption-line stk-caption-meta" },
+                h("span", { className: "stk-caption-metatext" }, meta.join(" • ")),
+                !sfw &&
+                  h("span", { className: "stk-caption-time" }, `${fmtTime(time)} / ${fmtTime(duration)}`)
+              )
             );
           })(),
           performers.length > 1 &&
@@ -2116,11 +2122,8 @@
 
         hud &&
           !sfw &&
-          h(
-            "div",
-            { className: "stk-time" },
-            `${fmtTime(time)} / ${fmtTime(duration)}${zoom > 1.02 ? ` · ${zoom.toFixed(1)}x` : ""}`
-          ),
+          zoom > 1.02 &&
+          h("div", { className: "stk-time" }, `${zoom.toFixed(1)}x`),
 
         !sfw &&
         h(
