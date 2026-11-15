@@ -918,6 +918,7 @@
 
     const feedKey = String(spec.key || spec.id || (spec.type + ":" + (spec.name || spec.sort || "")));
     const resumeRef = useRef(undefined);
+    const positionedRef = useRef(null);
     if (resumeRef.current === undefined) {
       const saved = spec.startSceneId || spec.startAt ? null : readResume(feedKey);
       resumeRef.current = saved ? { sceneId: saved.sceneId, time: saved.time } : null;
@@ -1111,6 +1112,11 @@
         setFitMode(fitFor(video));
         const total = video.duration || 0;
         setDuration(total);
+        /* canplay fires again every time the browser re-buffers, so seek to the start
+           frame ONCE per clip: otherwise scrubbing back lands in an unbuffered gap,
+           triggers a refill, and this yanks the playhead forward again */
+        if (positionedRef.current === item.key) return;
+        positionedRef.current = item.key;
         // a remembered playhead can outlive the file it came from: never seek past the end
         const seekTo = total > 0 ? Math.min(start, Math.max(0, total - 3)) : start;
         seekThenPlay(video, seekTo, playGuarded);
@@ -1722,7 +1728,7 @@
 
     function openHandle() {
       if (handle.performer) return onOpenPerformer(handle.performer);
-      if (handle.folder) return onOpenFolder({ name: handle.name, folder: handle.folder });
+      if (handle.folder && onOpenFolderProfile) return onOpenFolderProfile({ name: handle.name, folder: handle.folder });
       setSheet("details");
     }
 
@@ -2986,7 +2992,11 @@
       ["Images", performer.image_count == null ? images.length : performer.image_count],
     ];
     /* no location/birthdate: aliases for a performer, the path for a folder */
-    const metaLine = isFolder ? folder : (performer.alias_list || []).slice(0, 3).join(" · ");
+    const metaLine = isFolder
+      ? String(folder).indexOf("/") >= 0
+        ? folder
+        : ""
+      : (performer.alias_list || []).slice(0, 3).join(" · ");
     const gridClass = density === 5 ? "stk-grid-5" : "stk-grid-3";
     const sortLabel = (SCENE_SORTS.find((entry) => entry[0] === sort) || SCENE_SORTS[0])[1];
 
@@ -5509,6 +5519,12 @@
         onOpenTag: openTag,
         onDeriveFeed: useFeed,
         onEditFeed: (spec) => setBuilder({ spec }),
+        onOpenFolderProfile: (target) => {
+          if (!target || !target.folder) return;
+          setFolderProfile(target.folder);
+          setTab("folderProfile");
+          goTo("folder/" + encodeURIComponent(target.folder));
+        },
         onOpenFolder: (target) => {
           setFolderView(Object.assign({ view: "gallery" }, target));
           setTab("folder");
