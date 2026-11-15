@@ -173,6 +173,18 @@
     return parts.length > 1 ? parts[1] : parts[0] || "";
   }
 
+  function forgetResume(key) {
+    try {
+      const map = readResumeMap();
+      if (map && Object.prototype.hasOwnProperty.call(map, key)) {
+        delete map[key];
+        window.localStorage.setItem(RESUME_KEY, JSON.stringify(map));
+      }
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
   /** Stash performer > library-root folder > @handle in the filename. */
   function resolveHandle(scene, file) {
     const performer = (scene.performers && scene.performers[0]) || null;
@@ -3002,7 +3014,8 @@
 
     function openScene(scene) {
       // the URL names the performer and the exact clip, like tiktok.com/@user/video/<id>
-      onPlay({ sceneId: scene.id, tab: "scenes", sort });
+      /* one history entry: this goTo below is the push, the feed switch must not add another */
+      onPlay({ sceneId: scene.id, tab: "scenes", sort, noPush: true });
       if (isFolder) goTo("folder/" + encodeURIComponent(folder) + "/" + scene.id);
       else goTo("performer/" + encodeURIComponent(performer.name) + "/" + scene.id);
     }
@@ -5085,7 +5098,8 @@
       if (!rest) {
         setTab("home");
         setPerformerFilter(null);
-        setActiveFeed(defaultFeed());
+        /* keep the feed you were on; only a second tap on Feed asks for new clips */
+        setActiveFeed((cur) => cur || defaultFeed());
         return;
       }
       if (rest === "favorites") {
@@ -5124,8 +5138,24 @@
         /* a trailing numeric segment is a scene id, not part of the folder path */
         const parts = raw.split("/");
         const tail = parts[parts.length - 1] || "";
-        const path = decodeURIComponent(/^\d+$/.test(tail) ? parts.slice(0, -1).join("/") : raw);
+        const sceneId = /^\d+$/.test(tail) ? tail : null;
+        const path = decodeURIComponent(sceneId ? parts.slice(0, -1).join("/") : raw);
         setFolderProfile(path);
+        if (sceneId) {
+          /* /folder/<path>/<scene> is a clip opened from the folder page: play it, keep the folder as origin */
+          const name = String(path).split("/").filter(Boolean).pop() || path;
+          setActiveFeed({
+            id: "folder-" + path,
+            name,
+            type: "foryou",
+            pathIncludes: path,
+            sort: "filesize",
+            startSceneId: sceneId,
+            origin: { kind: "folder", folder: path },
+          });
+          setTab("home");
+          return;
+        }
         setTab("folderProfile");
         return;
       }
@@ -5242,7 +5272,11 @@
 
     function goHome() {
       if (tab === "home" && !builder) {
-        // second press on Home refreshes the feed
+        // second press on Feed: new clips, so forget where we were
+        if (activeFeed) forgetResume(String(activeFeed.key || activeFeed.id || "foryou"));
+        setActiveFeed((cur) =>
+          cur ? Object.assign({}, cur, { startSceneId: null, startAt: null }) : defaultFeed()
+        );
         setRefreshKey((n) => n + 1);
         return;
       }
@@ -5447,7 +5481,9 @@
           });
           setTab("home");
           setRefreshKey((n) => n + 1);
-          goTo(payload && payload.sceneId ? "scene/" + payload.sceneId : "folder/" + encodeURIComponent(folderProfile));
+          if (!(payload && payload.noPush)) {
+            goTo(payload && payload.sceneId ? "scene/" + payload.sceneId : "folder/" + encodeURIComponent(folderProfile));
+          }
         },
         onOpenTag: openTag,
         prefs,

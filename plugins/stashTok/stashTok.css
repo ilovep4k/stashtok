@@ -2026,7 +2026,8 @@ body.stk-anim .stk-account:active {
 /* desktop: the whole player (video, handle, timeline) lives in one rounded card */
 .stk-desktop .stash-tok {
   width: calc(100% - 40px);
-  max-width: 604px;
+  /* grows with the window: the clip stays centred, the card edges run outward */
+  max-width: 1200px;
   height: calc(100vh - 40px);
   margin: 20px auto;
   border-radius: 24px;
@@ -2091,4 +2092,13 @@ body.stk-anim .stk-account:active {
 /* a profile page brings its own buttons; the floating gear lands on the heart */
 .stash-tok-wrap:has(.stk-profile-name) .stk-gear-fab {
   display: none;
+}
+
+/* the overlay text and scrub bar hug the centred video, not the full card width */
+.stk-desktop .stk-info,
+.stk-desktop .stk-timeline {
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
+  width: min(604px, 100%);
 }
