@@ -957,7 +957,7 @@
 .stk-nav, .stk-rail, .stk-info, .stk-top, .stk-timeline { touch-action: manipulation; -webkit-user-select: none; user-select: none; }
 
 /* one sort control instead of a wall of chips */
-.stk-sort-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.stk-sort-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
 .stk-sort-bar .stk-sort-btn { margin-left: 0; }
 .stk-sort-bar .stk-sub { font-size: 12px; opacity: 0.6; }
 
@@ -1041,6 +1041,12 @@
   flex: 0 0 auto;
 }
 .stk-sort-pill svg { opacity: 0.85; }
+.stk-sort-pill.stk-on {
+  background: #fff;
+  border-color: #fff;
+  color: #101010;
+  font-weight: 600;
+}
 
 /* feed top-right controls */
 .stk-top-right {
@@ -2175,4 +2181,38 @@ body.stk-anim .stk-account:active {
   z-index: 3;
   pointer-events: none;
   background: #000;
+}
+
+/* ---- timeline scrubber sprite (desktop hover) ---- */
+.stk-scrub-preview {
+  position: absolute;
+  bottom: calc(100% + 12px);
+  transform: translateX(-50%);
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  z-index: 20;
+}
+.stk-scrub-cell {
+  display: block;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.55);
+  background-color: #000;
+  background-repeat: no-repeat;
+}
+img.stk-scrub-cell {
+  object-fit: cover;
+  width: 160px;
+  height: 90px;
+}
+.stk-scrub-time {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.7);
+  padding: 1px 6px;
+  border-radius: 4px;
 }

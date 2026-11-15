@@ -365,7 +365,7 @@
     rating100
     o_counter
     play_count
-    paths { stream preview screenshot }
+    paths { stream preview screenshot vtt sprite }
     files { path size duration width height video_codec audio_codec frame_rate bit_rate }
     performers { id name image_path }
     studio { id name }
@@ -901,7 +901,7 @@ void main() {
   float r = theta / (PI * 0.5);
   if (r > 1.0) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
   /* left eye occupies x in [0, 0.5]; its fisheye circle fills that half */
-  vec2 s = vec2(0.25 + 0.25 * r * cos(phi), 0.5 - 0.5 * r * sin(phi));
+  vec2 s = vec2(0.25 + 0.25 * r * cos(phi), 0.5 + 0.5 * r * sin(phi));
   gl_FragColor = texture2D(tex, clamp(s, 0.001, 0.999));
 }`;
 
@@ -988,8 +988,8 @@ void main() {
       /* 8K VR sources are common here: downscale once into a scratch canvas before
          uploading, or the texture upload alone eats the frame budget */
       const scratch = document.createElement("canvas");
-      scratch.width = 1920;
-      scratch.height = 960;
+      scratch.width = 3840;
+      scratch.height = 1920;
       const sctx = scratch.getContext("2d");
 
       let raf = 0;
@@ -999,15 +999,22 @@ void main() {
         if (!video || video.readyState < 2 || now - last < 28) return;
         last = now;
         const dpr = Math.min(2, window.devicePixelRatio || 1);
-        const w = Math.max(320, Math.round((canvas.clientWidth || 640) * dpr * 0.75));
-        const h = Math.max(180, Math.round((canvas.clientHeight || 360) * dpr * 0.75));
+        /* render at the real pixel size: downscaling here is what made 8K sources look jagged */
+        const w = Math.max(320, Math.round((canvas.clientWidth || 640) * dpr));
+        const h = Math.max(180, Math.round((canvas.clientHeight || 360) * dpr));
         if (canvas.width !== w || canvas.height !== h) {
           canvas.width = w;
           canvas.height = h;
         }
         const vw = video.videoWidth || 1920;
         const vh = video.videoHeight || 960;
-        scratch.height = Math.max(2, Math.round((1920 * vh) / Math.max(1, vw)));
+        /* keep as much of the source as the GPU comfortably takes: full width up to 4K,
+           never upscale a small file */
+        const scratchW = Math.max(720, Math.min(3840, vw));
+        if (scratch.width !== scratchW) {
+          scratch.width = scratchW;
+          scratch.height = Math.max(2, Math.round((scratchW * vh) / Math.max(1, vw)));
+        }
         try {
           sctx.drawImage(video, 0, 0, scratch.width, scratch.height);
         } catch (err) {
@@ -1054,6 +1061,9 @@ void main() {
     /* VR clips default to the 2D rectilinear view; v toggles back to raw */
     const [vrMode, setVrMode] = useState(true);
     const [vrYaw, setVrYaw] = useState(0);
+    const [scrubPreview, setScrubPreview] = useState(null);
+    const spriteRef = useRef({ key: "", cues: [], ok: false });
+    const [spriteTick, setSpriteTick] = useState(0);
     const [hud, setHud] = useState(true);
     const [hudTick, setHudTick] = useState(0);
     const [sheet, setSheet] = useState(null); // 'actions' | 'details'
@@ -1580,6 +1590,53 @@ void main() {
       return () => window.removeEventListener("keydown", onKey);
     }, [desktop, goNext, goPrev, toggleHeart, flagCurrent, vrMode]);
 
+    /* ---- scrubber sprites -----------------------------------------
+       Stash already renders a sprite sheet plus a WebVTT index for scenes with
+       generated thumbnails; the timeline just reads that instead of asking ffmpeg
+       for a frame per hover. */
+    const sceneIdForSprite = item && item.scene ? item.scene.id : "";
+    useEffect(() => {
+      const scene = item && item.scene;
+      if (!scene) return undefined;
+      const vttPath = rel(scene.paths && scene.paths.vtt);
+      const spritePath = rel(scene.paths && scene.paths.sprite);
+      spriteRef.current = { key: String(scene.id), cues: [], ok: false, src: spritePath || "" };
+      if (spriteTick) setSpriteTick(0);
+      if (!vttPath) return undefined;
+      let alive = true;
+      const stamp = /(\d{2}):(\d{2}):(\d{2})\.(\d{3})/;
+      const secs = (line) => {
+        const m = stamp.exec(line);
+        return m ? Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]) + Number(m[4]) / 1000 : 0;
+      };
+      fetch(vttPath, { credentials: "same-origin" })
+        .then((res) => (res.ok ? res.text() : ""))
+        .then((text) => {
+          if (!alive || !text) return;
+          const cues = [];
+          text.split(/\n\n/).forEach((block) => {
+            const box = /#xywh=(\d+),(\d+),(\d+),(\d+)/.exec(block);
+            const range = /^(\d{2}:\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}\.\d{3})/m.exec(block);
+            if (!box || !range) return;
+            cues.push({
+              start: secs(range[1]),
+              end: secs(range[2]),
+              x: Number(box[1]),
+              y: Number(box[2]),
+              w: Number(box[3]),
+              h: Number(box[4]),
+            });
+          });
+          if (!cues.length) return;
+          spriteRef.current = { key: String(scene.id), cues, ok: true, src: spritePath || "" };
+          setSpriteTick((n) => n + 1);
+        })
+        .catch(() => {});
+      return () => {
+        alive = false;
+      };
+    }, [sceneIdForSprite]);
+
     /* ---- hold to speed -------------------------------------------- */
 
     const stopHold = useCallback(() => {
@@ -1938,8 +1995,27 @@ void main() {
     }
 
     function onTimelineMove(event) {
-      if (!scrubbing) return;
       event.stopPropagation();
+      const box = event.currentTarget.getBoundingClientRect();
+      const pct = box.width ? Math.max(0, Math.min(1, (event.clientX - box.left) / box.width)) : 0;
+      const store = spriteRef.current;
+      const total = duration || Number((item && item.scene.files && item.scene.files[0] && item.scene.files[0].duration) || 0);
+      const at = pct * total;
+      const cue = store.cues && store.cues.length
+        ? store.cues.find((c) => at >= c.start && at < c.end) || store.cues[store.cues.length - 1]
+        : null;
+      setScrubPreview({
+        pct,
+        time: at,
+        hasSprite: Boolean(store.ok && cue),
+        x: cue ? cue.x : 0,
+        y: cue ? cue.y : 0,
+        w: cue ? cue.w : 0,
+        h: cue ? cue.h : 0,
+        src: store.src,
+        sceneId: item && item.scene ? item.scene.id : "",
+      });
+      if (!scrubbing) return;
       seekFromEvent(event);
     }
 
@@ -2438,7 +2514,35 @@ void main() {
             onPointerMove: onTimelineMove,
             onPointerUp: onTimelineUp,
             onPointerCancel: onTimelineUp,
+            onPointerLeave: () => setScrubPreview(null),
           },
+          scrubPreview &&
+            (duration > 0 || Number((scene.files && scene.files[0] && scene.files[0].duration) || 0) > 0) &&
+            h(
+              "div",
+              {
+                className: "stk-scrub-preview",
+                style: { left: `${Math.max(4, Math.min(96, scrubPreview.pct * 100))}%` },
+              },
+              scrubPreview.hasSprite
+                ? h("div", {
+                    className: "stk-scrub-cell",
+                    style: {
+                      width: scrubPreview.w + "px",
+                      height: scrubPreview.h + "px",
+                      backgroundImage: `url("${scrubPreview.src}")`,
+                      backgroundPosition: `-${scrubPreview.x}px -${scrubPreview.y}px`,
+                    },
+                  })
+                : h("img", {
+                    className: "stk-scrub-cell",
+                    src: `/scene/${scrubPreview.sceneId}/screenshot?t=${Math.round(scrubPreview.time)}`,
+                    alt: "",
+                    loading: "eager",
+                  }),
+              h("span", { className: "stk-scrub-time" }, fmtTime(scrubPreview.time))
+            ),
+
           h(
             "div",
             { className: "stk-timeline-inner" },
@@ -3822,46 +3926,35 @@ void main() {
           color: "#fff",
         },
         }),
-        h(
-          "button",
-          {
-            className: "stk-sort-btn stk-sort-pill" + (sortOpen ? " stk-on" : ""),
-            title: "Sort folders",
-            onClick: () => setSortOpen(!sortOpen),
-          },
-          h(Icon, { name: "sort", size: 14 })
-        )
       ),
-      sortOpen &&
-        h(
-          "div",
-          { className: "stk-sort-menu stk-sort-drop" },
-          FOLDER_LIST_SORTS.map(([value, label]) =>
-            h(
-              "button",
-              {
-                key: value,
-                className: value === listSort ? "stk-on" : "",
-                onClick: () => {
-                  setListSort(value);
-                  try {
-                    window.localStorage.setItem("stashTok.folderListSort", value);
-                  } catch (e) {
-                    /* ignore */
-                  }
-                  setSortOpen(false);
-                },
+      h(
+        "div",
+        { className: "stk-sort-bar" },
+        FOLDER_LIST_SORTS.map(([value, label]) =>
+          h(
+            "button",
+            {
+              key: value,
+              className: "stk-sort-pill" + (value === listSort ? " stk-on" : ""),
+              onClick: () => {
+                setListSort(value);
+                try {
+                  window.localStorage.setItem("stashTok.folderListSort", value);
+                } catch (e) {
+                  /* ignore */
+                }
               },
-              label
-            )
+            },
+            label
           )
         ),
+        h("span", { className: "stk-sub" }, (rows ? list.length : 0) + " folders")
+      ),
       !rows
         ? h("div", { className: "stk-state" }, h("div", { className: "stk-spinner" }))
         : h(
             "div",
             { className: "stk-folder-list" },
-            h("div", { className: "stk-sub", style: { padding: "0 0 8px" } }, list.length + " folders · " + listSortLabel),
             list.map((row) =>
               h(
                 "button",
