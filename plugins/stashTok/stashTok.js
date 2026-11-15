@@ -29,7 +29,7 @@
   const FOLDER_FAV_KEY = "stashTok.folderFavs.v1";
   const PAGE_SIZE = 8;
   const HOLD_MS = 380;
-  const LONG_PRESS_MS = 750;
+  const LONG_PRESS_MS = 250;
   const SWIPE_PX = 70;
   const MAX_ZOOM = 8;
   const HEART_POP_MS = 700;
@@ -377,14 +377,16 @@
     const parts = [];
     const type = spec.type || "foryou";
 
-    if (type !== "shorts" && Number(cfg.minDuration) > 0) {
-      parts.push(`duration: { value: ${Number(cfg.minDuration)}, modifier: GREATER_THAN }`);
+    const minDur = spec.minDuration !== undefined ? spec.minDuration : cfg.minDuration;
+    if (type !== "shorts" && Number(minDur) > 0) {
+      parts.push(`duration: { value: ${Number(minDur)}, modifier: GREATER_THAN }`);
     }
     if (type === "favorites") {
       parts.push(`rating100: { value: 0, modifier: GREATER_THAN }`);
     }
-    if (cfg.windowDays && Number(cfg.windowDays) > 0) {
-      const since = new Date(Date.now() - Number(cfg.windowDays) * 86400000);
+    const windowDays = spec.windowDays !== undefined ? spec.windowDays : cfg.windowDays;
+    if (windowDays && Number(windowDays) > 0) {
+      const since = new Date(Date.now() - Number(windowDays) * 86400000);
       parts.push(`date: { value: "${since.toISOString().slice(0, 10)}", modifier: GREATER_THAN }`);
     }
     if (type === "performer" && spec.performerId) {
@@ -1341,6 +1343,13 @@
         } else if (key === "ArrowUp" || key === "PageUp") {
           event.preventDefault();
           goPrev();
+        } else if (key === "Enter") {
+          /* enter opens whoever posted this clip */
+          event.preventDefault();
+          openHandle();
+        } else if (key === "Backspace") {
+          event.preventDefault();
+          if (onBack) onBack();
         } else if (key === "Tab") {
           event.preventDefault();
           if (event.shiftKey) goPrev();
@@ -1959,7 +1968,6 @@
             h(
               "div",
               { className: "stk-qm-speed" },
-              h(Icon, { name: "play", size: 15 }),
               h("span", { className: "stk-qm-speed-label" }, "Speed"),
               h(
                 "div",
@@ -2816,6 +2824,7 @@
     const [density, setDensity] = useState(3);
     const [folderPick, setFolderPick] = useState(null);
     const [hoverScene, setHoverScene] = useState(null);
+    const [sel, setSel] = useState(-1);
     const [error, setError] = useState("");
 
     useEffect(() => {
@@ -3016,6 +3025,47 @@
         setPerformer(Object.assign({}, performer, { favorite: !next }));
       }
     }
+
+    /* keyboard: arrows walk the grid, space/enter plays, backspace steps out */
+    useEffect(() => {
+      function onKey(event) {
+        const tag = (event.target && event.target.tagName) || "";
+        if (tag === "INPUT" || tag === "TEXTAREA" || (event.target && event.target.isContentEditable)) return;
+        const list = folderPick ? scenes.filter((row) => prettyPath(((row.files && row.files[0]) || {}).path) === folderPick || "(root)" === folderPick) : scenes;
+        const total = list.length;
+        if (event.key === "Backspace") {
+          event.preventDefault();
+          onBack();
+          return;
+        }
+        if (!total) return;
+        if (event.key === "Enter" || event.key === " " || event.key === "Spacebar") {
+          const target = list[sel] || list[0];
+          if (!target) return;
+          event.preventDefault();
+          setSel(sel < 0 ? 0 : sel);
+          openScene(target);
+          return;
+        }
+        const stride = (() => {
+          const grid = document.querySelector(".stk-page .stk-grid-3, .stk-page .stk-grid-5");
+          if (!grid) return 3;
+          return getComputedStyle(grid).gridTemplateColumns.split(" ").filter(Boolean).length || 3;
+        })();
+        let next = sel;
+        if (event.key === "ArrowRight") next = sel < 0 ? 0 : Math.min(total - 1, sel + 1);
+        else if (event.key === "ArrowLeft") next = sel < 0 ? 0 : Math.max(0, sel - 1);
+        else if (event.key === "ArrowDown") next = sel < 0 ? 0 : Math.min(total - 1, sel + stride);
+        else if (event.key === "ArrowUp") next = sel < 0 ? 0 : Math.max(0, sel - stride);
+        else return;
+        event.preventDefault();
+        setSel(next);
+        const node = document.querySelectorAll(".stk-page .stk-tile")[next];
+        if (node && node.scrollIntoView) node.scrollIntoView({ block: "nearest" });
+      }
+      window.addEventListener("keydown", onKey);
+      return () => window.removeEventListener("keydown", onKey);
+    }, [sel, scenes, folderPick, onBack]);
 
     if (error) {
       return h("div", { className: "stk-page" }, h("div", { className: "stk-state" }, h("p", null, error)));
@@ -3221,7 +3271,7 @@
             (folderPick
               ? scenes.filter((scene) => (prettyPath(((scene.files && scene.files[0]) || {}).path) || "(root)") === folderPick)
               : scenes
-            ).map((scene) => {
+            ).map((scene, tileIndex) => {
               const file = (scene.files && scene.files[0]) || {};
               const tileStyle =
                 density === 5 && file.width && file.height ? { aspectRatio: file.width + " / " + file.height } : undefined;
@@ -3229,10 +3279,13 @@
                 "button",
                 {
                   key: scene.id,
-                  className: "stk-tile",
+                  className: "stk-tile" + (sel === tileIndex ? " stk-sel" : ""),
                   "data-scene": scene.id,
                   style: tileStyle,
-                  onClick: () => openScene(scene),
+                  onClick: () => {
+                    setSel(tileIndex);
+                    openScene(scene);
+                  },
                   onMouseEnter: () => {
                     if (window.innerWidth >= 900) setHoverScene(scene.id);
                   },
@@ -4894,6 +4947,7 @@
     const baseCfg = usePluginConfig();
     const [prefs, setPrefs] = useState(loadPrefs);
     const [navPicker, setNavPicker] = useState(null);
+    const [feedOptions, setFeedOptions] = useState(false);
 
     /* wide screens get the desktop shell: sidebar + one rounded video pane */
     const [desktop, setDesktop] = useState(
@@ -5084,6 +5138,9 @@
         window.removeEventListener("pagehide", hide);
       };
     }, [pin]);
+    /* deep links must not render one branch and then swap to another: that is a hook-order
+       crash in react. hold the shell until the first applyRoute has run. */
+    const [routed, setRouted] = useState(false);
     const [tab, setTab] = useState("home");
     const [feeds, setFeeds] = useState(() => loadFeeds());
     const [activeFeed, setActiveFeed] = useState(defaultFeed());
@@ -5300,6 +5357,7 @@
 
     useEffect(() => {
       applyRoute(currentRoute());
+      setRouted(true);
       const onNav = () => applyRoute(currentRoute());
       window.addEventListener("hashchange", onNav);
       window.addEventListener("popstate", onNav);
@@ -5693,6 +5751,64 @@
       });
     }
 
+    const feedOptionRows = [
+      {
+        id: "all",
+        label: "All videos",
+        note: "default",
+        run: () => {
+          setActiveFeed(Object.assign({}, defaultFeed(), { windowDays: 0, minDuration: 0 }));
+          setRefreshKey((n) => n + 1);
+          setTab("home");
+          goTo("");
+        },
+      },
+      {
+        id: "new30",
+        label: "New videos",
+        note: "last 30 days",
+        run: () => {
+          setActiveFeed(Object.assign({}, defaultFeed(), { windowDays: 30, minDuration: 0 }));
+          setRefreshKey((n) => n + 1);
+          setTab("home");
+          goTo("");
+        },
+      },
+      {
+        id: "shuffle",
+        label: "Re-shuffle",
+        note: "same filters, new order",
+        run: () => {
+          setActiveFeed((cur) => Object.assign({}, cur || defaultFeed(), { startSceneId: null, startAt: null }));
+          setRefreshKey((n) => n + 1);
+          setTab("home");
+          goTo("");
+        },
+      },
+      {
+        id: "long",
+        label: "Long videos only",
+        note: "15 minutes and up",
+        run: () => {
+          setActiveFeed(Object.assign({}, defaultFeed(), { windowDays: 0, minDuration: 900 }));
+          setRefreshKey((n) => n + 1);
+          setTab("home");
+          goTo("");
+        },
+      },
+    ];
+
+    if (!routed) {
+      return h(
+        "div",
+        {
+          className: "stash-tok-wrap" + (desktop ? " stk-desktop" : ""),
+          style: { background: "#101010" },
+        },
+        h("div", { className: "stk-fixed", style: { background: "#101010" } })
+      );
+    }
+
     return h(
       "div",
       {
@@ -5785,6 +5901,7 @@
             icon: "feed",
             label: "Feed",
             onClick: goHome,
+            onLongPress: () => setFeedOptions(true),
           }),
           h(NavButton, {
             active: tab === "performers",
@@ -5807,6 +5924,39 @@
             });
           })
         ),
+
+        feedOptions &&
+          h(
+            React.Fragment,
+            null,
+            h("div", { className: "stk-sheet-backdrop", onClick: () => setFeedOptions(false) }),
+            h(
+              "div",
+              { className: "stk-sheet", onClick: (event) => event.stopPropagation() },
+              h(
+                "h3",
+                null,
+                h("span", null, "Feed"),
+                h("button", { className: "stk-btn", onClick: () => setFeedOptions(false) }, h(Icon, { name: "x", size: 16 }))
+              ),
+              h("p", { className: "stk-sub" }, "Long-press Feed to pick what it shows."),
+              feedOptionRows.map((row) =>
+                h(
+                  "button",
+                  {
+                    key: row.id,
+                    className: "stk-marker-row",
+                    onClick: () => {
+                      setFeedOptions(false);
+                      row.run();
+                    },
+                  },
+                  h("span", null, row.label),
+                  h("small", null, row.note)
+                )
+              )
+            )
+          ),
 
         navPicker &&
           h(
