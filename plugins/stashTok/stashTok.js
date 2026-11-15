@@ -836,6 +836,8 @@
     const [rateBadge, setRateBadge] = useState("");
     const [heartBurst, setHeartBurst] = useState(0);
     const [dragY, setDragY] = useState(0);
+    /* fill the screen unless that would throw away a big slice of the frame */
+    const [fitMode, setFitMode] = useState("cover");
 
     const stageRef = useRef(null);
     const videoRef = useRef(null);
@@ -853,6 +855,21 @@
 
     /* React can leave videoRef pointing at the clip we just swiped away from, so
        always resolve the element that is actually marked active on screen. */
+    const fitFor = useCallback((video) => {
+      const stage = stageRef.current;
+      if (!video || !stage) return "cover";
+      const vw = video.videoWidth || 0;
+      const vh = video.videoHeight || 0;
+      const sw = stage.clientWidth || 0;
+      const sh = stage.clientHeight || 0;
+      if (!vw || !vh || !sw || !sh) return "cover";
+      const vr = vw / vh;
+      const sr = sw / sh;
+      // share of the frame that `cover` would crop away
+      const lost = vr >= sr ? 1 - sr / vr : 1 - vr / sr;
+      return lost <= 0.25 ? "cover" : "contain";
+    }, []);
+
     const activeVideo = useCallback(() => {
       const stage = stageRef.current;
       const live = stage && stage.querySelector(".stk-video.stk-active");
@@ -877,6 +894,19 @@
     const speedRef = useRef(speed);
     speedRef.current = Number(speed) || 1;
     const hydratedRef = useRef(false);
+
+    useEffect(() => {
+      const onResize = () => {
+        const video = activeVideo();
+        if (video) setFitMode(fitFor(video));
+      };
+      window.addEventListener("resize", onResize);
+      window.addEventListener("orientationchange", onResize);
+      return () => {
+        window.removeEventListener("resize", onResize);
+        window.removeEventListener("orientationchange", onResize);
+      };
+    }, [activeVideo, fitFor]);
 
     /* remember the seat as we move, not only on the way out */
     useEffect(() => {
@@ -1036,6 +1066,7 @@
       if (!video || !item) return;
       const start = Number(item.startAt) || 0;
       const onLoaded = () => {
+        setFitMode(fitFor(video));
         const total = video.duration || 0;
         setDuration(total);
         // a remembered playhead can outlive the file it came from: never seek past the end
@@ -1701,6 +1732,7 @@
                       if (el) prewarm(el, entry.startAt);
                     },
                 className: "stk-video" + (active ? " stk-active" : ""),
+                style: { objectFit: active ? fitMode : "cover" },
                 src: active && streamFallback ? source.signed : source.plain,
                 playsInline: true,
                 autoPlay: active,
@@ -2518,7 +2550,9 @@
     const [viewer, setViewer] = useState(null);
     const [stuck, setStuck] = useState(false);
     const pageRef = useRef(null);
-    const sortKey = "stashTok.perfSort." + performerId;
+    // v2: older builds stored their own default ("updated_at") per performer, which
+    // would keep overriding the file-size default for a day after this change
+    const sortKey = "stashTok.perfSort.v2." + performerId;
     const favKey = "stashTok.perfFavFirst." + performerId;
     const [sort, setSort] = useState(() => readSortPref(sortKey, (prefs && prefs.performerSort) || "filesize"));
     const [favFirst, setFavFirst] = useState(() => readSortPref(favKey, false));
