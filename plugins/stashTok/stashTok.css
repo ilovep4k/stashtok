@@ -458,8 +458,14 @@
 .stk-hud-hidden .stk-top,
 .stk-hud-hidden .stk-rail,
 .stk-hud-hidden .stk-nav,
-.stk-hud-hidden .stk-time { opacity: 0; pointer-events: none; }
-.stk-top, .stk-rail, .stk-timeline, .stk-nav, .stk-time { transition: opacity 200ms ease; }
+.stk-hud-hidden .stk-time,
+/* the caption block goes too: title, meta, path, hashtags and the timer */
+.stk-hud-hidden .stk-caption,
+.stk-hud-hidden .stk-info-with,
+.stk-hud-hidden .stk-hashtags,
+.stk-hud-hidden .stk-caption-time { opacity: 0; pointer-events: none; }
+.stk-top, .stk-rail, .stk-timeline, .stk-nav, .stk-time,
+.stk-caption, .stk-info-with, .stk-hashtags, .stk-caption-time { transition: opacity 200ms ease; }
 
 @media (min-width: 720px) {
   .stash-tok { max-width: 520px; margin: 0 auto; left: 50%; right: auto; transform: translateX(-50%); border-left: 1px solid rgba(255,255,255,.08); border-right: 1px solid rgba(255,255,255,.08); }
