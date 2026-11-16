@@ -2802,3 +2802,102 @@ html.stk-mono { filter: grayscale(1) contrast(1.06); }
   object-fit: cover;
   display: block;
 }
+
+/* ---- discover dashboard: stats strip + one horizontal row per sort ---- */
+.stk-stats {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 4px 0 10px;
+  scrollbar-width: none;
+}
+.stk-stats::-webkit-scrollbar { display: none; }
+.stk-stat {
+  flex: 0 0 auto;
+  min-width: 78px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: #141414;
+  border: 1px solid #232323;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.stk-stat b { font-size: 16px; font-weight: 700; color: #fff; }
+.stk-stat span { font-size: 11px; color: #8a8a8a; letter-spacing: .02em; }
+
+.stk-row { margin-bottom: 14px; }
+.stk-row-h {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #e6e6e6;
+  letter-spacing: .01em;
+}
+.stk-row-track {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  padding-bottom: 4px;
+  scrollbar-width: none;
+}
+.stk-row-track::-webkit-scrollbar { display: none; }
+
+.stk-card {
+  flex: 0 0 auto;
+  width: 148px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  position: relative;
+  scroll-snap-align: start;
+  cursor: pointer;
+}
+.stk-card-img {
+  display: block;
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #1b1b1b;
+}
+.stk-card-img.stk-card-round {
+  width: 84px;
+  aspect-ratio: 1 / 1;
+  border-radius: 50%;
+  margin: 0 auto;
+}
+.stk-card-dur {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: rgba(0, 0, 0, .72);
+  color: #fff;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.stk-card-person .stk-card-dur { right: 0; }
+.stk-card-title {
+  display: block;
+  margin-top: 5px;
+  font-size: 11.5px;
+  line-height: 1.25;
+  color: #ddd;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stk-card-person .stk-card-title { text-align: center; }
+.stk-card-sub {
+  display: block;
+  font-size: 10.5px;
+  color: #7d7d7d;
+  text-align: center;
+}
+.stk-card-person { width: 92px; }

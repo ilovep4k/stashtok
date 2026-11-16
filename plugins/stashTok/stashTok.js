@@ -110,6 +110,53 @@
     return `${THUMB_BASE}/t/${kind}/${id}?w=${width || 320}`;
   }
 
+  /* ---- discover dashboard ------------------------------------------- *
+   * stashy's home in one screen: a stats strip and a horizontal row per
+   * sort. Rows hide themselves when the instance has nothing to show.   */
+
+  function DashRow({ title, children }) {
+    if (!children) return null;
+    const items = React.Children.toArray(children);
+    if (!items.length) return null;
+    return h(
+      "section",
+      { className: "stk-row" },
+      h("h4", { className: "stk-row-h" }, title),
+      h("div", { className: "stk-row-track" }, items)
+    );
+  }
+
+  function SceneCard({ scene, onOpen }) {
+    const file = (scene.files || [])[0];
+    return h(
+      "button",
+      { className: "stk-card", onClick: () => onOpen(scene) },
+      h("span", { className: "stk-card-img" }, h(Thumb, { src: rel(scene.paths && scene.paths.screenshot), width: 320 })),
+      file && file.duration ? h("span", { className: "stk-card-dur" }, fmtTime(file.duration)) : null,
+      h("span", { className: "stk-card-title" }, scene.title || "Scene " + scene.id)
+    );
+  }
+
+  function PerformerCard({ performer, onOpen }) {
+    return h(
+      "button",
+      { className: "stk-card stk-card-person", onClick: () => onOpen(performer) },
+      h("span", { className: "stk-card-img stk-card-round" }, h(Thumb, { src: rel(performer.image_path), width: 160 })),
+      h("span", { className: "stk-card-title" }, performer.name),
+      h("span", { className: "stk-card-sub" }, fmtCount(performer.scene_count) + " scenes")
+    );
+  }
+
+  function GalleryCard({ gallery, onOpen }) {
+    return h(
+      "button",
+      { className: "stk-card", onClick: () => onOpen(gallery) },
+      h("span", { className: "stk-card-img" }, h(Thumb, { src: rel(gallery.paths && gallery.paths.cover), width: 320 })),
+      h("span", { className: "stk-card-dur" }, fmtCount(gallery.image_count)),
+      h("span", { className: "stk-card-title" }, gallery.title || "Gallery " + gallery.id)
+    );
+  }
+
   /** lazy thumbnail: a CSS background-image is fetched immediately even when the card
       is far off screen; a real <img> with loading=lazy never even requests it. */
   function Thumb({ src, className, width }) {
@@ -4553,6 +4600,42 @@ void main() {
       setSelected(initialPerformer || null);
     }, [initialPerformer]);
 
+    /* dashboard: the front page of Discover, modelled on stashy's home.
+       One document, one round trip: stats, then a row per sort. */
+    const [dash, setDash] = useState(null);
+    useEffect(() => {
+      if (query) return undefined;
+      let alive = true;
+      gql(
+        `query StashTokDash {
+           stats { scene_count performer_count studio_count gallery_count }
+           scenesNew: findScenes(filter: { per_page: 14, sort: "created_at", direction: DESC }) {
+             scenes { id title paths { screenshot } files { duration } } }
+           scenesPlayed: findScenes(filter: { per_page: 14, sort: "last_played_at", direction: DESC }) {
+             scenes { id title paths { screenshot } files { duration } } }
+           scenesViewed: findScenes(filter: { per_page: 14, sort: "play_count", direction: DESC }) {
+             scenes { id title paths { screenshot } files { duration } } }
+           scenesRandom: findScenes(filter: { per_page: 14, sort: "random" }) {
+             scenes { id title paths { screenshot } files { duration } } }
+           performersNew: findPerformers(filter: { per_page: 14, sort: "created_at", direction: DESC }) {
+             performers { id name image_path scene_count } }
+           performersTop: findPerformers(filter: { per_page: 14, sort: "scenes_count", direction: DESC }) {
+             performers { id name image_path scene_count } }
+           performersRated: findPerformers(filter: { per_page: 14, sort: "rating", direction: DESC }) {
+             performers { id name image_path scene_count } }
+           galleriesNew: findGalleries(filter: { per_page: 14, sort: "created_at", direction: DESC }) {
+             galleries { id title image_count paths { cover } } }
+           galleriesUpdated: findGalleries(filter: { per_page: 14, sort: "updated_at", direction: DESC }) {
+             galleries { id title image_count paths { cover } } }
+         }`
+      )
+        .then((data) => alive && setDash(data))
+        .catch(() => alive && setDash({}));
+      return () => {
+        alive = false;
+      };
+    }, [query]);
+
     /* discover strips: random creators + the tags you use most */
     const [circles, setCircles] = useState(null);
     const [topTags, setTopTags] = useState(null);
@@ -4676,6 +4759,55 @@ void main() {
               )
             )
           )
+        ),
+      !query && dash && dash.stats &&
+        h(
+          "div",
+          { className: "stk-stats" },
+          [["Scenes", dash.stats.scene_count], ["Performers", dash.stats.performer_count],
+           ["Studios", dash.stats.studio_count], ["Galleries", dash.stats.gallery_count]]
+            .filter((entry) => entry[1] > 0)
+            .map(([label, total]) =>
+              h("div", { key: label, className: "stk-stat" }, h("b", null, fmtCount(total)), h("span", null, label))
+            )
+        ),
+      !query && dash &&
+        h(
+          React.Fragment,
+          null,
+          h(DashRow, { title: "Scenes - Last played" },
+            ((dash.scenesPlayed || {}).scenes || []).map((scene) =>
+              h(SceneCard, { key: "p" + scene.id, scene, onOpen: (item) => goTo("scene/" + item.id) }))),
+          h(DashRow, { title: "Scenes - Recently added" },
+            ((dash.scenesNew || {}).scenes || []).map((scene) =>
+              h(SceneCard, { key: "n" + scene.id, scene, onOpen: (item) => goTo("scene/" + item.id) }))),
+          h(DashRow, { title: "Scenes - Most viewed" },
+            ((dash.scenesViewed || {}).scenes || []).map((scene) =>
+              h(SceneCard, { key: "v" + scene.id, scene, onOpen: (item) => goTo("scene/" + item.id) }))),
+          h(DashRow, { title: "Scenes - Random" },
+            ((dash.scenesRandom || {}).scenes || []).map((scene) =>
+              h(SceneCard, { key: "r" + scene.id, scene, onOpen: (item) => goTo("scene/" + item.id) }))),
+          h(DashRow, { title: "Performers - New" },
+            ((dash.performersNew || {}).performers || []).map((performer) =>
+              h(PerformerCard, { key: "pn" + performer.id, performer, onOpen: (item) => {
+                setSelected(item); goTo("performer/" + encodeURIComponent(item.name));
+              } }))),
+          h(DashRow, { title: "Performers - Top" },
+            ((dash.performersTop || {}).performers || []).map((performer) =>
+              h(PerformerCard, { key: "pt" + performer.id, performer, onOpen: (item) => {
+                setSelected(item); goTo("performer/" + encodeURIComponent(item.name));
+              } }))),
+          h(DashRow, { title: "Performers - Rating" },
+            ((dash.performersRated || {}).performers || []).map((performer) =>
+              h(PerformerCard, { key: "pr" + performer.id, performer, onOpen: (item) => {
+                setSelected(item); goTo("performer/" + encodeURIComponent(item.name));
+              } }))),
+          h(DashRow, { title: "Galleries - New" },
+            ((dash.galleriesNew || {}).galleries || []).map((gallery) =>
+              h(GalleryCard, { key: "gn" + gallery.id, gallery, onOpen: (item) => window.open(rel("/gallery/" + item.id), "_blank") }))),
+          h(DashRow, { title: "Galleries - Updated" },
+            ((dash.galleriesUpdated || {}).galleries || []).map((gallery) =>
+              h(GalleryCard, { key: "gu" + gallery.id, gallery, onOpen: (item) => window.open(rel("/gallery/" + item.id), "_blank") })))
         ),
       h(
         "div",

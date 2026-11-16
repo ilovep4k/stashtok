@@ -29,6 +29,12 @@ Desktop mode and the browsing surfaces, plus the fixes found while profiling the
 
 ### Screens
 
+- Discover is a dashboard, after stashy: a stats strip (scenes, performers, studios,
+  galleries) and a horizontal row per sort - scenes last played, recently added, most
+  viewed and random; performers new, top and highest rated; galleries new and updated.
+  Empty rows are not rendered, so a library without galleries shows no gallery rows.
+  Scene cards open the feed on that clip, performer cards open the profile, gallery
+  cards open Stash's gallery page.
 - Discover replaces Performers: creator search, circles of creators you follow, a strip
   of random performers and one of your most-used tags.
 - Favourites is a gallery of hearted scenes with the folders-style middle picker for
