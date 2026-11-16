@@ -4242,27 +4242,35 @@ void main() {
         const data = await gql(
           `query StashTokFolders($page: Int!) {
             findFolders(filter: { per_page: 1000, page: $page }) {
-              folders { path }
+              folders { path updated_at }
             }
           }`,
           { page }
         );
         const batch = (data.findFolders && data.findFolders.folders) || [];
-        all = all.concat(batch.map((row) => row.path));
+        all = all.concat(batch.map((row) => ({ path: row.path, time: Date.parse(row.updated_at) || 0 })));
         if (batch.length < 1000) break;
       }
 
       const nodes = {};
-      all.forEach((path) => {
-        nodes[path] = { path, name: path.slice(path.lastIndexOf("/") + 1) || path, children: [] };
+      all.forEach((row) => {
+        nodes[row.path] = { path: row.path, name: row.path.slice(row.path.lastIndexOf("/") + 1) || row.path, time: row.time, children: [] };
       });
-      all.forEach((path) => {
-        const cut = path.lastIndexOf("/");
-        const parent = cut > 0 ? path.slice(0, cut) : "";
-        if (parent && nodes[parent]) nodes[parent].children.push(path);
+      all.forEach((row) => {
+        const cut = row.path.lastIndexOf("/");
+        const parent = cut > 0 ? row.path.slice(0, cut) : "";
+        if (parent && nodes[parent]) nodes[parent].children.push(row.path);
       });
       Object.keys(nodes).forEach((path) => {
         nodes[path].children.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base", numeric: true }));
+      });
+      /* cheap "size": how many folders live underneath each one */
+      Object.keys(nodes).sort((a, b) => b.length - a.length).forEach((path) => {
+        let total = nodes[path].children.length;
+        nodes[path].children.forEach((child) => {
+          total += nodes[child] ? nodes[child].weight || 0 : 0;
+        });
+        nodes[path].weight = total;
       });
 
       /* a stash that lives inside another stash is not a separate library */
@@ -4275,7 +4283,7 @@ void main() {
         .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base", numeric: true }))
         .map((path) => {
           if (!nodes[path]) {
-            nodes[path] = { path, name: path.slice(path.lastIndexOf("/") + 1) || path, children: [] };
+            nodes[path] = { path, name: path.slice(path.lastIndexOf("/") + 1) || path, time: 0, weight: 0, children: [] };
           }
           return path;
         });
@@ -4289,6 +4297,10 @@ void main() {
     const [tree, setTree] = useState(null);
     const [path, setPath] = useState("");
     const [query, setQuery] = useState("");
+    const [sort, setSort] = useState("date");
+    const [desc, setDesc] = useState(true);
+    const [selectMode, setSelectMode] = useState(false);
+    const [picked, setPicked] = useState([]);
 
     useEffect(() => {
       let alive = true;
@@ -4296,7 +4308,6 @@ void main() {
         .then((data) => {
           if (!alive) return;
           setTree(data);
-          /* a single library is not a menu: go straight into it */
           if (data.libraries.length === 1) setPath(data.libraries[0]);
         })
         .catch(() => {
@@ -4307,13 +4318,18 @@ void main() {
       };
     }, []);
 
+    useEffect(() => {
+      setPicked([]);
+      setSelectMode(false);
+      setQuery("");
+    }, [path]);
+
     const nodes = tree ? tree.nodes : {};
     const libraries = tree ? tree.libraries : [];
     const atRoot = !path;
-    const children = path && nodes[path] ? nodes[path].children : [];
+    const kids = path && nodes[path] ? nodes[path].children : [];
     const term = query.trim().toLowerCase();
 
-    /* breadcrumbs start at the library, not at the filesystem root */
     const trail = [];
     if (path) {
       const lib = libraries
@@ -4321,131 +4337,206 @@ void main() {
         .sort((a, b) => b.length - a.length)[0] || "";
       if (lib) trail.push({ label: nodes[lib] ? nodes[lib].name : lib.slice(lib.lastIndexOf("/") + 1), path: lib });
       let acc = lib;
-      const rest = path.slice(lib.length).split("/").filter(Boolean);
-      rest.forEach((part) => {
+      path.slice(lib.length).split("/").filter(Boolean).forEach((part) => {
         acc += "/" + part;
         trail.push({ label: part, path: acc });
       });
     }
 
+    const junk = (name) =>
+      /^@eaDir/i.test(name) || name[0] === "<" || name.indexOf("\u2044") !== -1 || name[0] === "." || /^_delete$/i.test(name);
+
     let rows = atRoot
-      ? libraries.map((lib) => ({ path: lib, name: nodes[lib] ? nodes[lib].name : lib.slice(lib.lastIndexOf("/") + 1) }))
-      : children.map((child) => ({ path: child, name: nodes[child].name }));
+      ? libraries.map((lib) => lib)
+      : kids.slice();
 
     if (term) {
       const base = path || "";
-      const found = [];
-      Object.keys(nodes).forEach((candidate) => {
-        if (base && candidate.indexOf(base + "/") !== 0) return;
+      rows = Object.keys(nodes).filter((candidate) => {
+        if (base && candidate.indexOf(base + "/") !== 0) return false;
         const rest = base ? candidate.slice(base.length + 1) : candidate.slice(1);
-        if (!rest || rest.indexOf("/") !== -1) return;
-        if (nodes[candidate].name.toLowerCase().indexOf(term) === -1) return;
-        found.push({ path: candidate, name: nodes[candidate].name });
+        if (!rest || rest.indexOf("/") !== -1) return false;
+        return nodes[candidate].name.toLowerCase().indexOf(term) !== -1;
       });
-      rows = found;
     }
 
-    const junk = (name) => /^@eaDir/i.test(name) || name[0] === "<" || name.indexOf("\u2044") !== -1 || name[0] === "." || /^_delete$/i.test(name);
-    rows = rows.filter((row) => !junk(row.name));
-    rows.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true }));
+    rows = rows
+      .map((folderPath) => nodes[folderPath] || { path: folderPath, name: folderPath.slice(folderPath.lastIndexOf("/") + 1), time: 0, weight: 0, children: [] })
+      .filter((node) => !junk(node.name))
+      .sort((a, b) => {
+        let order;
+        /* every comparator ascends; `desc` flips the whole list */
+        if (sort === "name") order = a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true });
+        else if (sort === "size") order = (a.weight || 0) - (b.weight || 0);
+        else if (sort === "type") order = (a.children.length ? 0 : 1) - (b.children.length ? 0 : 1) || a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true });
+        else order = (a.time || 0) - (b.time || 0);
+        return desc ? -order : order;
+      });
+
+    const SORTS = [["name", "Name"], ["date", "Date"], ["size", "Size"], ["type", "Type"]];
+
+    const title = atRoot ? "Library" : nodes[path] ? nodes[path].name : "Folders";
+
+    function goUp() {
+      if (!path) {
+        if (onBack) onBack();
+        return;
+      }
+      if (libraries.length === 1 && libraries[0] === path) {
+        setPath("");
+        return;
+      }
+      setPath(path.slice(0, path.lastIndexOf("/")) || "");
+    }
+
+    function open(folderPath) {
+      if (selectMode) {
+        setPicked((current) => (current.indexOf(folderPath) === -1 ? current.concat(folderPath) : current.filter((entry) => entry !== folderPath)));
+        return;
+      }
+      const node = nodes[folderPath];
+      if (node && node.children.length) setPath(folderPath);
+      else onPick({ name: node ? node.name : folderPath, folder: folderPath });
+    }
 
     return h(
       "div",
-      { className: "stk-page stk-folders" },
-      h(
-        "h2",
-        null,
-        (path || onBack) && h("button", {
-          onClick: () => {
-            if (!path) {
-              if (onBack) onBack();
-              return;
-            }
-            if (libraries.length === 1 && libraries[0] === path) {
-              setPath("");
-              return;
-            }
-            setPath(path.slice(0, path.lastIndexOf("/")) || "");
-          },
-        }, h(Icon, { name: "chevron", size: 18 })),
-        atRoot ? "Folders" : nodes[path] ? nodes[path].name : "Folders"
-      ),
+      { className: "stk-page stk-fb" },
       h(
         "div",
-        { className: "stk-folder-tools" },
-        h("input", {
-          type: "search",
-          placeholder: atRoot ? "Filter libraries" : "Filter folders",
-          value: query,
-          onChange: (event) => setQuery(event.currentTarget.value),
-          style: {
-            width: "100%",
-            marginBottom: "10px",
-            padding: "9px 11px",
-            borderRadius: "10px",
-            background: "#171717",
-            border: "1px solid #2a2a2a",
-            color: "#fff",
+        { className: "stk-fb-head" },
+        h("button", { className: "stk-fb-round", onClick: goUp, "aria-label": "Back" }, h(Icon, { name: "chevron", size: 18 })),
+        h("div", { className: "stk-fb-title" }, title),
+        h(
+          "button",
+          {
+            className: "stk-fb-pill" + (selectMode ? " stk-on" : ""),
+            onClick: () => {
+              setSelectMode((on) => !on);
+              setPicked([]);
+            },
           },
-        })
+          selectMode ? "Done" : "Select"
+        )
       ),
+      trail.length > 1 &&
+        h(
+          "div",
+          { className: "stk-crumbs" },
+          trail.map((crumb, index) =>
+            h(
+              "button",
+              { key: crumb.path, className: "stk-crumb", onClick: () => setPath(crumb.path) },
+              crumb.label,
+              index < trail.length - 1 && h("span", { className: "stk-crumb-sep" }, "/")
+            )
+          )
+        ),
+      h(
+        "div",
+        { className: "stk-fb-sorts" },
+        SORTS.map(([value, label]) =>
+          h(
+            "button",
+            {
+              key: value,
+              className: "stk-fb-sort" + (value === sort ? " stk-on" : ""),
+              onClick: () => {
+                if (value === sort) setDesc((on) => !on);
+                else {
+                  setSort(value);
+                  setDesc(value === "date" || value === "size");
+                }
+              },
+            },
+            label,
+            value === sort && h("span", { className: "stk-fb-arrow" }, desc ? "↓" : "↑")
+          )
+        )
+      ),
+      h("input", {
+        type: "search",
+        className: "stk-fb-search",
+        placeholder: atRoot ? "Filter libraries" : "Filter folders",
+        value: query,
+        onChange: (event) => setQuery(event.currentTarget.value),
+      }),
       !tree
         ? h("div", { className: "stk-state" }, h("div", { className: "stk-spinner" }))
         : h(
             React.Fragment,
             null,
-            trail.length > 1 &&
-              h(
-                "div",
-                { className: "stk-crumbs" },
-                trail.map((crumb, index) =>
-                  h(
-                    "button",
-                    {
-                      key: crumb.path,
-                      className: "stk-crumb",
-                      onClick: () => setPath(crumb.path),
-                    },
-                    crumb.label,
-                    index < trail.length - 1 && h("span", { className: "stk-crumb-sep" }, "/")
-                  )
-                )
-              ),
             path &&
               h(
                 "button",
-                {
-                  className: "stk-folder-open",
-                  onClick: () => onPick({ name: nodes[path] ? nodes[path].name : path, folder: path }),
-                },
+                { className: "stk-fb-open", onClick: () => onPick({ name: title, folder: path }) },
                 h(Icon, { name: "video", size: 15 }),
                 "Play clips in this folder"
               ),
             h(
               "div",
-              { className: "stk-folder-list" },
+              { className: "stk-fb-list" },
               rows.length
-                ? rows.map((row) => {
-                    const kids = nodes[row.path] ? nodes[row.path].children.length : 0;
+                ? rows.map((node) => {
+                    const hasKids = node.children.length > 0;
+                    const selected = picked.indexOf(node.path) !== -1;
                     return h(
                       "button",
                       {
-                        key: row.path,
-                        className: "stk-folder-row",
-                        onClick: () => {
-                          setQuery("");
-                          if (kids) setPath(row.path);
-                          else onPick({ name: row.name, folder: row.path });
-                        },
+                        key: node.path,
+                        className: "stk-fb-row" + (selected ? " stk-sel" : ""),
+                        onClick: () => open(node.path),
                       },
-                      h(Icon, { name: kids ? "folder" : "video", size: 17 }),
-                      h("span", { className: "stk-folder-name" }, row.name),
-                      h("span", { className: "stk-sub" }, kids ? kids + (kids === 1 ? " folder" : " folders") : "clips")
+                      selectMode &&
+                        h("span", { className: "stk-fb-check" + (selected ? " stk-on" : "") },
+                          selected && h("svg", { viewBox: "0 0 24 24", width: 14, height: 14, fill: "none", stroke: "currentColor", strokeWidth: 3, strokeLinecap: "round" }, h("path", { d: "M5 13l4 4L19 7" }))
+                        ),
+                      h(
+                        "svg",
+                        { viewBox: "0 0 24 24", width: 28, height: 28, className: "stk-fb-ico", "aria-hidden": "true" },
+                        h("path", {
+                          d: ICONS.folder,
+                          fill: hasKids ? "#4a9dff" : "#3a7bc4",
+                          stroke: hasKids ? "#7cc0ff" : "#5f9ad4",
+                          strokeWidth: 1,
+                          strokeLinejoin: "round",
+                        })
+                      ),
+                      h(
+                        "span",
+                        { className: "stk-fb-text" },
+                        h("span", { className: "stk-fb-name" }, node.name),
+                        h(
+                          "span",
+                          { className: "stk-fb-sub" },
+                          hasKids ? node.children.length + (node.children.length === 1 ? " folder" : " folders") : "clips"
+                        )
+                      ),
+                      !selectMode && h(Icon, { name: "chevron", size: 16, className: "stk-fb-chev" })
                     );
                   })
                 : h("div", { className: "stk-state" }, "Nothing here.")
             )
+          ),
+      selectMode &&
+        h(
+          "div",
+          { className: "stk-fb-foot" },
+          h("span", { className: "stk-sub" }, picked.length + " selected"),
+          h(
+            "button",
+            {
+              className: "stk-fb-pill stk-on",
+              disabled: !picked.length,
+              onClick: () => {
+                const target = picked[picked.length - 1];
+                const node = nodes[target];
+                onPick({ name: node ? node.name : target, folder: target });
+              },
+            },
+            "Open"
           )
+        )
     );
   }
 
