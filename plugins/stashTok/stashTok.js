@@ -1952,6 +1952,10 @@ void main() {
           y0: tf.current.y,
           cx: (a.x + b.x) / 2 - rect.left - rect.width / 2,
           cy: (a.y + b.y) / 2 - rect.top - rect.height / 2,
+          left: rect.left,
+          top: rect.top,
+          w: rect.width,
+          h: rect.height,
         };
         return;
       }
@@ -2014,9 +2018,13 @@ void main() {
         const ratio = dist(a, b) / g.d0;
         const next = clamp(g.s0 * ratio, 1, MAX_ZOOM);
         const scaleRatio = next / g.s0;
+        /* zoom about the point the pinch started on, and follow the fingers:
+           two fingers can also drag the picture around while pinching */
+        const cxNow = (a.x + b.x) / 2 - g.left - g.w / 2;
+        const cyNow = (a.y + b.y) / 2 - g.top - g.h / 2;
         tf.current.s = next;
-        tf.current.x = g.cx - (g.cx - g.x0) * scaleRatio;
-        tf.current.y = g.cy - (g.cy - g.y0) * scaleRatio;
+        tf.current.x = g.cx - (g.cx - g.x0) * scaleRatio + (cxNow - g.cx);
+        tf.current.y = g.cy - (g.cy - g.y0) * scaleRatio + (cyNow - g.cy);
         clampPan();
         applyTransform();
         return;
