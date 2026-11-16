@@ -1256,6 +1256,7 @@ void main() {
     const [muted, setMuted] = useState(cfg.autoplayMuted);
     /* VR clips default to the 2D rectilinear view; v toggles back to raw */
     const [vrMode, setVrMode] = useState(true);
+    const [people, setPeople] = useState(false);
     const [vrSource, setVrSource] = useState("");
     const [scrubPreview, setScrubPreview] = useState(null);
     const spriteRef = useRef({ key: "", cues: [], ok: false });
@@ -1556,14 +1557,30 @@ void main() {
     }, [muted]);
 
     useEffect(() => {
-      const video = activeVideo();
-      if (video && !rateBadge) video.playbackRate = speed;
       try {
         window.localStorage.setItem("stashTok.speed", String(speed));
       } catch (e) {
         /* ignore */
       }
-    }, [speed, index]);
+      if (rateBadge) return undefined;
+      /* apply to every rendered clip, not just the one flagged active: on a deep
+         link that flag can be missing, and then the rate never reached the video.
+         Re-apply on metadata/play too, because a fresh source resets playbackRate. */
+      const apply = () => {
+        document.querySelectorAll(".stk-video").forEach((el) => {
+          if (Math.abs(el.playbackRate - speed) > 0.01) el.playbackRate = speed;
+        });
+      };
+      apply();
+      const stage = stageRef.current;
+      if (!stage) return undefined;
+      stage.addEventListener("loadedmetadata", apply, true);
+      stage.addEventListener("play", apply, true);
+      return () => {
+        stage.removeEventListener("loadedmetadata", apply, true);
+        stage.removeEventListener("play", apply, true);
+      };
+    }, [speed, index, rateBadge]);
 
     /** the scale at which the video covers the stage, i.e. a pinch-fill */
     function coverScale() {
@@ -2438,6 +2455,39 @@ void main() {
             style: { left: `${press.x}px`, top: `${press.y}px` },
           }),
 
+        people &&
+          performers.length > 1 &&
+          h(
+            React.Fragment,
+            null,
+            h("div", { className: "stk-people-backdrop", onClick: () => setPeople(false) }),
+            h(
+              "div",
+              { className: "stk-people", onClick: (event) => event.stopPropagation() },
+              h("h4", null, "In this scene"),
+              performers.map((performer) =>
+                h(
+                  "button",
+                  {
+                    key: performer.id,
+                    className: "stk-people-row",
+                    onClick: (event) => {
+                      event.stopPropagation();
+                      setPeople(false);
+                      onOpenPerformer(performer);
+                    },
+                  },
+                  performer.image_path
+                    ? h("img", { className: "stk-people-avatar", src: rel(performer.image_path), alt: "" })
+                    : h("span", { className: "stk-people-avatar stk-people-initials" }, initials(performer.name)),
+                  h("span", { className: "stk-people-name" }, performer.name),
+                  h(Icon, { name: "chevron", size: 16 })
+                )
+              ),
+              h("button", { className: "stk-people-close", onClick: () => setPeople(false) }, "Close")
+            )
+          ),
+
         quick &&
           h(
             "div",
@@ -2626,8 +2676,6 @@ void main() {
                 )
             );
           })(),
-          performers.length > 1 &&
-            h("div", { className: "stk-info-with" }, "with " + performers.slice(1, 4).map((performer) => performer.name).join(", ")),
           tags.length > 0 &&
             h(
               "div",
@@ -2729,7 +2777,9 @@ void main() {
               {
                 onClick: (event) => {
                   event.stopPropagation();
-                  onOpenPerformer(performers[0]);
+                  /* more than one person: let the user pick from a small sheet */
+                  if (performers.length > 1) setPeople(true);
+                  else onOpenPerformer(performers[0]);
                 },
               },
               h(Icon, { name: "user", size: 26 }),
@@ -6044,7 +6094,7 @@ void main() {
     const [refreshKey, setRefreshKey] = useState(0);
     const [builder, setBuilder] = useState(null); // {spec} | 'new' | null
     const [performersOpen, setPerformersOpen] = useState(false);
-    const [tagsOpen, setTagsOpen] = useState(false);
+
     const [performerFilter, setPerformerFilter] = useState(null);
     const [tagFilter, setTagFilter] = useState(null);
     const [folderView, setFolderView] = useState(null);
