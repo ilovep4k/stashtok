@@ -997,8 +997,8 @@ void main() {
         kind: gl.getUniformLocation(prog, "kind"),
       };
       const scratch = document.createElement("canvas");
-      scratch.width = 3840;
-      scratch.height = 1920;
+      scratch.width = 2048;
+      scratch.height = 1024;
       const sctx = scratch.getContext("2d");
 
       /* Safari will not decode an 8K HEVC master (and refuses to sample some
@@ -1024,10 +1024,21 @@ void main() {
         kick();
       }
       const usable = (el) => el && el.readyState >= 2 && el.videoWidth > 0;
+      /* Once the master has handed us a frame it stays the source for this scene:
+         an active seek or a buffer stall must not demote a sharp 8K frame to the
+         small preview mid-playback. The preview is only for a master that never
+         decodes at all, and only after a grace period. */
+      let masterSeen = false;
+      const opened = Date.now();
       const pickSource = () => {
         const master = videoRef.current;
-        if (usable(master)) return master;
-        if (usable(fallback)) return fallback;
+        if (usable(master)) {
+          masterSeen = true;
+          return master;
+        }
+        if (master && master.error && usable(fallback)) return fallback;
+        if (masterSeen) return master;
+        if (usable(fallback) && Date.now() - opened > 2500) return fallback;
         return null;
       };
 
@@ -1035,6 +1046,7 @@ void main() {
       let last = 0;
       let lastFrame = -1;
       let lastKind = "";
+      let uploadIdle = true;
       const draw = (now) => {
         raf = requestAnimationFrame(draw);
         if (now - last < 16) return;
@@ -1063,33 +1075,65 @@ void main() {
         lastFrame = source.currentTime;
         const vw = source.videoWidth || 1920;
         const vh = source.videoHeight || 960;
-        const scratchW = Math.max(720, Math.min(2048, Math.round(w * 1.15), vw));
-        if (scratch.width !== scratchW) {
-          scratch.width = scratchW;
-          scratch.height = Math.max(2, Math.round((scratchW * vh) / Math.max(1, vw)));
-        }
+        const texW = Math.max(720, Math.min(2048, Math.round(w * 1.15), vw));
+        const texH = Math.max(2, Math.round((texW * vh) / Math.max(1, vw)));
         const master = videoRef.current;
         if (source === fallback && master && master.currentTime > 1 && fallback.duration > 2) {
           /* keep the stand-in roughly where the timeline says we are */
           const want = master.currentTime % fallback.duration;
           if (Math.abs(fallback.currentTime - want) > 1.5) fallback.currentTime = want;
         }
-        try {
-          sctx.drawImage(source, 0, 0, scratch.width, scratch.height);
-        } catch (err) {
-          return;
-        }
         const view = viewRef.current;
-        gl.bindTexture(gl.TEXTURE_2D, tex);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, scratch);
-        gl.viewport(0, 0, canvas.width, canvas.height);
-        gl.uniform1i(u.tex, 0);
-        gl.uniform1f(u.yaw, view.yaw);
-        gl.uniform1f(u.pitch, view.pitch);
-        gl.uniform1f(u.fov, view.fov);
-        gl.uniform1f(u.aspect, canvas.width / canvas.height);
-        gl.uniform1i(u.kind, layout === "equirect" ? 1 : 0);
-        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        const paint = () => {
+          gl.viewport(0, 0, canvas.width, canvas.height);
+          gl.uniform1i(u.tex, 0);
+          gl.uniform1f(u.yaw, view.yaw);
+          gl.uniform1f(u.pitch, view.pitch);
+          gl.uniform1f(u.fov, view.fov);
+          gl.uniform1f(u.aspect, canvas.width / canvas.height);
+          gl.uniform1i(u.kind, layout === "equirect" ? 1 : 0);
+          gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        };
+        /* Upload through createImageBitmap so the resize happens on the GPU: an 8K
+           frame pushed through a 2D canvas every frame is what stutters on iOS. */
+        if (window.createImageBitmap) {
+          if (!uploadIdle) {
+            /* an upload is already in flight: repaint the last texture, do not queue another */
+            paint();
+            return;
+          }
+          uploadIdle = false;
+          createImageBitmap(source, { resizeWidth: texW, resizeHeight: texH, resizeQuality: "low" })
+            .then((bitmap) => {
+              gl.bindTexture(gl.TEXTURE_2D, tex);
+              gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bitmap);
+              bitmap.close();
+              uploadIdle = true;
+              paint();
+            })
+            .catch(() => {
+              uploadIdle = true;
+              legacyUpload(texW, texH);
+              paint();
+            });
+        } else {
+          legacyUpload(texW, texH);
+          paint();
+        }
+
+        function legacyUpload(width, height) {
+          if (scratch.width !== width || scratch.height !== height) {
+            scratch.width = width;
+            scratch.height = height;
+          }
+          try {
+            sctx.drawImage(source, 0, 0, scratch.width, scratch.height);
+          } catch (err) {
+            return;
+          }
+          gl.bindTexture(gl.TEXTURE_2D, tex);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, scratch);
+        }
       };
       raf = requestAnimationFrame(draw);
 
