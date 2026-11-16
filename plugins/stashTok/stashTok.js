@@ -18,7 +18,7 @@
 
   const React = api.React;
   const h = React.createElement;
-  const { useState, useEffect, useRef, useCallback } = React;
+  const { useState, useEffect, useLayoutEffect, useRef, useCallback } = React;
   const RouterDOM = api.libraries.ReactRouterDOM || {};
   const Link = RouterDOM.Link || "a";
 
@@ -75,6 +75,59 @@
     rotate: "M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4",
     verified: "M12 2.3l2.5 1.4 2.9-.2 1.2 2.6 2.4 1.6-1 2.8 1 2.8-2.4 1.6-1.2 2.6-2.9-.2L12 21.7l-2.5-1.4-2.9.2-1.2-2.6-2.4-1.6 1-2.8-1-2.8 2.4-1.6 1.2-2.6 2.9.2L12 2.3zM8.5 12.1l2.3 2.3 4.7-4.8",
   };
+
+  /* ---- thumbnails ------------------------------------------------- *
+   * Stash cannot resize on the fly, so a sidecar renders 320 px JPEGs.
+   * THUMB_BASE is set from plugin config, or guessed from the port the app
+   * is served on (9997 -> :18997, 9998 -> :18996). If the service is down the
+   * <img> falls back to the original URL, so nothing breaks.               */
+
+  let THUMB_BASE = null;
+
+  function guessThumbBase() {
+    try {
+      const override = new URLSearchParams(window.location.search).get("thumbs");
+      if (override) return override === "off" ? "" : override;
+      const port = window.location.port;
+      const host = window.location.hostname;
+      if (!host) return "";
+      if (port === "9997") return `${window.location.protocol}//${host}:18997`;
+      if (port === "9998") return `${window.location.protocol}//${host}:18996`;
+      /* the local dev proxy fronts the same instances */
+      if (port === "18998") return `${window.location.protocol}//${host}:18997`;
+      if (port === "18999") return `${window.location.protocol}//${host}:18996`;
+    } catch (e) {
+      /* ignore */
+    }
+    return "";
+  }
+
+  function thumbSrc(raw, width) {
+    if (!raw || !THUMB_BASE) return raw;
+    const match = /^(?:.*)?\/(scene|performer|image)\/([^/]+)\//.exec(raw);
+    if (!match) return raw;
+    const [, kind, id] = match;
+    return `${THUMB_BASE}/t/${kind}/${id}?w=${width || 320}`;
+  }
+
+  /** lazy thumbnail: a CSS background-image is fetched immediately even when the card
+      is far off screen; a real <img> with loading=lazy never even requests it. */
+  function Thumb({ src, className, width }) {
+    const [fallback, setFallback] = useState(false);
+    if (!src) return null;
+    const primary = fallback ? src : thumbSrc(src, width);
+    return h("img", {
+      className: "stk-thumb" + (className ? " " + className : ""),
+      src: primary,
+      alt: "",
+      loading: "lazy",
+      decoding: "async",
+      draggable: false,
+      onError: () => {
+        if (!fallback && primary !== src) setFallback(true);
+      },
+    });
+  }
 
   function Icon({ name, size = 22, className = "", filled = false }) {
     return h(
@@ -389,8 +442,11 @@
     }
     const windowDays = spec.windowDays !== undefined ? spec.windowDays : cfg.windowDays;
     if (windowDays && Number(windowDays) > 0) {
-      const since = new Date(Date.now() - Number(windowDays) * 86400000);
-      parts.push(`date: { value: "${since.toISOString().slice(0, 10)}", modifier: GREATER_THAN }`);
+      const since = new Date(Date.now() - Number(windowDays) * 86400000).toISOString();
+      /* "new" means recently added to the library: `date` is the scene's own date
+         and is empty for whole libraries (every OnlyFans scene), which made 30 days
+         match nothing at all */
+      parts.push(`created_at: { value: "${since}", modifier: GREATER_THAN }`);
     }
     if (type === "performer" && spec.performerId) {
       parts.push(`performers: { value: ["${spec.performerId}"], modifier: INCLUDES }`);
@@ -578,6 +634,29 @@
     return data.sceneUpdate;
   }
 
+  async function fetchTagOptions(limit) {
+    const data = await gql(
+      `query StashTokTagOptions($n: Int!) {
+        findTags(filter: { per_page: $n, sort: "scenes_count", direction: DESC }) {
+          tags { id name scene_count }
+        }
+      }`,
+      { n: limit || 250 }
+    );
+    return (data.findTags && data.findTags.tags) || [];
+  }
+
+  async function addSceneTags(sceneId, tagIds) {
+    if (!tagIds.length) return null;
+    const data = await gql(
+      `mutation StashTokAddTags($id: ID!, $tags: [ID!]!) {
+        bulkSceneUpdate(input: { ids: [$id], tag_ids: { ids: $tags, mode: ADD } }) { id }
+      }`,
+      { id: sceneId, tags: tagIds.map(String) }
+    );
+    return data.bulkSceneUpdate;
+  }
+
   /* ------------------------------------------------------------------ */
   /* settings + feeds                                                   */
   /* ------------------------------------------------------------------ */
@@ -603,6 +682,8 @@
       sfw: raw.sfw === true,
       // 10s keeps 2-second clips out without cutting whole folders
       minDuration: raw.minDuration == null ? 10 : Number(raw.minDuration),
+      /* "" = auto-guess from the port, "off" = always use Stash's own images */
+      thumbBase: typeof raw.thumbBase === "string" ? raw.thumbBase.trim() : "",
     };
   }
 
@@ -696,6 +777,8 @@
     performerMarkers: true,
     foldersOnTop: true,
     showPath: false,
+    fitWindow: true,
+    mono: false,
     favoritesSort: "updated_at",
     favoritesOpen: "gallery",
     feedWindow: "all",
@@ -734,6 +817,12 @@
     if (merged.sortDefaultsV !== 2) {
       merged.performerSort = "filesize";
       merged.sortDefaultsV = 2;
+      savePrefs(merged);
+    }
+    /* bottom bar now defaults to Feed / Performers / Favorites / Folders / Settings */
+    if (merged.navDefaultsV !== 2) {
+      merged.navSlots = DEFAULT_NAV_SLOTS.slice();
+      merged.navDefaultsV = 2;
       savePrefs(merged);
     }
     return merged;
@@ -1250,6 +1339,7 @@ void main() {
     const [ready, setReady] = useState(false);
     const [streamFallback, setStreamFallback] = useState(false);
     const [failCount, setFailCount] = useState(0);
+    const lastTimePush = useRef(0);
     const [revealed, setRevealed] = useState(false);
     const [rotation, setRotation] = useState(0);
     const [speed, setSpeed] = useState(() => Number(window.localStorage.getItem("stashTok.speed")) || 1);
@@ -1257,6 +1347,7 @@ void main() {
     /* VR clips default to the 2D rectilinear view; v toggles back to raw */
     const [vrMode, setVrMode] = useState(true);
     const [people, setPeople] = useState(false);
+    const quickRef = useRef(null);
     const [vrSource, setVrSource] = useState("");
     const [scrubPreview, setScrubPreview] = useState(null);
     const spriteRef = useRef({ key: "", cues: [], ok: false });
@@ -1264,6 +1355,13 @@ void main() {
     const [hud, setHud] = useState(true);
     const [hudTick, setHudTick] = useState(0);
     const [sheet, setSheet] = useState(null); // 'actions' | 'details'
+    /* quick tagging straight from the rail */
+    const [tagOpen, setTagOpen] = useState(false);
+    const [tagOptions, setTagOptions] = useState([]);
+    const [tagPicked, setTagPicked] = useState({});
+    const [tagFilter, setTagFilter] = useState("");
+    const [tagBusy, setTagBusy] = useState(false);
+    const tagDialogRef = useDialog(tagOpen, () => setTagOpen(false));
     const [press, setPress] = useState(null); // {x,y} pip while a long press builds
     const [quick, setQuick] = useState(null); // {x,y} quick menu anchored at the thumb
     const [rating, setRating] = useState(null);
@@ -1309,7 +1407,7 @@ void main() {
       // share of the frame that `cover` would crop away
       const lost = vr >= sr ? 1 - sr / vr : 1 - vr / sr;
       return lost <= 0.25 ? "cover" : "contain";
-    }, []);
+    }, [prefs]);
 
     const activeVideo = useCallback(() => {
       const stage = stageRef.current;
@@ -1685,6 +1783,22 @@ void main() {
       applyTransform();
     }, [applyTransform]);
 
+    useLayoutEffect(() => {
+      const el = quickRef.current;
+      if (!el || !quick) return;
+      const rect = el.getBoundingClientRect();
+      const pad = 8;
+      let dx = 0;
+      let dy = 0;
+      if (rect.left < pad) dx = pad - rect.left;
+      if (rect.right > window.innerWidth - pad) dx = window.innerWidth - pad - rect.right;
+      if (rect.top < pad) dy = pad - rect.top;
+      if (rect.bottom > window.innerHeight - pad) dy = window.innerHeight - pad - rect.bottom;
+      /* nudge with left/top so the CSS centring transform stays intact */
+      if (dx) el.style.left = quick.x + dx + "px";
+      if (dy) el.style.top = quick.y + dy + "px";
+    }, [quick]);
+
     /* ---- navigation ------------------------------------------------ */
 
     const loopCurrent = useCallback(() => {
@@ -1733,6 +1847,48 @@ void main() {
       if (next != null) setHeartBurst((n) => n + 1);
       buzz(12);
     }, [item, rating, cfg.heartRating, commitRating]);
+
+    const openTagSheet = useCallback(async () => {
+      if (!item) return;
+      setTagOpen(true);
+      setTagFilter("");
+      if (tagOptions.length) return;
+      try {
+        setTagOptions(await fetchTagOptions(250));
+      } catch (err) {
+        setError(String(err.message || err));
+      }
+    }, [item, tagOptions.length]);
+
+    const commitTags = useCallback(async () => {
+      const ids = Object.keys(tagPicked).filter((key) => tagPicked[key]);
+      if (!item || !ids.length) {
+        setTagOpen(false);
+        return;
+      }
+      setTagBusy(true);
+      try {
+        await addSceneTags(item.scene.id, ids);
+        const chosen = tagOptions.filter((tag) => ids.includes(String(tag.id)));
+        setItems((prev) =>
+          prev.map((entry) =>
+            entry.key === item.key
+              ? Object.assign({}, entry, {
+                  tags: (entry.tags || []).concat(
+                    chosen.filter((tag) => !(entry.tags || []).some((have) => String(have.id) === String(tag.id)))
+                  ),
+                })
+              : entry
+          )
+        );
+        setTagPicked({});
+        setTagOpen(false);
+      } catch (err) {
+        setError(String(err.message || err));
+      } finally {
+        setTagBusy(false);
+      }
+    }, [item, tagPicked, tagOptions]);
 
     /* desktop keyboard map: arrows scroll and scrub, space pauses, L likes, M mutes */
     useEffect(() => {
@@ -1994,10 +2150,10 @@ void main() {
           gesture.current.mode = "menu";
           setPress(null);
           setQuick({
-            x: event.clientX - rect.left,
-            y: event.clientY - rect.top,
-            /* open upward unless the thumb is near the top of the video */
-            below: event.clientY - rect.top < 190,
+            x: event.clientX,
+            y: event.clientY,
+            /* open upward unless the thumb is near the top of the screen */
+            below: event.clientY < 200,
           });
         }, LONG_PRESS_MS);
       }
@@ -2256,6 +2412,11 @@ void main() {
     const onTimeUpdate = () => {
       const video = activeVideo();
       if (!video) return;
+      /* one render per frame is plenty: timeupdate can fire far more often and each
+         one re-renders the whole stage on a big desktop pane */
+      const now = performance.now();
+      if (now - lastTimePush.current < 180) return;
+      lastTimePush.current = now;
       setTime(video.currentTime);
       if (!duration && video.duration) setDuration(video.duration);
       // real frames only: timeupdate never fires before the clip is rolling
@@ -2412,12 +2573,17 @@ void main() {
                       if (el) prewarm(el, entry.startAt);
                     },
                 className: "stk-video" + (active ? " stk-active" : ""),
-                style: { objectFit: active ? fitMode : "cover" },
+                style: {
+                  objectFit: active ? fitMode : "cover",
+                  willChange: active ? "transform" : "auto",
+                },
                 src: active && streamFallback ? source.signed : source.plain,
                 playsInline: true,
                 autoPlay: active,
                 muted: active ? muted : true,
-                preload: "auto",
+                /* four simultaneous streams is what makes a big desktop pane stutter:
+                   neighbours only need a header to prewarm their ref */
+                preload: active ? "auto" : "metadata",
                 onCanPlay: active
                   ? () => {
                       setReady(true);
@@ -2436,7 +2602,7 @@ void main() {
                         return;
                       }
                       setFailCount((count) => count + 1);
-                      window.setTimeout(goNext, 600);
+                      if (!window.__stkNoAutoAdvance) window.setTimeout(goNext, 600);
                     }
                   : undefined,
                 style: {
@@ -2501,6 +2667,7 @@ void main() {
             "div",
             {
               className: "stk-quick-menu" + (quick.below ? " stk-below" : ""),
+              ref: quickRef,
               style: { left: `${quick.x}px`, top: `${quick.y}px` },
             },
             h(
@@ -2588,6 +2755,23 @@ void main() {
           ),
 
         rateBadge && h("div", { className: "stk-rate" }, rateBadge),
+
+        h(
+          "div",
+          { className: "stk-top stk-top-left" },
+          h(
+            "button",
+            {
+              className: "stk-top-btn",
+              title: muted ? "Unmute" : "Mute",
+              onClick: (event) => {
+                event.stopPropagation();
+                setMuted((value) => !value);
+              },
+            },
+            h(Icon, { name: muted ? "mute" : "volume", size: 18 })
+          )
+        ),
 
         h(
           "div",
@@ -2779,30 +2963,22 @@ void main() {
             h(Icon, { name: "heart", size: 26, filled: rating != null && rating >= cfg.heartRating }),
             h("span", null, "Heart")
           ),
-          performers.length > 0 &&
-            h(
-              "button",
-              {
-                onClick: (event) => {
-                  event.stopPropagation();
-                  /* more than one person: let the user pick from a small sheet */
-                  if (performers.length > 1) setPeople(true);
-                  else onOpenPerformer(performers[0]);
-                },
-              },
-              h(Icon, { name: "user", size: 26 }),
-              h("span", null, performers.length > 1 ? performers.length + " people" : "Performer")
-            ),
           h(
             "button",
             {
+              className: Object.keys(tagPicked).length ? "stk-on" : "",
               onClick: (event) => {
                 event.stopPropagation();
-                setMuted((value) => !value);
+                openTagSheet();
               },
             },
-            h(Icon, { name: muted ? "mute" : "volume", size: 26 }),
-            h("span", null, muted ? "Muted" : "Sound")
+            h(
+              "span",
+              { className: "stk-rail-icoplus" },
+              h(Icon, { name: "tag", size: 26 }),
+              h("i", { className: "stk-rail-plus", "aria-hidden": "true" }, "+")
+            ),
+            h("span", null, "Tag")
           ),
           h(
             "button",
@@ -2895,8 +3071,71 @@ void main() {
               setSheet(null);
               onNewFeed();
             },
+            onOrder: (order) => {
+              setSheet(null);
+              onSwitchFeed(Object.assign({}, spec || defaultFeed(), order, { startSceneId: null, startAt: null }));
+            },
+            onDetails: () => {
+              setSheet(null);
+              onEditFeed(Object.assign({}, spec || defaultFeed()));
+            },
             onClose: () => setSheet(null),
           }),
+
+        tagOpen &&
+          h(
+            React.Fragment,
+            null,
+            h("div", { className: "stk-sheet-backdrop", onClick: () => setTagOpen(false) }),
+            h(
+              "div",
+              { className: "stk-sheet stk-tag-sheet", ref: tagDialogRef, onClick: (event) => event.stopPropagation() },
+              h(
+                "h3",
+                null,
+                h("span", null, "Add tags"),
+                h("button", { className: "stk-btn", onClick: () => setTagOpen(false) }, h(Icon, { name: "x", size: 16 }))
+              ),
+              h("input", {
+                className: "stk-tag-search",
+                placeholder: "Filter tags…",
+                value: tagFilter,
+                onChange: (event) => setTagFilter(event.target.value),
+              }),
+              h(
+                "div",
+                { className: "stk-tag-grid" },
+                tagOptions
+                  .filter((tag) => !tagFilter || String(tag.name).toLowerCase().includes(tagFilter.toLowerCase()))
+                  .slice(0, 120)
+                  .map((tag) =>
+                    h(
+                      "button",
+                      {
+                        key: tag.id,
+                        className: "stk-tagpick" + (tagPicked[tag.id] ? " stk-on" : ""),
+                        onClick: () =>
+                          setTagPicked((prev) => Object.assign({}, prev, { [tag.id]: !prev[tag.id] })),
+                      },
+                      tag.name
+                    )
+                  )
+              ),
+              h(
+                "button",
+                {
+                  className: "stk-btn stk-tag-done",
+                  disabled: tagBusy,
+                  onClick: commitTags,
+                },
+                tagBusy
+                  ? "Saving…"
+                  : "Done" + (Object.keys(tagPicked).filter((key) => tagPicked[key]).length
+                      ? ` (${Object.keys(tagPicked).filter((key) => tagPicked[key]).length})`
+                      : "")
+              )
+            )
+          ),
 
         sheet && sheet !== "feeds" &&
           h(Sheet, {
@@ -2935,7 +3174,7 @@ void main() {
     { id: "settings", label: "Settings", icon: "gear" },
     { id: "ops", label: "Ops", icon: "ops" },
   ];
-  const DEFAULT_NAV_SLOTS = ["favorites", "tags", "folders"];
+  const DEFAULT_NAV_SLOTS = ["favorites", "folders", "settings"];
 
   function NavButton({ active, icon, label, onClick, onLongPress }) {
     const timer = useRef(0);
@@ -2975,7 +3214,55 @@ void main() {
   /* sheet                                                              */
   /* ------------------------------------------------------------------ */
 
-  function FeedPicker({ feeds, current, onPick, onNew, onClose }) {
+  /** dialog behaviour for every overlay: Esc closes, Tab stays inside, focus returns
+      to whatever opened it. Returns the ref to put on the sheet element. */
+  function useDialog(open, onClose) {
+    const ref = useRef(null);
+    const closeRef = useRef(onClose);
+    closeRef.current = onClose;
+    useEffect(() => {
+      if (!open) return undefined;
+      const previous = document.activeElement;
+      const el = ref.current;
+      const focusables = () =>
+        el
+          ? Array.from(
+              el.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')
+            ).filter((node) => !node.disabled && node.offsetParent !== null)
+          : [];
+      const first = focusables()[0];
+      if (first && first.focus) first.focus();
+      const onKey = (event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          if (closeRef.current) closeRef.current();
+          return;
+        }
+        if (event.key !== "Tab") return;
+        const list = focusables();
+        if (!list.length) return;
+        const head = list[0];
+        const tail = list[list.length - 1];
+        if (event.shiftKey && document.activeElement === head) {
+          event.preventDefault();
+          tail.focus();
+        } else if (!event.shiftKey && document.activeElement === tail) {
+          event.preventDefault();
+          head.focus();
+        }
+      };
+      document.addEventListener("keydown", onKey, true);
+      return () => {
+        document.removeEventListener("keydown", onKey, true);
+        if (previous && previous.focus) previous.focus();
+      };
+    }, [open]);
+    return ref;
+  }
+
+  function FeedPicker({ feeds, current, onPick, onNew, onClose, onOrder, onDetails }) {
+    const dialogRef = useDialog(true, onClose);
     const builtins = [
       { id: "foryou", name: "For You", type: "foryou", sort: "random", hint: "Random across the library" },
       { id: "favorites", name: "Favorites", type: "favorites", sort: "rating", direction: "DESC", hint: "Everything you rated or hearted" },
@@ -3001,13 +3288,48 @@ void main() {
       h("div", { className: "stk-sheet-backdrop", onClick: onClose }),
       h(
         "div",
-        { className: "stk-sheet", onClick: (event) => event.stopPropagation() },
+        { className: "stk-sheet", ref: dialogRef, onClick: (event) => event.stopPropagation() },
         h(
           "h3",
           null,
           h("span", null, "Feeds"),
           h("button", { className: "stk-btn", onClick: onClose }, h(Icon, { name: "x", size: 16 }))
         ),
+        onOrder &&
+          h(
+            React.Fragment,
+            null,
+            h("h4", null, "Order"),
+            h(
+              "div",
+              { className: "stk-order-row" },
+              [
+                ["new", "New", "updated_at", "DESC"],
+                ["random", "Random", "random", "DESC"],
+                ["top", "Top rated", "rating", "DESC"],
+                ["longest", "Longest", "duration", "DESC"],
+              ].map(([key, text, sort, direction]) =>
+                h(
+                  "button",
+                  {
+                    key,
+                    className:
+                      "stk-order-pill" +
+                      (current && current.sort === sort && (current.direction || "DESC") === direction ? " stk-active" : ""),
+                    onClick: () => onOrder({ sort, direction }),
+                  },
+                  text
+                )
+              )
+            )
+          ),
+        onDetails &&
+          h(
+            "button",
+            { className: "stk-marker-row", onClick: onDetails },
+            h(Icon, { name: "sliders", size: 14 }),
+            h("div", null, "Feed details", h("br"), h("span", null, "filters, minimum length, time window"))
+          ),
         h("h4", null, "Built in"),
         builtins.map((feed) => row(feed, feed.hint)),
         saved.length > 0 && h("h4", null, "Your feeds"),
@@ -3028,6 +3350,7 @@ void main() {
   }
 
   function Sheet({ mode, item, cfg, rating, onRate, onHeart, speed, onSpeed, onRotate, onFlag, onClose, onOpenPerformer, onOpenTag, onDeriveFeed, onJump, onNext }) {
+    const dialogRef = useDialog(true, onClose);
     const scene = item.scene;
     const file = (scene.files && scene.files[0]) || {};
     const markers = scene.scene_markers || [];
@@ -3046,7 +3369,7 @@ void main() {
       h("div", { className: "stk-sheet-backdrop", onClick: onClose }),
       h(
         "div",
-        { className: "stk-sheet", onClick: (event) => event.stopPropagation() },
+        { className: "stk-sheet", ref: dialogRef, onClick: (event) => event.stopPropagation() },
         h(
           "h3",
           null,
@@ -3117,7 +3440,7 @@ void main() {
               performers.map((performer) =>
                 h(
                   "button",
-                  { key: performer.id, className: "stk-chip", onClick: () => onOpenPerformer(performer) },
+                  { key: performer.id, className: "stk-disc-chip", onClick: () => onOpenPerformer(performer) },
                   h("img", { src: rel(performer.image_path), alt: "" }),
                   h("span", null, performer.name)
                 )
@@ -4042,7 +4365,7 @@ void main() {
                   className: "stk-tile",
                   onClick: (event) => setViewer({ image, rect: event.currentTarget.getBoundingClientRect() }),
                 },
-                h("div", { className: "stk-tile-photo", style: { backgroundImage: `url("${rel(image.paths && image.paths.thumbnail)}")` } })
+                h("div", { className: "stk-tile-photo" }, h(Thumb, { src: rel(image.paths && image.paths.thumbnail) }) )
               )
             )
           )
@@ -4089,7 +4412,7 @@ void main() {
                   },
                   onMouseLeave: () => setHoverScene((cur) => (cur === scene.id ? null : cur)),
                 },
-                h("div", { className: "stk-tile-photo", style: { backgroundImage: `url("${rel(scene.paths && scene.paths.screenshot)}")` } }),
+                h("div", { className: "stk-tile-photo" }, h(Thumb, { src: rel(scene.paths && scene.paths.screenshot) })),
                 hoverScene === scene.id &&
                   scene.paths &&
                   scene.paths.preview &&
@@ -4127,7 +4450,7 @@ void main() {
                   onClick: () =>
                     onPlay({ sceneId: marker.scene && marker.scene.id, startAt: marker.seconds, tab: "markers", sort }),
                 },
-                h("div", { className: "stk-tile-photo", style: { backgroundImage: `url("${rel(marker.scene && marker.scene.paths && marker.scene.paths.screenshot)}")` } }),
+                h("div", { className: "stk-tile-photo" }, h(Thumb, { src: rel(marker.scene && marker.scene.paths && marker.scene.paths.screenshot) })),
                 h("span", { className: "stk-tile-dur" }, fmtTime(marker.seconds))
               )
             )
@@ -4143,7 +4466,7 @@ void main() {
                   className: "stk-tile",
                   onClick: (event) => setViewer({ image, rect: event.currentTarget.getBoundingClientRect() }),
                 },
-                h("div", { className: "stk-tile-photo", style: { backgroundImage: `url("${rel(image.paths && image.paths.thumbnail)}")` } })
+                h("div", { className: "stk-tile-photo" }, h(Thumb, { src: rel(image.paths && image.paths.thumbnail) }) )
               )
             )
           ),
@@ -4171,6 +4494,23 @@ void main() {
     const [sort, setSort] = useState(() => readSortPref("stashTok.performerListSort", "updated_at"));
     const [sortOpen, setSortOpen] = useState(false);
     const [selected, setSelected] = useState(initialPerformer || null);
+    /* 200 cards at once stalls a big desktop viewport: render a slice, grow on scroll */
+    const [shown, setShown] = useState(60);
+    useEffect(() => {
+      setShown(60);
+    }, [query, sort]);
+    useEffect(() => {
+      /* capture: the list scrolls inside a container, and scroll events do not bubble */
+      const onScroll = (event) => {
+        const el = event.target;
+        if (!el || el.nodeType !== 1 || typeof el.scrollHeight !== "number") return;
+        if (el.scrollHeight - el.scrollTop - el.clientHeight < 900) {
+          setShown((n) => Math.min(n + 40, 400));
+        }
+      };
+      document.addEventListener("scroll", onScroll, { passive: true, capture: true });
+      return () => document.removeEventListener("scroll", onScroll, { capture: true });
+    }, []);
 
     /* the floating settings button sits on top of the profile's own buttons */
     useEffect(() => {
@@ -4212,6 +4552,29 @@ void main() {
     useEffect(() => {
       setSelected(initialPerformer || null);
     }, [initialPerformer]);
+
+    /* discover strips: random creators + the tags you use most */
+    const [circles, setCircles] = useState(null);
+    const [topTags, setTopTags] = useState(null);
+    useEffect(() => {
+      if (query) return undefined;
+      let alive = true;
+      gql(
+        `query StashTokDiscoverCircles { findPerformers(filter: { per_page: 24, sort: "random" }) {
+           performers { id name image_path scene_count favorite } } }`
+      )
+        .then((data) => alive && setCircles(data.findPerformers.performers))
+        .catch(() => alive && setCircles([]));
+      gql(
+        `query StashTokDiscoverTags { findTags(filter: { per_page: 14, sort: "scenes_count", direction: DESC }) {
+           tags { id name scene_count } } }`
+      )
+        .then((data) => alive && setTopTags(data.findTags.tags))
+        .catch(() => alive && setTopTags([]));
+      return () => {
+        alive = false;
+      };
+    }, [query]);
 
     useEffect(() => {
       let alive = true;
@@ -4259,19 +4622,66 @@ void main() {
     return h(
       "div",
       { className: "stk-page", onContextMenu: (event) => event.preventDefault() },
-      h("h2", null, onBack && h("button", { onClick: onBack }, h(Icon, { name: "chevron", size: 18 })), "Performers"),
+      h("h2", null, onBack && h("button", { onClick: onBack }, h(Icon, { name: "chevron", size: 18 })), "Discover"),
       h("input", {
         type: "search",
-        placeholder: "Search performers",
+        placeholder: "Search creators",
         value: query,
         onChange: (event) => setQuery(event.currentTarget.value),
         style: { width: "100%", marginBottom: "10px", padding: "9px 11px", borderRadius: "10px", background: "#171717", border: "1px solid #2a2a2a", color: "#fff" },
       }),
+      !query &&
+        circles &&
+        circles.length > 0 &&
+        h(
+          React.Fragment,
+          null,
+          h("h4", { className: "stk-disc-h" }, "Creators we think you'll like"),
+          h(
+            "div",
+            { className: "stk-circles" },
+            circles.map((performer) =>
+              h(
+                "button",
+                {
+                  key: performer.id,
+                  className: "stk-circle",
+                  onClick: () => {
+                    goTo("performer/" + encodeURIComponent(performer.name));
+                    setSelected(performer);
+                  },
+                },
+                h("span", { className: "stk-circle-photo" }, h(Thumb, { src: rel(performer.image_path), width: 160 })),
+                h("span", { className: "stk-circle-name" }, performer.name)
+              )
+            )
+          )
+        ),
+      !query &&
+        topTags &&
+        topTags.length > 0 &&
+        h(
+          React.Fragment,
+          null,
+          h("h4", { className: "stk-disc-h" }, "Hashtags we think you'll like"),
+          h(
+            "div",
+            { className: "stk-disc-chips" },
+            topTags.map((tag) =>
+              h(
+                "button",
+                { key: tag.id, className: "stk-chip", onClick: () => onOpenTag && onOpenTag(tag) },
+                "#" + tag.name,
+                h("small", null, fmtCount(tag.scene_count))
+              )
+            )
+          )
+        ),
       h(
         "div",
         { className: "stk-sort-bar" },
         h("button", { className: "stk-sort-btn", onClick: () => setSortOpen(!sortOpen) }, sortLabel, " ▾"),
-        rows && h("span", { className: "stk-sub" }, rows.length + " performers")
+        rows && h("span", { className: "stk-sub" }, rows.length + " creators")
       ),
       sortOpen &&
         h(
@@ -4304,7 +4714,7 @@ void main() {
         : h(
             "div",
             { className: "stk-grid" },
-            rows.map((performer) =>
+            rows.slice(0, shown).map((performer) =>
               h(
                 "button",
                 {
@@ -4324,7 +4734,7 @@ void main() {
                   onPointerCancel: cancelHold,
                   onContextMenu: (event) => event.preventDefault(),
                 },
-                h("div", { className: "stk-account-photo", style: { backgroundImage: `url("${rel(performer.image_path)}")` } }),
+                h("div", { className: "stk-account-photo" }, h(Thumb, { src: rel(performer.image_path) })),
                 h(
                   "div",
                   { className: "stk-account-body" },
@@ -5195,7 +5605,7 @@ void main() {
                   className: "stk-tile",
                   onClick: (event) => setViewer({ image, rect: event.currentTarget.getBoundingClientRect() }),
                 },
-                h("div", { className: "stk-tile-photo", style: { backgroundImage: `url("${rel(image.paths && image.paths.thumbnail)}")` } })
+                h("div", { className: "stk-tile-photo" }, h(Thumb, { src: rel(image.paths && image.paths.thumbnail) }) )
               )
             )
           )
@@ -5226,13 +5636,120 @@ void main() {
               h(
                 "button",
                 { key: scene.id, className: "stk-tile", onClick: () => onPlay({ sceneId: scene.id, sort }) },
-                h("div", { className: "stk-tile-photo", style: { backgroundImage: `url("${rel(scene.paths && scene.paths.screenshot)}")` } }),
+                h("div", { className: "stk-tile-photo" }, h(Thumb, { src: rel(scene.paths && scene.paths.screenshot) })),
                 h("span", { className: "stk-tile-dur" }, fmtTime((scene.files && scene.files[0] && scene.files[0].duration) || 0))
               )
             )
           ),
 
       viewer && h(ImageViewer, { image: viewer.image, rect: viewer.rect, onClose: () => setViewer(null) })
+    );
+  }
+
+  /* favorites as a gallery: one grid of hearted scenes, sorted however you like */
+  const FAVORITE_SORTS = [
+    ["recent", "Recent", "updated_at", "DESC"],
+    ["oldest", "Oldest", "updated_at", "ASC"],
+    ["title", "A–Z", "title", "ASC"],
+    ["filesize", "Size", "filesize", "DESC"],
+    ["duration", "Duration", "duration", "DESC"],
+  ];
+
+  function FavoritesPage({ prefs, onPlay, setPref }) {
+    const [sort, setSortState] = useState((prefs && prefs.favoritesSortMode) || "recent");
+    const setSort = (key) => {
+      setSortState(key);
+      if (typeof setPref === "function") setPref("favoritesSortMode", key);
+    };
+    const [rows, setRows] = useState(null);
+    const [error, setError] = useState("");
+
+    useEffect(() => {
+      let cancelled = false;
+      const entry = FAVORITE_SORTS.find((row) => row[0] === sort) || FAVORITE_SORTS[0];
+      setRows(null);
+      gql(
+        `query StashTokFavorites($sort: String!, $dir: SortDirectionEnum!) {
+          findScenes(
+            scene_filter: { rating100: { value: 0, modifier: GREATER_THAN } }
+            filter: { per_page: 300, sort: $sort, direction: $dir }
+          ) {
+            scenes {
+              id
+              title
+              rating100
+              paths { screenshot preview }
+              files { duration size }
+            }
+          }
+        }`,
+        { sort: entry[2], dir: entry[3] }
+      )
+        .then((data) => {
+          if (!cancelled) setRows((data.findScenes && data.findScenes.scenes) || []);
+        })
+        .catch((err) => {
+          if (!cancelled) {
+            setRows([]);
+            setError(String(err.message || err));
+          }
+        });
+      return () => {
+        cancelled = true;
+      };
+    }, [sort]);
+
+    const playedSort = FAVORITE_SORTS.find((row) => row[0] === sort) || FAVORITE_SORTS[0];
+    const label = playedSort[1];
+
+    return h(
+      "div",
+      { className: "stk-page" },
+      h(
+        "h2",
+        { style: { justifyContent: "center", textAlign: "center" } },
+        h("span", { style: { flex: "1 1 auto", textAlign: "center" } }, "Favorites")
+      ),
+      h(
+        "div",
+        { className: "stk-tabs stk-tabbar stk-tabbar-text" },
+        FAVORITE_SORTS.map(([key, text]) =>
+          h(
+            "button",
+            {
+              key,
+              className: key === sort ? "stk-active" : "",
+              onClick: () => setSort(key),
+            },
+            text
+          )
+        )
+      ),
+      rows && h("p", { className: "stk-sub", style: { textAlign: "center", margin: "8px 0 4px" } }, rows.length + " scenes"),
+      !rows
+        ? h("div", { className: "stk-state" }, h("div", { className: "stk-spinner" }))
+        : rows.length === 0
+        ? h("div", { className: "stk-state" }, h("p", null, error || "Nothing hearted yet."))
+        : h(
+            "div",
+            { className: "stk-grid" },
+            rows.map((scene) =>
+              h(
+                "button",
+                {
+                  key: scene.id,
+                  className: "stk-tile",
+                  onClick: () => onPlay(scene, playedSort),
+                },
+                h("div", {
+                  className: "stk-tile-photo",
+                  style: { backgroundImage: `url("${rel(scene.paths && scene.paths.screenshot)}")` },
+                }),
+                h("span", { className: "stk-tile-dur" }, fmtTime((scene.files && scene.files[0] && scene.files[0].duration) || 0)),
+                scene.rating100 >= 60 && h("span", { className: "stk-tile-heart" }, h(Icon, { name: "heart", size: 12, filled: true }))
+              )
+            )
+          )
     );
   }
 
@@ -5303,6 +5820,7 @@ void main() {
   ];
 
   function FeedBuilder({ spec, feeds, onSave, onDelete, onClose, onUse }) {
+    const dialogRef = useDialog(true, onClose);
     const [draft, setDraft] = useState(
       spec || { name: "New feed", type: "foryou", tags: [], tagMode: "OR" }
     );
@@ -5335,7 +5853,7 @@ void main() {
       h("div", { className: "stk-sheet-backdrop", onClick: onClose }),
       h(
         "div",
-        { className: "stk-sheet", onClick: (event) => event.stopPropagation() },
+        { className: "stk-sheet", ref: dialogRef, onClick: (event) => event.stopPropagation() },
         h("h3", null, h("span", null, spec ? "Edit feed" : "New feed"), h("button", { className: "stk-btn", onClick: onClose }, h(Icon, { name: "x", size: 16 }))),
 
         h("h4", null, "Name"),
@@ -5361,6 +5879,24 @@ void main() {
                 title: entry.hint,
               },
               entry.label
+            )
+          )
+        ),
+
+        h("h4", null, "How recent"),
+        h(
+          "div",
+          { style: { display: "flex", flexWrap: "wrap", gap: "8px" } },
+          [["0", "Everything"], ["30", "30 days"], ["90", "90 days"], ["365", "1 year"]].map(([value, label]) =>
+            h(
+              "button",
+              {
+                key: value,
+                className: "stk-tagpill",
+                style: (String(draft.windowDays || "0") === value ? { background: "#ff2d55", borderColor: "#ff2d55" } : undefined),
+                onClick: () => setDraft(Object.assign({}, draft, { windowDays: Number(value) })),
+              },
+              label
             )
           )
         ),
@@ -5645,7 +6181,9 @@ void main() {
     );
   }
 
-  function SettingsPanel({ cfg, feeds, onEdit, pin, onSetPin, onClearPin, sfw, onToggleSfw, prefs, setPref }) {
+  /* Stash renders this panel from its own settings page too, where the app's
+     context is not mounted: every field has to survive being handed nothing. */
+  function SettingsPanel({ cfg = {}, feeds = [], onEdit, pin, onSetPin, onClearPin, sfw, onToggleSfw, prefs = {}, setPref = () => {} }) {
     const [draft, setDraft] = useState("");
     const [saved, setSaved] = useState(false);
 
@@ -5682,6 +6220,16 @@ void main() {
           options: [["all", "Everything"], ["30", "30 days"], ["90", "90 days"], ["365", "1 year"]],
           onChange: (value) => setPref("feedWindow", value),
         })
+      ),
+      h(
+        PrefRow,
+        { title: "Black & white", hint: "Desaturate the whole UI — pairs with a red or greyscale colour filter" },
+        h(PrefToggle, { label: "Black & white", on: !!prefs.mono, onChange: (value) => setPref("mono", value) })
+      ),
+      h(
+        PrefRow,
+        { title: "Fit to window", hint: "Letterbox a clip rather than crop more than 25% of the frame" },
+        h(PrefToggle, { label: "Fit to window", on: prefs.fitWindow !== false, onChange: (value) => setPref("fitWindow", value) })
       ),
       h(
         PrefRow,
@@ -5753,28 +6301,22 @@ void main() {
         h("input", {
           type: "tel",
           inputMode: "numeric",
-          placeholder: pin ? "New PIN (4–8 digits)" : "PIN (4–8 digits)",
+          placeholder: pin ? "New PIN (4 digits)" : "PIN (4 digits)",
           value: draft,
-          maxLength: 8,
+          maxLength: 4,
           onChange: (event) => {
-            setDraft(event.currentTarget.value.replace(/\D/g, ""));
-            setSaved(false);
+            const next = event.currentTarget.value.replace(/\D/g, "").slice(0, 4);
+            setDraft(next);
+            /* accept the moment four digits exist: no confirm step */
+            if (next.length === 4) {
+              onSetPin(pinDigest(next));
+              setSaved(true);
+            } else {
+              setSaved(false);
+            }
           },
           className: "stk-pin-input",
         }),
-        h(
-          "button",
-          {
-            className: "stk-btn",
-            onClick: () => {
-              if (draft.length < 4) return;
-              onSetPin(pinDigest(draft));
-              setDraft("");
-              setSaved(true);
-            },
-          },
-          pin ? "Change" : "Set PIN"
-        ),
         pin &&
           h(
             "button",
@@ -5856,19 +6398,20 @@ void main() {
     const [entry, setEntry] = useState("");
     const [wrong, setWrong] = useState(false);
 
+    /* four digits, no confirm key: the pad checks on the last one */
     function press(digit) {
+      if (entry.length >= 4) return;
+      const next = entry + digit;
+      setEntry(next);
       setWrong(false);
-      setEntry((current) => (current + digit).slice(0, 8));
-    }
-
-    function submit() {
-      if (pinDigest(entry) === stored) {
+      if (next.length !== 4) return;
+      if (pinDigest(next) === stored) {
         onUnlock();
         return;
       }
       setWrong(true);
-      setEntry("");
       buzz(60);
+      window.setTimeout(() => setEntry(""), 340);
     }
 
     return h(
@@ -5879,19 +6422,19 @@ void main() {
       h(
         "div",
         { className: "stk-lock-pad" },
-        ["1", "2", "3", "4", "5", "6", "7", "8", "9", "⌫", "0", "→"].map((key) =>
+        ["1", "2", "3", "4", "5", "6", "7", "8", "9", "⌫", "0", ""].map((key) =>
           h(
             "button",
             {
               key,
-              className: "stk-lock-key" + (wrong ? " stk-lock-wrong" : ""),
+              className: "stk-lock-key" + (wrong ? " stk-lock-wrong" : "") + (key ? "" : " stk-lock-blank"),
               onClick: () => {
+                if (!key) return;
                 if (key === "⌫") setEntry((current) => current.slice(0, -1));
-                else if (key === "→") submit();
                 else press(key);
               },
             },
-            key
+            key === "⌫" ? "⌫" : key
           )
         )
       )
@@ -5900,6 +6443,9 @@ void main() {
 
   function StashTokApp() {
     const baseCfg = usePluginConfig();
+    /* thumbnails: explicit setting wins, "off" disables, otherwise guess from the port */
+    const thumbSetting = baseCfg.thumbBase;
+    THUMB_BASE = thumbSetting === "off" ? "" : thumbSetting || guessThumbBase();
     const [prefs, setPrefs] = useState(loadPrefs);
     const [navPicker, setNavPicker] = useState(null);
     const [feedOptions, setFeedOptions] = useState(false);
@@ -5980,9 +6526,7 @@ void main() {
         goTo("search");
       } else if (id === "favorites") {
         setPerformerFilter(null);
-        setActiveFeed({ id: "favorites", name: "Favorites", type: "favorites" });
-        setTab("home");
-        setRefreshKey((n) => n + 1);
+        setTab("favorites");
         goTo("favorites");
       } else if (id === "tags") {
         setTab("tags");
@@ -6101,6 +6645,8 @@ void main() {
     const [activeFeed, setActiveFeed] = useState(defaultFeed());
     const [refreshKey, setRefreshKey] = useState(0);
     const [builder, setBuilder] = useState(null); // {spec} | 'new' | null
+    const feedOptionsRef = useDialog(!!feedOptions, () => setFeedOptions(false));
+    const navPickerRef = useDialog(!!navPicker, () => setNavPicker(null));
     const [performersOpen, setPerformersOpen] = useState(false);
 
     const [performerFilter, setPerformerFilter] = useState(null);
@@ -6129,6 +6675,32 @@ void main() {
       };
     }, []);
 
+    /* keep the phone awake while the feed is open: it is playing video, so the
+       screen sleeping mid-scroll is never what the user wants. Re-acquired when
+       the tab becomes visible again, released when the feed unmounts. */
+    useEffect(() => {
+      let lock = null;
+      let alive = true;
+      const acquire = async () => {
+        if (!alive || document.hidden || !("wakeLock" in navigator)) return;
+        try {
+          lock = await navigator.wakeLock.request("screen");
+        } catch (e) {
+          /* permission denied or unsupported: nothing to do */
+        }
+      };
+      const onVisibility = () => {
+        if (!document.hidden) acquire();
+      };
+      acquire();
+      document.addEventListener("visibilitychange", onVisibility);
+      return () => {
+        alive = false;
+        document.removeEventListener("visibilitychange", onVisibility);
+        if (lock && lock.release) lock.release().catch(() => {});
+      };
+    }, []);
+
     /* ---- routing: the URL is the source of truth --------------------- */
 
     const liveRef = useRef({});
@@ -6154,9 +6726,8 @@ void main() {
         return;
       }
       if (rest === "favorites") {
-        setTab("home");
+        setTab("favorites");
         setPerformerFilter(null);
-        setActiveFeed({ id: "favorites", name: "Favorites", type: "favorites" });
         return;
       }
       if (rest === "performers") {
@@ -6247,22 +6818,60 @@ void main() {
       setTab("home");
     }, []);
 
-    /* the page itself must never zoom: pinch belongs to the video only */
+    /* black & white UI: set on <html>, because the shell has more than one render
+       path (placeholder vs full app) and a class on the shell misses some of them */
     useEffect(() => {
-      const el = shellRef.current;
-      if (!el) return undefined;
+      document.documentElement.classList.toggle("stk-mono", !!prefs.mono);
+      /* inline, not just the class: the plugin stylesheet can be served from cache,
+         and then the toggle would appear to do nothing until a hard reload */
+      document.documentElement.style.filter = prefs.mono ? "grayscale(1) contrast(1.06)" : "";
+      return () => {
+        document.documentElement.classList.remove("stk-mono");
+        document.documentElement.style.filter = "";
+      };
+    }, [prefs.mono]);
+
+    /* the page itself must never zoom: pinch belongs to the video only.
+       BUT if the page is already page-zoomed (Safari restores a site zoom on
+       reload) pinching must pass through, otherwise there is no way back out.
+       Bound to document, not to the shell ref: the shell only exists after the
+       first render, so a []-effect keyed on the ref would never run. */
+    useEffect(() => {
+      const pageZoomed = () => window.visualViewport && window.visualViewport.scale > 1.01;
       const blockPinch = (event) => {
         if (!event.touches || event.touches.length < 2) return;
+        if (pageZoomed()) return;
         // pinch is ours (video zoom); letting it through page-zoomed the whole UI
         event.preventDefault();
       };
-      const blockGesture = (event) => event.preventDefault();
-      el.addEventListener("touchmove", blockPinch, { passive: false });
-      el.addEventListener("gesturestart", blockGesture, { passive: false });
+      const blockGesture = (event) => {
+        if (pageZoomed()) return;
+        event.preventDefault();
+      };
+      document.addEventListener("touchmove", blockPinch, { passive: false });
       document.addEventListener("gesturestart", blockGesture, { passive: false });
+
+      /* Safari remembers a pinch zoom per site and restores it on reload: nudge the
+         viewport back to 1 so a refresh never comes up pre-zoomed, and keep the
+         document from scrolling (a scrolling page is what drifts into page zoom). */
+      const resetPageZoom = () => {
+        const view = window.visualViewport;
+        if (!view || view.scale <= 1.01) return;
+        const meta = document.querySelector('meta[name="viewport"]');
+        if (meta) meta.setAttribute("content", "width=device-width, initial-scale=1, maximum-scale=1");
+        window.scrollTo(0, 0);
+      };
+      document.documentElement.classList.add("stk-lock");
+      document.body.classList.add("stk-lock");
+      const timer = window.setTimeout(resetPageZoom, 60);
+      if (window.visualViewport) window.visualViewport.addEventListener("resize", resetPageZoom);
+
       return () => {
-        el.removeEventListener("touchmove", blockPinch);
-        el.removeEventListener("gesturestart", blockGesture);
+        document.documentElement.classList.remove("stk-lock");
+        document.body.classList.remove("stk-lock");
+        window.clearTimeout(timer);
+        if (window.visualViewport) window.visualViewport.removeEventListener("resize", resetPageZoom);
+        document.removeEventListener("touchmove", blockPinch);
         document.removeEventListener("gesturestart", blockGesture);
       };
     }, []);
@@ -6530,6 +7139,27 @@ void main() {
           goTo(sceneId ? "scene/" + sceneId : "");
         },
       });
+    } else if (tab === "favorites") {
+      body = h(FavoritesPage, {
+        prefs,
+        setPref,
+        onPlay: (scene, played) => {
+          const order = played || FAVORITE_SORTS[0];
+          useFeed({
+            id: "favorites",
+            name: "Favorites",
+            type: "favorites",
+            /* the page's sort key is not a Stash sort: map it, or the feed falls back
+               to its own default and every tap reshuffles the list */
+            sort: order[2],
+            direction: order[3],
+            startSceneId: scene.id,
+            origin: { kind: "favorites" },
+          });
+          selfSceneRef.current = String(scene.id);
+          goTo("scene/" + scene.id);
+        },
+      });
     } else if (tab === "tags") {
       body = h(TagsPage, { onPick: openTag, onBack: () => setTab("home") });
     } else if (tab === "folders") {
@@ -6638,7 +7268,7 @@ void main() {
           prefs,
           setPref,
           feeds,
-          onEdit: (spec) => setBuilder({ spec }),
+          onEdit: (spec) => { setBuilder({ spec }); setTab("home"); goTo(""); },
           pin,
           onSetPin: savePin,
           onClearPin: () => savePin(""),
@@ -6694,6 +7324,11 @@ void main() {
           if (origin && origin.kind === "performer" && origin.performer) {
             openProfile(origin.performer, false);
             goTo("performer/" + encodeURIComponent(origin.performer.name), true);
+            return;
+          }
+          if (origin && origin.kind === "favorites") {
+            setTab("favorites");
+            goTo("favorites", true);
             return;
           }
           if (origin && origin.kind === "folder" && origin.folder) {
@@ -6772,6 +7407,7 @@ void main() {
           "stash-tok-wrap" +
           (locked ? " stk-locked" : "") +
           (sfw ? " stk-sfw" : "") +
+          (prefs.mono ? " stk-mono" : "") +
           (desktop ? " stk-desktop" : ""),
         ref: shellRef,
       },
@@ -6854,7 +7490,7 @@ void main() {
             }),
           h(NavButton, {
             active: tab === "home" && activeFeed.type !== "performer",
-            icon: "feed",
+            icon: "play",
             label: "Feed",
             onClick: goHome,
             onLongPress: () => setFeedOptions(true),
@@ -6862,7 +7498,7 @@ void main() {
           h(NavButton, {
             active: tab === "performers",
             icon: "user",
-            label: "Performers",
+            label: "Discover",
             onClick: () => {
               setTab("performers");
               goTo("performers");
@@ -6888,7 +7524,7 @@ void main() {
             h("div", { className: "stk-sheet-backdrop", onClick: () => setFeedOptions(false) }),
             h(
               "div",
-              { className: "stk-sheet", onClick: (event) => event.stopPropagation() },
+              { className: "stk-sheet", ref: feedOptionsRef, onClick: (event) => event.stopPropagation() },
               h(
                 "h3",
                 null,
@@ -6921,7 +7557,7 @@ void main() {
             h("div", { className: "stk-sheet-backdrop", onClick: () => setNavPicker(null) }),
             h(
               "div",
-              { className: "stk-sheet", onClick: (event) => event.stopPropagation() },
+              { className: "stk-sheet", ref: navPickerRef, onClick: (event) => event.stopPropagation() },
               h(
                 "h3",
                 null,
@@ -7053,7 +7689,7 @@ void main() {
       React.Fragment,
       null,
       children,
-      h(SettingsPanel, { cfg: null, feeds, onEdit: (spec) => setBuilder({ spec }) }),
+      h(SettingsPanel, { cfg: null, feeds, onEdit: (spec) => { setBuilder({ spec }); setTab("home"); goTo(""); } }),
       builder &&
         h(FeedBuilder, {
           spec: builder.spec || null,

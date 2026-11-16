@@ -52,3 +52,7 @@ settings:
     displayName: Minimum duration (seconds)
     description: Scenes shorter than this are left out of every feed. Default 10 seconds; set 0 to include everything. The Shorts feed ignores this.
     type: NUMBER
+  thumbBase:
+    displayName: Thumbnail service URL
+    description: Base URL of the optional resizing sidecar (see tools/thumbs-service). Leave empty to guess from the port the app is served on, or enter off to always load Stash's own images.
+    type: STRING

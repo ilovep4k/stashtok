@@ -60,16 +60,19 @@
   height: 100%;
   object-fit: contain;
   background: transparent;
-  will-change: transform;
-  transition: transform 120ms ease-out;
+  /* only the playing clip gets its own layer; promoting every neighbour wastes
+     GPU memory on a big pane */
+  transition: transform 310ms cubic-bezier(.22,1,.36,1);
   touch-action: none;
 }
 .stk-video.stk-zoomed { transition: none; }
+.stk-video.stk-active { will-change: transform; }
 
 .stk-dragwrap {
   position: absolute;
   inset: 0;
-  transition: transform 220ms cubic-bezier(.2,.8,.2,1);
+  /* long, decelerating settle: the clip keeps gliding after the finger lifts */
+  transition: transform 310ms cubic-bezier(.22,1,.36,1);
 }
 .stk-dragwrap.stk-dragging { transition: none; }
 
@@ -388,10 +391,12 @@
   inset: 0;
   background: rgba(0,0,0,.5);
   backdrop-filter: blur(2px);
-  z-index: 20;
+  z-index: 9400;
 }
 .stk-sheet {
-  position: absolute;
+  /* fixed to the viewport: the app wrapper can be taller than the screen, which
+     left the bottom of the sheet off-screen */
+  position: fixed;
   left: 0; right: 0; bottom: 0;
   max-height: 88%;
   overflow-y: auto;
@@ -400,7 +405,8 @@
   border-top-right-radius: 16px;
   border-top: 1px solid rgba(255,255,255,.1);
   padding: 14px 16px calc(20px + env(safe-area-inset-bottom));
-  z-index: 21;
+  /* the embedded app root sits at z-index 9000, so a sheet at 21 painted under it */
+  z-index: 9500;
   animation: stk-rise 200ms ease-out;
 }
 @keyframes stk-rise { from { transform: translateY(30px); opacity: .6; } to { transform: none; opacity: 1; } }
@@ -672,6 +678,7 @@
   color: rgba(255,255,255,.9);
 }
 .stk-feed-pill svg { opacity: .75; }
+.stk-feed-pill { pointer-events: auto; cursor: pointer; }
 
 .stk-info {
   position: absolute;
@@ -1823,8 +1830,10 @@
 }
 
 .stk-quick-menu {
-  position: absolute;
-  z-index: 60;
+  /* fixed, not absolute: the stage clips its overflow, which used to cut the menu
+     off against the bottom nav */
+  position: fixed;
+  z-index: 90;
   min-width: 168px;
   padding: 6px;
   background: rgba(16, 16, 16, 0.97);
@@ -2575,4 +2584,221 @@ img.stk-scrub-cell {
   color: #ddd;
   font-size: 13px;
   cursor: pointer;
+}
+
+/* quick tag sheet from the rail */
+.stk-top-left {
+  flex-direction: row;
+  justify-content: flex-start;
+  align-items: center;
+  pointer-events: none;
+}
+.stk-top-left .stk-top-btn { pointer-events: auto; }
+.stk-tag-sheet { max-height: 76%; display: flex; flex-direction: column; }
+.stk-tag-search {
+  margin: 8px 0 10px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,.14);
+  background: rgba(255,255,255,.06);
+  color: #fff;
+  font-size: 13px;
+}
+.stk-tag-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  overflow-y: auto;
+  padding-bottom: 6px;
+  flex: 1 1 auto;
+}
+.stk-tagpick {
+  padding: 7px 11px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,.16);
+  background: rgba(255,255,255,.05);
+  color: rgba(255,255,255,.86);
+  font-size: 12px;
+  line-height: 1;
+}
+.stk-tagpick.stk-on {
+  background: #ff2d55;
+  border-color: #ff2d55;
+  color: #fff;
+}
+.stk-tag-done {
+  margin-top: 10px;
+  width: 100%;
+  justify-content: center;
+  padding: 11px;
+  font-size: 14px;
+}
+
+/* while the feed is mounted the document must not scroll or zoom: a scrollable
+   page is what lets Safari drift into a page zoom that survives a refresh */
+html.stk-lock, body.stk-lock {
+  overflow: hidden !important;
+  height: 100% !important;
+  overscroll-behavior: none;
+}
+html.stk-lock body { position: fixed; width: 100%; }
+.stk-fixed { height: 100dvh; max-height: 100dvh; overflow: hidden; }
+
+/* pure black & white UI: pairs with a red or greyscale screen filter */
+/* whole page, not just the feed: the Stash chrome around it should not stay
+   red when the phone is in a red colour-filter mode */
+html.stk-mono { filter: grayscale(1) contrast(1.06); }
+
+/* text labels in a tab bar (the sort picker on Favorites) */
+.stk-tabbar.stk-tabbar-text button {
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: .01em;
+  padding: 11px 2px 10px;
+  white-space: nowrap;
+}
+
+/* the add-a-tag affordance on the rail */
+.stk-rail-icoplus { position: relative; display: inline-flex; }
+.stk-rail-plus {
+  position: absolute;
+  top: -3px;
+  right: -5px;
+  font-style: normal;
+  font-size: 13px;
+  line-height: 1;
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #ff2d55;
+  color: #fff;
+  font-weight: 700;
+}
+
+/* empty cell keeps the 3x4 pin pad square */
+.stk-lock-key.stk-lock-blank { background: none; border-color: transparent; pointer-events: none; }
+
+/* discover: fikfap-style circles + hashtag chips */
+.stk-disc-h {
+  margin: 14px 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: .01em;
+  color: rgba(255,255,255,.92);
+}
+.stk-circles {
+  display: flex;
+  gap: 14px;
+  overflow-x: auto;
+  padding: 2px 2px 12px;
+  scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
+}
+.stk-circles::-webkit-scrollbar { display: none; }
+.stk-circle {
+  flex: 0 0 auto;
+  width: 74px;
+  background: none;
+  border: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  scroll-snap-align: start;
+}
+.stk-circle-photo {
+  width: 66px;
+  height: 66px;
+  border-radius: 50%;
+  background: #1c1c1c center/cover no-repeat;
+  border: 1px solid rgba(255,255,255,.14);
+}
+.stk-circle-name {
+  font-size: 11px;
+  line-height: 1.2;
+  max-width: 74px;
+  text-align: center;
+  color: rgba(255,255,255,.8);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stk-disc-chips {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 10px;
+  -webkit-overflow-scrolling: touch;
+}
+.stk-disc-chips::-webkit-scrollbar { display: none; }
+.stk-disc-chip {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #171717;
+  border: 1px solid #2a2a2a;
+  border-radius: 999px;
+  padding: 7px 12px;
+  color: #eee;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.stk-disc-chip small { color: rgba(255,255,255,.45); font-size: 10px; }
+
+/* the For You sheet: order + details */
+.stk-order-row { display: flex; gap: 8px; flex-wrap: wrap; margin: 6px 0 14px; }
+.stk-order-pill {
+  background: #171717;
+  border: 1px solid #2a2a2a;
+  color: #ddd;
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.stk-order-pill.stk-active { background: #fff; border-color: #fff; color: #000; }
+
+/* ---------- desktop performance ----------
+   The big pane scales a 4K clip to ~1300px inside a rounded, clipped card. The
+   card's own radius forces a mask re-raster every frame unless the video layer is
+   promoted; the blur behind the overlays is also far more expensive at this size. */
+.stk-desktop .stk-video.stk-active {
+  transform: translateZ(0);
+  backface-visibility: hidden;
+}
+.stk-desktop .stash-tok {
+  contain: paint;
+}
+@media (min-width: 900px) {
+  .stk-feed-pill,
+  .stk-chip,
+  .stk-quick-menu,
+  .stk-sheet,
+  .stk-top-btn {
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+  }
+}
+
+/* 200 creator cards all painting at once is what makes Discover crawl on desktop;
+   skip paint/layout work for the ones off screen */
+.stk-account, .stk-tile, .stk-cover {
+  content-visibility: auto;
+  contain-intrinsic-size: 240px 320px;
+}
+
+/* lazy thumbnails live inside the photo box, which already has the final size */
+.stk-tile-photo, .stk-account-photo, .stk-circle-photo { position: relative; overflow: hidden; }
+.stk-thumb {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
