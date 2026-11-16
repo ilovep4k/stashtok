@@ -695,6 +695,7 @@
     performerImages: true,
     performerMarkers: true,
     foldersOnTop: true,
+    showPath: false,
     favoritesSort: "updated_at",
     favoritesOpen: "gallery",
     feedWindow: "all",
@@ -1238,7 +1239,7 @@ void main() {
     return h("canvas", { className: "stk-vr-canvas", ref: canvasRef });
   }
 
-  function FeedView({ spec, cfg, refreshKey, onBack, onSearch, onSettings, onOpenPerformer, onOpenTag, onDeriveFeed, onEditFeed, onOpenFolder, onOpenFolderProfile, feeds, onSwitchFeed, onNewFeed, desktop }) {
+  function FeedView({ prefs, spec, cfg, refreshKey, onBack, onSearch, onSettings, onOpenPerformer, onOpenTag, onDeriveFeed, onEditFeed, onOpenFolder, onOpenFolderProfile, feeds, onSwitchFeed, onNewFeed, desktop }) {
     const sfw = !!cfg.sfw;
     const [items, setItems] = useState([]);
     const [index, setIndex] = useState(0);
@@ -1316,6 +1317,7 @@ void main() {
     }, []);
 
     const item = items[index] || null;
+
     const [, setRootsReady] = useState(0);
 
     const feedKey = String(spec.key || spec.id || (spec.type + ":" + (spec.name || spec.sort || "")));
@@ -2296,6 +2298,8 @@ void main() {
     const performers = scene.performers || [];
     const tags = scene.tags || [];
     const handle = resolveHandle(scene, file);
+    const showPath = !!(prefs && prefs.showPath);
+    const TAG_LIMIT = 4;
 
 
 
@@ -2612,7 +2616,8 @@ void main() {
                 !sfw &&
                   h("span", { className: "stk-caption-time" }, `${fmtTime(time)} / ${fmtTime(duration)}`)
               ),
-              path &&
+              showPath &&
+                path &&
                 h(
                   "div",
                   { className: "stk-caption-line stk-caption-path" },
@@ -2627,12 +2632,12 @@ void main() {
             h(
               "div",
               { className: "stk-hashtags" },
-              tags.slice(0, 8).map((tag) =>
+              tags.map((tag, tagIndex) =>
                 h(
                   "button",
                   {
                     key: tag.id,
-                    className: "stk-hashtext",
+                    className: "stk-hashtext" + (tagIndex >= TAG_LIMIT ? " stk-tag-extra" : ""),
                     onClick: (event) => {
                       event.stopPropagation();
                       onOpenTag(tag);
@@ -2640,7 +2645,23 @@ void main() {
                   },
                   "#" + tag.name.replace(/\s+/g, "-").toLowerCase()
                 )
-              )
+              ),
+              tags.length > TAG_LIMIT &&
+                h(
+                  "button",
+                  {
+                    className: "stk-hashtext stk-hashtext-more",
+                    /* toggled on the DOM node: a state change here re-renders the feed
+                       card and the current clip can jump underneath you */
+                    onClick: (event) => {
+                      event.stopPropagation();
+                      const box = event.currentTarget.parentElement;
+                      const open = box.classList.toggle("stk-tags-open");
+                      event.currentTarget.textContent = open ? "less" : "+" + (tags.length - TAG_LIMIT) + " more";
+                    },
+                  },
+                  "+" + (tags.length - TAG_LIMIT) + " more"
+                )
             ),
         ),
 
@@ -5604,6 +5625,11 @@ void main() {
           onChange: (value) => setPref("feedWindow", value),
         })
       ),
+      h(
+        PrefRow,
+        { title: "Show file path", hint: "Print the folder path under the caption in the feed" },
+        h(PrefToggle, { label: "Show path", on: !!prefs.showPath, onChange: (value) => setPref("showPath", value) })
+      ),
       h("h4", { style: { marginTop: "18px" } }, "Performer page"),
       h(
         PrefRow,
@@ -6571,6 +6597,7 @@ void main() {
       body = h(FeedView, {
         key: activeFeed.id + ":" + refreshKey,
         desktop,
+        prefs,
         spec: activeFeed,
         cfg: Object.assign({}, cfg, { windowDays: prefs.feedWindow === "all" ? 0 : Number(prefs.feedWindow) || 0 }),
         refreshKey,
