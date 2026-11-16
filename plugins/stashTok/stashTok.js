@@ -4223,125 +4223,227 @@ void main() {
     ["modified", "Last modified"],
   ];
 
-  function FoldersPage({ onPick, onBack }) {
-    const [rows, setRows] = useState(null);
-    const [query, setQuery] = useState("");
-    const [listSort, setListSort] = useState(() => {
-      try {
-        return window.localStorage.getItem("stashTok.folderListSort") || "modified";
-      } catch (e) {
-        return "modified";
+  /* ---- folders: libraries first, then a real tree ------------------- */
+
+  let FOLDER_TREE = null;
+
+  function loadFolderTree() {
+    if (FOLDER_TREE) return Promise.resolve(FOLDER_TREE);
+    return (async () => {
+      const libs = await gql(
+        `query StashTokStashes { configuration { general { stashes { path } } } }`,
+        {}
+      )
+        .then((data) => (((data.configuration || {}).general || {}).stashes || []).map((row) => row.path).filter(Boolean))
+        .catch(() => []);
+
+      let all = [];
+      for (let page = 1; page <= 30; page += 1) {
+        const data = await gql(
+          `query StashTokFolders($page: Int!) {
+            findFolders(filter: { per_page: 1000, page: $page }) {
+              folders { path }
+            }
+          }`,
+          { page }
+        );
+        const batch = (data.findFolders && data.findFolders.folders) || [];
+        all = all.concat(batch.map((row) => row.path));
+        if (batch.length < 1000) break;
       }
-    });
-    const [sortOpen, setSortOpen] = useState(false);
+
+      const nodes = {};
+      all.forEach((path) => {
+        nodes[path] = { path, name: path.slice(path.lastIndexOf("/") + 1) || path, children: [] };
+      });
+      all.forEach((path) => {
+        const cut = path.lastIndexOf("/");
+        const parent = cut > 0 ? path.slice(0, cut) : "";
+        if (parent && nodes[parent]) nodes[parent].children.push(path);
+      });
+      Object.keys(nodes).forEach((path) => {
+        nodes[path].children.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base", numeric: true }));
+      });
+
+      /* a stash that lives inside another stash is not a separate library */
+      const libraries = (libs.length ? libs : all.filter((path) => {
+        const cut = path.lastIndexOf("/");
+        return !(cut > 0 && nodes[path.slice(0, cut)]);
+      }))
+        .filter((path, index, list) => list.indexOf(path) === index)
+        .filter((path) => !libs.some((other) => other !== path && path.indexOf(other + "/") === 0))
+        .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base", numeric: true }))
+        .map((path) => {
+          if (!nodes[path]) {
+            nodes[path] = { path, name: path.slice(path.lastIndexOf("/") + 1) || path, children: [] };
+          }
+          return path;
+        });
+
+      FOLDER_TREE = { nodes, libraries };
+      return FOLDER_TREE;
+    })();
+  }
+
+  function FoldersPage({ onPick, onBack }) {
+    const [tree, setTree] = useState(null);
+    const [path, setPath] = useState("");
+    const [query, setQuery] = useState("");
 
     useEffect(() => {
       let alive = true;
-      (async () => {
-        const roots = await loadLibraryRoots();
-        let all = [];
-        for (let page = 1; page <= 20; page += 1) {
-          const data = await gql(
-            `query StashTokFolders($page: Int!) {
-              findFolders(filter: { per_page: 1000, page: $page, sort: "updated_at", direction: DESC }) {
-                folders { path updated_at }
-              }
-            }`,
-            { page }
-          );
-          const batch = (data.findFolders && data.findFolders.folders) || [];
-          all = all.concat(batch);
-          if (batch.length < 1000) break;
-        }
-        const seen = {};
-        const out = [];
-        all.forEach((folder) => {
-          const root = roots.find((candidate) => folder.path.indexOf(candidate + "/") === 0);
-          if (!root) return;
-          const rest = folder.path.slice(root.length + 1);
-          if (!rest || rest.indexOf("/") !== -1) return;
-          if (seen[folder.path]) return;
-          seen[folder.path] = true;
-          out.push({ name: rest, folder: folder.path, modTime: Date.parse(folder.updated_at) || 0 });
+      loadFolderTree()
+        .then((data) => {
+          if (!alive) return;
+          setTree(data);
+          /* a single library is not a menu: go straight into it */
+          if (data.libraries.length === 1) setPath(data.libraries[0]);
+        })
+        .catch(() => {
+          if (alive) setTree({ nodes: {}, libraries: [] });
         });
-        if (alive) setRows(out);
-      })().catch((err) => {
-        try { window.__stkFolderErr = String((err && (err.message || err)) || ""); } catch (e) { /* ignore */ }
-        if (alive) setRows([]);
-      });
       return () => {
         alive = false;
       };
     }, []);
 
+    const nodes = tree ? tree.nodes : {};
+    const libraries = tree ? tree.libraries : [];
+    const atRoot = !path;
+    const children = path && nodes[path] ? nodes[path].children : [];
     const term = query.trim().toLowerCase();
-    const list = (rows || [])
-      .filter((row) => !term || row.name.toLowerCase().indexOf(term) !== -1)
-      .sort((a, b) => {
-        if (listSort === "modified") return b.modTime - a.modTime || a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
-        const byName = a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
-        return listSort === "za" ? -byName : byName;
+
+    /* breadcrumbs start at the library, not at the filesystem root */
+    const trail = [];
+    if (path) {
+      const lib = libraries
+        .filter((entry) => path === entry || path.indexOf(entry + "/") === 0)
+        .sort((a, b) => b.length - a.length)[0] || "";
+      if (lib) trail.push({ label: nodes[lib] ? nodes[lib].name : lib.slice(lib.lastIndexOf("/") + 1), path: lib });
+      let acc = lib;
+      const rest = path.slice(lib.length).split("/").filter(Boolean);
+      rest.forEach((part) => {
+        acc += "/" + part;
+        trail.push({ label: part, path: acc });
       });
-    const listSortLabel = (FOLDER_LIST_SORTS.find((entry) => entry[0] === listSort) || FOLDER_LIST_SORTS[0])[1];
+    }
+
+    let rows = atRoot
+      ? libraries.map((lib) => ({ path: lib, name: nodes[lib] ? nodes[lib].name : lib.slice(lib.lastIndexOf("/") + 1) }))
+      : children.map((child) => ({ path: child, name: nodes[child].name }));
+
+    if (term) {
+      const base = path || "";
+      const found = [];
+      Object.keys(nodes).forEach((candidate) => {
+        if (base && candidate.indexOf(base + "/") !== 0) return;
+        const rest = base ? candidate.slice(base.length + 1) : candidate.slice(1);
+        if (!rest || rest.indexOf("/") !== -1) return;
+        if (nodes[candidate].name.toLowerCase().indexOf(term) === -1) return;
+        found.push({ path: candidate, name: nodes[candidate].name });
+      });
+      rows = found;
+    }
+
+    const junk = (name) => /^@eaDir/i.test(name) || name[0] === "<" || name.indexOf("\u2044") !== -1 || name[0] === "." || /^_delete$/i.test(name);
+    rows = rows.filter((row) => !junk(row.name));
+    rows.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true }));
 
     return h(
       "div",
-      { className: "stk-page" },
-      h("h2", null, onBack && h("button", { onClick: onBack }, h(Icon, { name: "chevron", size: 18 })), "Folders"),
+      { className: "stk-page stk-folders" },
+      h(
+        "h2",
+        null,
+        (path || onBack) && h("button", {
+          onClick: () => {
+            if (!path) {
+              if (onBack) onBack();
+              return;
+            }
+            if (libraries.length === 1 && libraries[0] === path) {
+              setPath("");
+              return;
+            }
+            setPath(path.slice(0, path.lastIndexOf("/")) || "");
+          },
+        }, h(Icon, { name: "chevron", size: 18 })),
+        atRoot ? "Folders" : nodes[path] ? nodes[path].name : "Folders"
+      ),
       h(
         "div",
         { className: "stk-folder-tools" },
         h("input", {
-        type: "search",
-        placeholder: "Filter folders",
-        value: query,
-        onChange: (event) => setQuery(event.currentTarget.value),
-        style: {
-          width: "100%",
-          marginBottom: "10px",
-          padding: "9px 11px",
-          borderRadius: "10px",
-          background: "#171717",
-          border: "1px solid #2a2a2a",
-          color: "#fff",
-        },
-        }),
+          type: "search",
+          placeholder: atRoot ? "Filter libraries" : "Filter folders",
+          value: query,
+          onChange: (event) => setQuery(event.currentTarget.value),
+          style: {
+            width: "100%",
+            marginBottom: "10px",
+            padding: "9px 11px",
+            borderRadius: "10px",
+            background: "#171717",
+            border: "1px solid #2a2a2a",
+            color: "#fff",
+          },
+        })
       ),
-      h(
-        "div",
-        { className: "stk-sort-bar" },
-        FOLDER_LIST_SORTS.map(([value, label]) =>
-          h(
-            "button",
-            {
-              key: value,
-              className: "stk-sort-pill" + (value === listSort ? " stk-on" : ""),
-              onClick: () => {
-                setListSort(value);
-                try {
-                  window.localStorage.setItem("stashTok.folderListSort", value);
-                } catch (e) {
-                  /* ignore */
-                }
-              },
-            },
-            label
-          )
-        ),
-        h("span", { className: "stk-sub" }, (rows ? list.length : 0) + " folders")
-      ),
-      !rows
+      !tree
         ? h("div", { className: "stk-state" }, h("div", { className: "stk-spinner" }))
         : h(
-            "div",
-            { className: "stk-folder-list" },
-            list.map((row) =>
+            React.Fragment,
+            null,
+            trail.length > 1 &&
+              h(
+                "div",
+                { className: "stk-crumbs" },
+                trail.map((crumb, index) =>
+                  h(
+                    "button",
+                    {
+                      key: crumb.path,
+                      className: "stk-crumb",
+                      onClick: () => setPath(crumb.path),
+                    },
+                    crumb.label,
+                    index < trail.length - 1 && h("span", { className: "stk-crumb-sep" }, "/")
+                  )
+                )
+              ),
+            path &&
               h(
                 "button",
-                { key: row.folder, className: "stk-folder-row", onClick: () => onPick(row) },
-                h(Icon, { name: "folder", size: 17 }),
-                h("span", null, row.name)
-              )
+                {
+                  className: "stk-folder-open",
+                  onClick: () => onPick({ name: nodes[path] ? nodes[path].name : path, folder: path }),
+                },
+                h(Icon, { name: "video", size: 15 }),
+                "Play clips in this folder"
+              ),
+            h(
+              "div",
+              { className: "stk-folder-list" },
+              rows.length
+                ? rows.map((row) => {
+                    const kids = nodes[row.path] ? nodes[row.path].children.length : 0;
+                    return h(
+                      "button",
+                      {
+                        key: row.path,
+                        className: "stk-folder-row",
+                        onClick: () => {
+                          setQuery("");
+                          if (kids) setPath(row.path);
+                          else onPick({ name: row.name, folder: row.path });
+                        },
+                      },
+                      h(Icon, { name: kids ? "folder" : "video", size: 17 }),
+                      h("span", { className: "stk-folder-name" }, row.name),
+                      h("span", { className: "stk-sub" }, kids ? kids + (kids === 1 ? " folder" : " folders") : "clips")
+                    );
+                  })
+                : h("div", { className: "stk-state" }, "Nothing here.")
             )
           )
     );
