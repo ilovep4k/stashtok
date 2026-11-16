@@ -4413,7 +4413,7 @@ void main() {
       h("input", {
         type: "search",
         className: "stk-fb-search",
-        placeholder: atRoot ? "Filter libraries" : "Filter folders",
+        placeholder: "Search",
         value: query,
         onChange: (event) => setQuery(event.currentTarget.value),
       }),
