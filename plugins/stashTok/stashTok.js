@@ -4299,8 +4299,6 @@ void main() {
     const [query, setQuery] = useState("");
     const [sort, setSort] = useState("date");
     const [desc, setDesc] = useState(true);
-    const [selectMode, setSelectMode] = useState(false);
-    const [picked, setPicked] = useState([]);
 
     useEffect(() => {
       let alive = true;
@@ -4319,8 +4317,6 @@ void main() {
     }, []);
 
     useEffect(() => {
-      setPicked([]);
-      setSelectMode(false);
       setQuery("");
     }, [path]);
 
@@ -4332,6 +4328,8 @@ void main() {
 
     const trail = [];
     if (path) {
+      /* no back button on this page: the crumbs are the way up */
+      trail.push({ label: "Library", path: "" });
       const lib = libraries
         .filter((entry) => path === entry || path.indexOf(entry + "/") === 0)
         .sort((a, b) => b.length - a.length)[0] || "";
@@ -4390,10 +4388,6 @@ void main() {
     }
 
     function open(folderPath) {
-      if (selectMode) {
-        setPicked((current) => (current.indexOf(folderPath) === -1 ? current.concat(folderPath) : current.filter((entry) => entry !== folderPath)));
-        return;
-      }
       const node = nodes[folderPath];
       if (node && node.children.length) setPath(folderPath);
       else onPick({ name: node ? node.name : folderPath, folder: folderPath });
@@ -4402,24 +4396,8 @@ void main() {
     return h(
       "div",
       { className: "stk-page stk-fb" },
-      h(
-        "div",
-        { className: "stk-fb-head" },
-        h("button", { className: "stk-fb-round", onClick: goUp, "aria-label": "Back" }, h(Icon, { name: "chevron", size: 18 })),
-        h("div", { className: "stk-fb-title" }, title),
-        h(
-          "button",
-          {
-            className: "stk-fb-pill" + (selectMode ? " stk-on" : ""),
-            onClick: () => {
-              setSelectMode((on) => !on);
-              setPicked([]);
-            },
-          },
-          selectMode ? "Done" : "Select"
-        )
-      ),
-      trail.length > 1 &&
+      h("h2", { className: "stk-fb-title" }, title),
+      trail.length > 0 &&
         h(
           "div",
           { className: "stk-crumbs" },
@@ -4432,6 +4410,13 @@ void main() {
             )
           )
         ),
+      h("input", {
+        type: "search",
+        className: "stk-fb-search",
+        placeholder: atRoot ? "Filter libraries" : "Filter folders",
+        value: query,
+        onChange: (event) => setQuery(event.currentTarget.value),
+      }),
       h(
         "div",
         { className: "stk-fb-sorts" },
@@ -4454,13 +4439,6 @@ void main() {
           )
         )
       ),
-      h("input", {
-        type: "search",
-        className: "stk-fb-search",
-        placeholder: atRoot ? "Filter libraries" : "Filter folders",
-        value: query,
-        onChange: (event) => setQuery(event.currentTarget.value),
-      }),
       !tree
         ? h("div", { className: "stk-state" }, h("div", { className: "stk-spinner" }))
         : h(
@@ -4479,18 +4457,13 @@ void main() {
               rows.length
                 ? rows.map((node) => {
                     const hasKids = node.children.length > 0;
-                    const selected = picked.indexOf(node.path) !== -1;
                     return h(
                       "button",
                       {
                         key: node.path,
-                        className: "stk-fb-row" + (selected ? " stk-sel" : ""),
+                        className: "stk-fb-row",
                         onClick: () => open(node.path),
                       },
-                      selectMode &&
-                        h("span", { className: "stk-fb-check" + (selected ? " stk-on" : "") },
-                          selected && h("svg", { viewBox: "0 0 24 24", width: 14, height: 14, fill: "none", stroke: "currentColor", strokeWidth: 3, strokeLinecap: "round" }, h("path", { d: "M5 13l4 4L19 7" }))
-                        ),
                       h(
                         "svg",
                         { viewBox: "0 0 24 24", width: 28, height: 28, className: "stk-fb-ico", "aria-hidden": "true" },
@@ -4512,31 +4485,12 @@ void main() {
                           hasKids ? node.children.length + (node.children.length === 1 ? " folder" : " folders") : "clips"
                         )
                       ),
-                      !selectMode && h(Icon, { name: "chevron", size: 16, className: "stk-fb-chev" })
+                      h(Icon, { name: "chevron", size: 16, className: "stk-fb-chev" })
                     );
                   })
                 : h("div", { className: "stk-state" }, "Nothing here.")
             )
           ),
-      selectMode &&
-        h(
-          "div",
-          { className: "stk-fb-foot" },
-          h("span", { className: "stk-sub" }, picked.length + " selected"),
-          h(
-            "button",
-            {
-              className: "stk-fb-pill stk-on",
-              disabled: !picked.length,
-              onClick: () => {
-                const target = picked[picked.length - 1];
-                const node = nodes[target];
-                onPick({ name: node ? node.name : target, folder: target });
-              },
-            },
-            "Open"
-          )
-        )
     );
   }
 

@@ -2388,51 +2388,17 @@ img.stk-scrub-cell {
 }
 
 /* ---- folders: file-browser layout ---- */
-.stk-fb { padding-bottom: 76px; }
-.stk-fb-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  /* the floating settings button lives in the top-right corner */
-  margin: 2px 48px 12px 0;
-}
-.stk-fb-round {
-  width: 36px;
-  height: 36px;
-  flex: 0 0 36px;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  border: 1px solid #2c2c2c;
-  background: #141414;
-  color: #eaeaea;
-  cursor: pointer;
-  transform: rotate(180deg);
-}
-.stk-fb-round:hover { border-color: #444; color: #fff; }
+.stk-fb { padding-bottom: 24px; }
 .stk-fb-title {
-  flex: 1;
-  min-width: 0;
-  text-align: center;
-  font-size: 13px;
+  margin: 2px 0 10px;
+  font-size: 20px;
   font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: #f2f2f2;
+  letter-spacing: -0.01em;
+  color: #f4f4f4;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.stk-fb-pill {
-  padding: 7px 14px;
-  border-radius: 999px;
-  border: 1px solid #2c2c2c;
-  background: #141414;
-  color: #dcdcdc;
-  font-size: 13px;
-  cursor: pointer;
-}
-.stk-fb-pill.stk-on { background: #1f6feb; border-color: #2f7ff5; color: #fff; }
 .stk-fb-sorts {
   display: flex;
   gap: 8px;
@@ -2495,32 +2461,6 @@ img.stk-scrub-cell {
 }
 .stk-fb-sub { font-size: 12px; color: #8b8b8b; }
 .stk-fb-chev { flex: 0 0 auto; opacity: 0.4; }
-.stk-fb-check {
-  flex: 0 0 22px;
-  width: 22px;
-  height: 22px;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  border: 1.5px solid #3a3a3a;
-  color: #fff;
-}
-.stk-fb-check.stk-on { background: #1f6feb; border-color: #2f7ff5; }
-.stk-fb-foot {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px));
-  background: rgba(12, 12, 12, 0.94);
-  border-top: 1px solid #232323;
-  backdrop-filter: blur(10px);
-  z-index: 30;
-}
 .stk-fb-open {
   display: inline-flex;
   align-items: center;
