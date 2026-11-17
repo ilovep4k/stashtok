@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased - View on Stash
+
+- A **View on Stash** pill centred at the top of every profile opens the same page in
+  Stash itself in a new tab: the performer record, or — for a folder profile — the scene
+  list carrying the folder's `Path includes …` filter, the same query the folder page
+  runs, so the counts match. The pill is a sibling of the cover, not a child: the
+  safe-for-work blur is a `filter` on the cover and would blur anything inside it.
+
 ## Unreleased - pull to refresh, near-ratio crop
 
 - **Pull to refresh**: at the first clip, pulling down shows an indicator and reloading

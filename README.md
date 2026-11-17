@@ -7,6 +7,7 @@ A full-screen, TikTok-style vertical feed for [Stash](https://github.com/stashap
 ## What it does
 
 - **Vertical feed** — one scene per screen, 9:16 framing. On a portrait phone a 16:9 clip is auto-cropped to its middle half (a quarter off each side); on a wide screen it is letterboxed and centred instead, with a blurred backdrop behind it.
+- **Bottom bar** — Feed (fixed, first), then Discover, Performers, Favorites, Settings; long-press any slot to change it.
 - **Feeds** — For You (random), Favorites, one or many tags, a performer's scenes in date order, markers, never-played, shorts, portrait-only, or any saved Stash filter. Build and save your own feeds in the app.
 - **Gestures**
   - swipe up / down — next / previous
@@ -18,6 +19,7 @@ A full-screen, TikTok-style vertical feed for [Stash](https://github.com/stashap
   - pinch — zoom the video inside the viewport; the HUD never scales
   - long-press, then drag — move the video inside the viewport without a second finger (only while it is larger than its box)
   - drag horizontally — scrub within the scene
+  - swipe right (past ~120 px) — open the performer page of the clip on screen; swipe left steps the channel carousel
 - **Scrub bar** with a tick per marker, and the marker title as you pass it.
 - **Details sheet** — file path, size, duration, resolution, codecs, bitrate, play counts, plus every performer and tag as a tappable chip.
 - **Hearts are ratings.** Stash has no scene favourite, so a heart writes `rating100` through `sceneUpdate`. Hearts therefore show up in Stash's own rating filters, and in other clients.
@@ -41,6 +43,13 @@ StashTok then appears in the available list and installs into `plugins/community
 2. In Stash: **Settings → Plugins → Reload Plugins**.
 3. Enable **StashTok**.
 4. A **StashTok** item appears in the main nav. On a phone, open it from the nav — do not bookmark the `/plugin/stashTok` URL directly, because Stash answers that path with a 404 on a hard reload.
+
+## Highlight reel
+
+A performer's page has a **Highlight reel** link: `tools/reel-service` cuts 3 s
+from a random spot in each clip (five windows in long videos) and stitches them
+into one MP4, cached per performer. It opens in its own tab because Stash's CSP
+(`connect-src 'self'`, `media-src blob: 'self'`) forbids an in-page player.
 
 ## Settings
 

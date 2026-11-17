@@ -1,6 +1,6 @@
 name: StashTok
 description: Full-screen, TikTok-style vertical feed for your scenes and markers, with pinch zoom, swipe navigation, hold-to-fast-forward and a marker scrub bar.
-version: 0.1.2
+version: 0.1.3
 url: https://github.com/ilovep4k/stashtok
 ui:
   javascript:
@@ -54,5 +54,5 @@ settings:
     type: NUMBER
   thumbBase:
     displayName: Thumbnail service URL
-    description: Base URL of the optional resizing sidecar (see tools/thumbs-service). Leave empty to guess from the port the app is served on, or enter off to always load Stash's own images.
+    description: Optional resizing sidecar (see tools/thumbs-service). Leave empty to use Stash's own thumbnails, which are already generated, cached and same-origin.
     type: STRING

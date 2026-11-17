@@ -2882,8 +2882,13 @@ html.stk-mono { filter: grayscale(1) contrast(1.06); }
   contain-intrinsic-size: 240px 320px;
 }
 
-/* lazy thumbnails live inside the photo box, which already has the final size */
-.stk-tile-photo, .stk-account-photo, .stk-circle-photo { position: relative; overflow: hidden; }
+/* lazy thumbnails live inside the photo box, which already has the final size.
+   .stk-tile-photo must NOT be reset to relative: it is absolutely positioned
+   inside .stk-tile's aspect-ratio box, and making it relative collapsed the
+   box to 0px, so every profile/search grid showed grey tiles with the
+   screenshot loading fine behind a zero-height frame. */
+.stk-tile-photo { overflow: hidden; }
+.stk-account-photo, .stk-circle-photo { position: relative; overflow: hidden; }
 .stk-thumb {
   position: absolute;
   inset: 0;
@@ -2991,3 +2996,386 @@ html.stk-mono { filter: grayscale(1) contrast(1.06); }
   text-align: center;
 }
 .stk-card-person { width: 92px; }
+
+/* ---------- image viewer (full-screen, grows out of the tile) ---------- */
+.stk-img-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9600;
+  background: rgba(0, 0, 0, .92);
+  touch-action: none;
+  overscroll-behavior: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.stk-img-overlay img,
+.stk-img-overlay button {
+  -webkit-user-drag: none;
+  user-select: none;
+}
+.stk-img-frame {
+  position: fixed;
+  overflow: hidden;
+  background: #000;
+  border-radius: 14px;
+  transition: left 260ms cubic-bezier(.2, .8, .2, 1), top 260ms cubic-bezier(.2, .8, .2, 1),
+    width 260ms cubic-bezier(.2, .8, .2, 1), height 260ms cubic-bezier(.2, .8, .2, 1),
+    border-radius 260ms ease;
+}
+.stk-img-frame.stk-img-hero { transition: none; }
+.stk-img-stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.stk-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  transform-origin: 50% 50%;
+  will-change: transform;
+}
+.stk-img-close {
+  position: fixed;
+  top: calc(10px + env(safe-area-inset-top, 0px));
+  left: 10px;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, .55);
+  color: #fff;
+  cursor: pointer;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  z-index: 2;
+}
+.stk-img-close svg { transform: rotate(90deg); }
+.stk-img-pill {
+  position: fixed;
+  left: 50%;
+  bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .16);
+  border: 1px solid rgba(255, 255, 255, .22);
+  backdrop-filter: blur(18px) saturate(1.2);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, .45);
+  z-index: 2;
+}
+.stk-img-pill button {
+  padding: 7px 15px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #fff;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: .01em;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease;
+}
+.stk-img-pill button.stk-on {
+  background: #fff;
+  color: #000;
+}
+
+.stk-img-heart {
+  position: fixed;
+  top: calc(10px + env(safe-area-inset-top, 0px));
+  right: 10px;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, .55);
+  color: #fff;
+  cursor: pointer;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  z-index: 2;
+}
+.stk-img-heart.stk-on { color: #ff2d55; }
+.stk-img-count {
+  position: fixed;
+  left: 14px;
+  bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, .72);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .7);
+  z-index: 2;
+}
+.stk-img-zoombtn {
+  position: fixed;
+  top: calc(58px + env(safe-area-inset-top, 0px));
+  right: 10px;
+  min-width: 40px;
+  height: 34px;
+  padding: 0 10px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, .55);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  z-index: 2;
+}
+.stk-img-slide {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 280ms cubic-bezier(.2, .8, .2, 1);
+  will-change: transform;
+}
+.stk-img-overlay.stk-dragging .stk-img-slide { transition: none; }
+
+/* ---------- feed channels: dropdown + title card ---------- */
+.stk-feed-pill.stk-open { background: rgba(255, 255, 255, .22); }
+.stk-chan-menu {
+  position: fixed;
+  top: 50px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(300px, 88vw);
+  max-height: 62vh;
+  overflow-y: auto;
+  padding: 6px;
+  border-radius: 16px;
+  background: rgba(20, 20, 20, .96);
+  border: 1px solid rgba(255, 255, 255, .12);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .6);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  pointer-events: auto;
+  z-index: 9100;
+}
+.stk-chan-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 11px;
+  background: transparent;
+  color: #eee;
+  font-size: 13.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.stk-chan-row:first-child { margin-top: 0; }
+.stk-chan-row.stk-on { background: rgba(255, 255, 255, .1); color: #fff; font-weight: 600; }
+.stk-chan-avatar {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  object-fit: cover;
+  background: #262626;
+}
+.stk-chan-glyph { display: grid; place-items: center; color: #cfcfcf; }
+.stk-chan-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stk-chan-tag {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(255, 45, 85, .18);
+  color: #ff5b7f;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.stk-chan-dot { width: 7px; height: 7px; border-radius: 50%; background: #fff; flex: 0 0 auto; }
+.stk-chan-more {
+  width: 100%;
+  margin-top: 4px;
+  padding: 9px 10px;
+  border: 0;
+  border-top: 1px solid rgba(255, 255, 255, .08);
+  border-radius: 0 0 11px 11px;
+  background: transparent;
+  color: #9a9a9a;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+@keyframes stk-card-in {
+  0% { opacity: 0; transform: translate(-50%, -34px) scale(.96); }
+  60% { opacity: 1; }
+  100% { opacity: 1; transform: translate(-50%, 0) scale(1); }
+}
+@keyframes stk-card-out {
+  0% { opacity: 1; transform: translate(-50%, 0); }
+  100% { opacity: 0; transform: translate(-50%, -26px); }
+}
+.stk-titlecard {
+  position: fixed;
+  top: 54px;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  max-width: 84vw;
+  padding: 9px 16px 9px 9px;
+  border-radius: 999px;
+  background: rgba(16, 16, 16, .86);
+  border: 1px solid rgba(255, 255, 255, .14);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, .55);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  z-index: 9050;
+  pointer-events: none;
+  animation: stk-card-in 380ms cubic-bezier(.16, .84, .34, 1) both;
+}
+.stk-titlecard-img {
+  width: 44px;
+  height: 44px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  object-fit: cover;
+  background: #262626;
+}
+.stk-titlecard-glyph { display: grid; place-items: center; color: #ddd; }
+.stk-titlecard-text { display: flex; flex-direction: column; min-width: 0; }
+.stk-titlecard-kicker {
+  font-size: 9.5px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: #ff5b7f;
+  font-weight: 700;
+}
+.stk-titlecard-name {
+  font-size: 16px;
+  font-weight: 700;
+  color: #fff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- Gooners Delight: two feeds at once ---------- */
+.stk-duo {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  display: flex;
+  flex-direction: column;
+  background: #000;
+}
+.stk-duo-pane {
+  position: relative;
+  flex: 1 1 50%;
+  min-height: 0;
+  overflow: hidden;
+}
+.stk-duo-pane + .stk-duo-pane { border-top: 1px solid rgba(255, 255, 255, .16); }
+.stk-duo .stash-tok,
+.stk-duo .stk-fixed {
+  position: absolute !important;
+  inset: 0 !important;
+  height: 100% !important;
+}
+.stk-duo .stk-rail,
+.stk-duo .stk-top,
+.stk-duo .stk-info,
+.stk-duo .stk-nav,
+.stk-duo .stk-timeline,
+.stk-duo .stk-gear-fab,
+.stk-duo .stk-titlecard { display: none !important; }
+.stk-duo-exit {
+  position: fixed;
+  top: calc(8px + env(safe-area-inset-top, 0px));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, .16);
+  background: rgba(0, 0, 0, .66);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+/* Discover: the jump from the dashboard to the full creators list */
+.stk-page .stk-seeall {
+  margin: 0 0 14px;
+  background: #171717;
+}
+.stk-page .stk-seeall svg { transform: translateY(1px); }
+
+/* ---------- highlight reel ---------- */
+.stk-profile-actions { display: flex; align-items: center; gap: 8px; margin: 10px 0 4px; flex-wrap: wrap; }
+.stk-profile-actions .stk-sub { font-size: 11px; opacity: .7; }
+.stk-reel-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9700;
+  background: #000;
+  display: flex;
+  flex-direction: column;
+}
+.stk-reel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: calc(10px + env(safe-area-inset-top)) 14px 10px;
+  font-size: 12px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,.72);
+  background: rgba(0,0,0,.6);
+}
+.stk-reel-x {
+  background: rgba(255,255,255,.1);
+  border: 0;
+  border-radius: 50%;
+  width: 32px;
+  height: 32px;
+  color: #fff;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.stk-reel-video {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  object-fit: contain;
+  background: #000;
+}
+.stk-reel-sfw { filter: blur(26px) saturate(.8); }

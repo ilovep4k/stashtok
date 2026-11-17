@@ -27,8 +27,26 @@
   const ROUTE = "/stash-tok";
   const LEGACY_ROUTE = "/plugin/stashTok";
   const FEEDS_KEY = "stashTok.feeds.v1";
+  /* the channel title card is set just before a feed switch remounts FeedView */
+  let PENDING_CARD = null;
   const FOLDER_FAV_KEY = "stashTok.folderFavs.v1";
   const PAGE_SIZE = 8;
+
+  /* Gooners Delight shows one feed in two windows: both panes ask for the same
+     pages, so the fetch (and the random order) is shared and each pane keeps a
+     parity slice of it — pane 0 gets posts 0,2,4…, pane 1 gets 1,3,5… */
+  const FEED_SHARED = new Map();
+  function fetchFeedPageShared(spec, cfg, page) {
+    if (!spec || !spec.cacheKey) return fetchFeedPage(spec, cfg, page);
+    const key = spec.cacheKey + ":" + page;
+    if (!FEED_SHARED.has(key)) FEED_SHARED.set(key, fetchFeedPage(spec, cfg, page));
+    return FEED_SHARED.get(key);
+  }
+  function paritySlice(items, spec, page) {
+    if (!spec || spec.parity == null || !items) return items;
+    const offset = (page - 1) * PAGE_SIZE;
+    return items.filter((_, i) => (offset + i) % 2 === spec.parity);
+  }
   const HOLD_MS = 380;
   /* the quick menu owns a still finger for longer than a grab needs: a held
      thumb that starts moving grabs the frame instead (see GRAB_MS) */
@@ -36,6 +54,9 @@
   /* hold this long, then drag, and the frame moves under one finger */
   const GRAB_MS = 260;
   const SWIPE_PX = 70;
+  /* a horizontal drag longer than this switches from scrubbing to a swipe:
+     right opens the performer page of the clip on screen, left steps channel */
+  const CHANNEL_PX = 120;
   /* pull the first clip down this far to reload the feed */
   const REFRESH_PX = 120;
   const MAX_ZOOM = 8;
@@ -101,16 +122,14 @@
 
   function guessThumbBase() {
     try {
+      /* Stash already generates and caches every thumbnail we need, on the same
+         origin and behind the same session. A sidecar that re-renders those into
+         a second cache is duplicate data plus a second host:port that can be
+         firewalled off the LAN — which is exactly how every grid went blank.
+         Default: use Stash's own images. Opt in with ?thumbs= or the setting;
+         ?thumbs=off forces Stash even when a URL is configured. */
       const override = new URLSearchParams(window.location.search).get("thumbs");
       if (override) return override === "off" ? "" : override;
-      const port = window.location.port;
-      const host = window.location.hostname;
-      if (!host) return "";
-      if (port === "9997") return `${window.location.protocol}//${host}:18997`;
-      if (port === "9998") return `${window.location.protocol}//${host}:18996`;
-      /* the local dev proxy fronts the same instances */
-      if (port === "18998") return `${window.location.protocol}//${host}:18997`;
-      if (port === "18999") return `${window.location.protocol}//${host}:18996`;
     } catch (e) {
       /* ignore */
     }
@@ -176,8 +195,20 @@
       is far off screen; a real <img> with loading=lazy never even requests it. */
   function Thumb({ src, className, width }) {
     const [fallback, setFallback] = useState(false);
+    const fallbackTimer = useRef(0);
+    const primary = src && !fallback ? thumbSrc(src, width) : src;
+    /* The thumbnail service is a second origin (host:18996/18997). If that port
+       is firewalled or slow the request just hangs, which fires no onError and
+       leaves a blank tile forever — so a slow load also falls back to Stash's own
+       authenticated screenshot on this same origin. */
+    useEffect(() => {
+      window.clearTimeout(fallbackTimer.current);
+      setFallback(false);
+      if (!src || !THUMB_BASE || thumbSrc(src, width) === src) return undefined;
+      fallbackTimer.current = window.setTimeout(() => setFallback(true), 2600);
+      return () => window.clearTimeout(fallbackTimer.current);
+    }, [src, width]);
     if (!src) return null;
-    const primary = fallback ? src : thumbSrc(src, width);
     return h("img", {
       className: "stk-thumb" + (className ? " " + className : ""),
       src: primary,
@@ -185,7 +216,9 @@
       loading: "lazy",
       decoding: "async",
       draggable: false,
+      onLoad: () => window.clearTimeout(fallbackTimer.current),
       onError: () => {
+        window.clearTimeout(fallbackTimer.current);
         if (!fallback && primary !== src) setFallback(true);
       },
     });
@@ -748,6 +781,16 @@
     return data.sceneUpdate;
   }
 
+  async function setImageRating(imageId, rating) {
+    const data = await gql(
+      `mutation StashTokRateImage($id: ID!, $rating: Int) {
+        imageUpdate(input: { id: $id, rating100: $rating }) { id rating100 }
+      }`,
+      { id: imageId, rating: rating == null ? null : Math.round(rating) }
+    );
+    return data.imageUpdate;
+  }
+
   async function fetchTagOptions(limit) {
     const data = await gql(
       `query StashTokTagOptions($n: Int!) {
@@ -898,7 +941,9 @@
     favoritesOpen: "gallery",
     feedWindow: "all",
     folderView: "list",
-    navSlots: ["favorites", "tags", "folders"],
+    /* Feed is fixed on the far left, then four slots:
+       Feed | Discover | Performers | Favorites | Settings */
+    navSlots: ["discover", "performers", "favorites", "settings"],
   };
 
   /* one-time: earlier builds stored a sort per performer, which kept resurrecting
@@ -934,10 +979,10 @@
       merged.sortDefaultsV = 2;
       savePrefs(merged);
     }
-    /* bottom bar now defaults to Feed / Performers / Favorites / Folders / Settings */
-    if (merged.navDefaultsV !== 2) {
+    /* bottom bar: Feed first, then Discover / Performers / Favorites / Settings */
+    if (merged.navDefaultsV !== 4) {
       merged.navSlots = DEFAULT_NAV_SLOTS.slice();
-      merged.navDefaultsV = 2;
+      merged.navDefaultsV = 4;
       savePrefs(merged);
     }
     return merged;
@@ -1655,7 +1700,7 @@ void main() {
     };
   }
 
-  function FeedView({ prefs, spec, cfg, refreshKey, onBack, onSearch, onSettings, onOpenPerformer, onOpenTag, onDeriveFeed, onEditFeed, onOpenFolder, onOpenFolderProfile, feeds, onSwitchFeed, onNewFeed, desktop }) {
+  function FeedView({ prefs, spec, cfg, refreshKey, onBack, onSearch, onSettings, onOpenPerformer, onOpenTag, onDeriveFeed, onEditFeed, onOpenFolder, onOpenFolderProfile, feeds, onSwitchFeed, onNewFeed, onDuo, duo, desktop }) {
     const sfw = !!cfg.sfw;
     const [items, setItems] = useState([]);
     const [index, setIndex] = useState(0);
@@ -1679,6 +1724,10 @@ void main() {
     const [rotation, setRotation] = useState(0);
     const [speed, setSpeed] = useState(() => Number(window.localStorage.getItem("stashTok.speed")) || 1);
     const [muted, setMuted] = useState(cfg.autoplayMuted);
+    /* two feeds at once would talk over each other: the split view starts muted */
+    useEffect(() => {
+      if (duo) setMuted(true);
+    }, [duo]);
     /* VR clips default to the 2D rectilinear view; v toggles back to raw */
     const [vrMode, setVrMode] = useState(true);
     const [people, setPeople] = useState(false);
@@ -1690,6 +1739,8 @@ void main() {
     const [hud, setHud] = useState(true);
     const [hudTick, setHudTick] = useState(0);
     const [sheet, setSheet] = useState(null); // 'actions' | 'details'
+    const [chanOpen, setChanOpen] = useState(false);
+    const [card, setCard] = useState(() => PENDING_CARD);
     /* quick tagging straight from the rail */
     const [tagOpen, setTagOpen] = useState(false);
     const [tagOptions, setTagOptions] = useState([]);
@@ -1710,6 +1761,8 @@ void main() {
     });
     const [rating, setRating] = useState(null);
     const [zoom, setZoom] = useState(1);
+    const [dragY, setDragY] = useState(0);
+    const [dragging, setDragging] = useState(false);
     const [scrubbing, setScrubbing] = useState(false);
     const [tip, setTip] = useState(null);
     const [scrubTime, setScrubTime] = useState(0);
@@ -1717,7 +1770,6 @@ void main() {
     const [time, setTime] = useState(0);
     const [rateBadge, setRateBadge] = useState("");
     const [heartBurst, setHeartBurst] = useState(0);
-    const [dragY, setDragY] = useState(0);
     /* fill the screen unless that would throw away a big slice of the frame */
     const [fitMode, setFitMode] = useState("cover");
     /* portrait framing of a landscape clip: auto (middle half) → full → height */
@@ -1782,6 +1834,15 @@ void main() {
     }, []);
 
     const item = items[index] || null;
+
+    useEffect(() => {
+      if (!PENDING_CARD) return undefined;
+      const next = PENDING_CARD;
+      PENDING_CARD = null;
+      setCard(next);
+      const t = window.setTimeout(() => setCard(null), 1900);
+      return () => window.clearTimeout(t);
+    }, []);
 
     const [, setRootsReady] = useState(0);
 
@@ -1855,7 +1916,8 @@ void main() {
         setLoading(true);
         try {
           const page = reset ? 1 : pageRef.current;
-          const result = await fetchFeedPage(spec, cfg, page);
+          const raw = await fetchFeedPageShared(spec, cfg, page);
+          const result = Object.assign({}, raw, { items: paritySlice(raw.items, spec, page) });
           setCount(result.count);
           if (reset) {
             pageRef.current = 2;
@@ -1943,13 +2005,62 @@ void main() {
       const sceneId = item && item.scene && item.scene.id;
       if (!sceneId || !spec) return;
       let target = null;
-      if (spec.type === "performer") target = "performer/" + encodeURIComponent(spec.name) + "/" + sceneId;
+      if (spec.type === "performer") target = "performers/" + encodeURIComponent(spec.name) + "/" + sceneId;
       else if (spec.type === "scene") target = "scene/" + sceneId;
       if (!target) return;
       clipState.sceneId = String(sceneId);
       if (currentRoute() !== target) goTo(target, true);
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [item && item.scene && item.scene.id, spec.type, spec.name]);
+
+    /* Every channel is just a Stash search: For You is the default random query,
+       GoonCave is "performers INCLUDES <current performer>", the rest are ordinary
+       filters. Saved feeds are appended, so the carousel grows to the left forever. */
+    function channelsNow() {
+      const list = [{ id: "foryou", name: "For You", spec: defaultFeed() }];
+      const p = item && item.scene && item.scene.performers && item.scene.performers[0];
+      if (p) {
+        list.push({
+          id: "gooncave:" + p.id,
+          name: p.name,
+          image: p.image_path,
+          kind: "performer",
+          spec: { id: "gooncave:" + p.id, name: p.name, type: "performer", performerId: p.id, sort: "random" },
+        });
+      }
+      list.push({ id: "favorites", name: "Favorites", spec: { id: "favorites", name: "Favorites", type: "favorites", sort: "rating", direction: "DESC" } });
+      list.push({ id: "markers", name: "Markers", spec: { id: "markers", name: "Markers", type: "markers" } });
+      list.push({ id: "newest", name: "Newest first", spec: { id: "newest", name: "Newest first", type: "foryou", sort: "created_at", direction: "DESC" } });
+      (feeds || []).forEach((f) => {
+        if (!f || !f.type) return;
+        list.push({ id: f.id || f.key || f.name, name: f.name || "Feed", spec: f, saved: true });
+      });
+      return list;
+    }
+
+    function channelAt() {
+      const list = channelsNow();
+      const at = list.findIndex(
+        (c) => (c.spec.id && spec.id && c.spec.id === spec.id) || (c.spec.type === spec.type && (c.spec.name || "") === (spec.name || ""))
+      );
+      return { list, at: at < 0 ? 0 : at };
+    }
+
+    function goChannel(step) {
+      const { list, at } = channelAt();
+      const next = at + step;
+      if (next < 0 || next >= list.length) return;
+      const target = list[next];
+      PENDING_CARD = { name: target.name, image: target.image, kind: target.kind || "feed" };
+      setChanOpen(false);
+      if (onSwitchFeed) onSwitchFeed(Object.assign({}, target.spec, { startSceneId: null, startAt: null }));
+    }
+
+    function pickChannel(target) {
+      PENDING_CARD = { name: target.name, image: target.image, kind: target.kind || "feed" };
+      setChanOpen(false);
+      if (onSwitchFeed) onSwitchFeed(Object.assign({}, target.spec, { startSceneId: null, startAt: null }));
+    }
 
     useEffect(() => {
       if (item) setRating(item.scene.rating100 == null ? null : Number(item.scene.rating100));
@@ -2613,6 +2724,10 @@ void main() {
          pointerdown removed them before their click could fire, so every row was
          dead and only Close-by-tapping-outside worked */
       if (event.target && event.target.closest && event.target.closest(".stk-quick-menu")) return;
+      if (chanOpen) {
+        setChanOpen(false);
+        if (!(event.target && event.target.closest && event.target.closest(".stk-top"))) return;
+      }
       if (quick) {
         setQuick(null);
         return;
@@ -2780,6 +2895,13 @@ void main() {
       } else if (g.mode === "swipe") {
         setDragY(dy);
       } else if (g.mode === "seek") {
+        /* a long horizontal drag is the crossbar, a short one still scrubs */
+        if (Math.abs(dx) > CHANNEL_PX) {
+          g.mode = "channel";
+          setScrubbing(false);
+          setTip(null);
+          return;
+        }
         const rect = stage.getBoundingClientRect();
         const live = activeVideo();
         const total = duration || (live && isFinite(live.duration) ? live.duration : 0) || 0;
@@ -2915,6 +3037,20 @@ void main() {
       if (g.mode === "seek") {
         setScrubbing(false);
         setTip(null);
+      }
+      if (g.mode === "channel") {
+        const dx = event.clientX - g.x0;
+        /* swipe right: the performer page of the clip on screen (not the goon cave
+           channel). swipe left keeps stepping the channel carousel. */
+        if (dx > 0) {
+          const performer = item && item.scene && item.scene.performers && item.scene.performers[0];
+          if (performer && onOpenPerformer) {
+            buzz(10);
+            onOpenPerformer(performer);
+          }
+        } else {
+          goChannel(1);
+        }
       }
       if (g.mode === "pan") poke();
       poke();
@@ -3338,6 +3474,20 @@ void main() {
               {
                 className: "stk-qm-wide",
                 onClick: () => {
+                  setQuick(null);
+                  buzz(8);
+                  if (onDuo) onDuo();
+                },
+              },
+              h(Icon, { name: "video", size: 15 }),
+              "Gooners Delight",
+              h("span", { className: "stk-qm-state" }, "2 feeds")
+            ),
+            h(
+              "button",
+              {
+                className: "stk-qm-wide",
+                onClick: () => {
                   const next = !autoScroll;
                   setAutoScroll(next);
                   try {
@@ -3404,6 +3554,21 @@ void main() {
 
         cropBadge && h("div", { className: "stk-rate stk-crop-badge" }, cropBadge),
 
+        card &&
+          h(
+            "div",
+            { className: "stk-titlecard" },
+            card.image
+              ? h("img", { className: "stk-titlecard-img", src: rel(card.image), alt: "" })
+              : h("span", { className: "stk-titlecard-img stk-titlecard-glyph" }, h(Icon, { name: "sparkle", size: 20 })),
+            h(
+              "div",
+              { className: "stk-titlecard-text" },
+              h("span", { className: "stk-titlecard-kicker" }, card.kind === "performer" ? "GoonCave" : "Feed"),
+              h("span", { className: "stk-titlecard-name" }, card.name || "")
+            )
+          ),
+
         h(
           "div",
           { className: "stk-top stk-top-left" },
@@ -3427,16 +3592,52 @@ void main() {
           h(
             "button",
             {
-              className: "stk-feed-pill",
+              className: "stk-feed-pill" + (chanOpen ? " stk-open" : ""),
               onClick: (event) => {
                 event.stopPropagation();
-                setSheet("feeds");
+                setChanOpen(!chanOpen);
               },
             },
             h(Icon, { name: "sparkle", size: 11 }),
             spec.name || "For You",
             h(Icon, { name: "chevron", size: 10, className: "stk-pill-caret" })
-          )
+          ),
+          chanOpen &&
+            h(
+              "div",
+              { className: "stk-chan-menu", ref: (el) => { if (el) el.scrollTop = 0; } },
+              channelsNow().map((c, i) =>
+                h(
+                  "button",
+                  {
+                    key: c.id,
+                    className: "stk-chan-row" + (i === channelAt().at ? " stk-on" : ""),
+                    onClick: (event) => {
+                      event.stopPropagation();
+                      pickChannel(c);
+                    },
+                  },
+                  c.image
+                    ? h("img", { className: "stk-chan-avatar", src: rel(c.image), alt: "" })
+                    : h("span", { className: "stk-chan-avatar stk-chan-glyph" }, h(Icon, { name: c.id === "foryou" ? "sparkle" : c.id === "favorites" ? "heart" : c.id === "markers" ? "chapter" : "sort", size: 13 })),
+                  h("span", { className: "stk-chan-name" }, c.name),
+                  c.kind === "performer" && h("span", { className: "stk-chan-tag" }, "GoonCave"),
+                  i === channelAt().at && h("span", { className: "stk-chan-dot" })
+                )
+              ),
+              h(
+                "button",
+                {
+                  className: "stk-chan-more",
+                  onClick: (event) => {
+                    event.stopPropagation();
+                    setChanOpen(false);
+                    setSheet("feeds");
+                  },
+                },
+                "All feeds…"
+              )
+            )
         ),
 
         h(
@@ -3814,6 +4015,8 @@ void main() {
   }
 
   const NAV_OPTIONS = [
+    { id: "performers", label: "Performers", icon: "user" },
+    { id: "discover", label: "Discover", icon: "sparkle" },
     { id: "favorites", label: "Favorites", icon: "heart" },
     { id: "tags", label: "Tags", icon: "tag" },
     { id: "folders", label: "Folders", icon: "folder" },
@@ -3822,7 +4025,8 @@ void main() {
     { id: "settings", label: "Settings", icon: "gear" },
     { id: "ops", label: "Ops", icon: "ops" },
   ];
-  const DEFAULT_NAV_SLOTS = ["favorites", "folders", "settings"];
+  /* Feed is fixed, then the four slots render in order */
+  const DEFAULT_NAV_SLOTS = ["discover", "performers", "favorites", "settings"];
 
   function NavButton({ active, icon, label, onClick, onLongPress }) {
     const timer = useRef(0);
@@ -4215,11 +4419,20 @@ void main() {
     ["random", "Random"],
   ];
 
-  function ImageViewer({ image, rect, onClose }) {
-    const [mode, setMode] = useState("fit");
+  /* A single image opened full-screen, stepped vertically like the feed: swipe up or
+     down (or arrows) to move through the grid, double tap to zoom into the point you
+     tapped (1x <-> 2x), the top-right chip to go to 4x when the file has the pixels,
+     heart to favourite, pinch to zoom anywhere in between. */
+  function ImageViewer({ image, rect, items, index, onClose }) {
+    const list = (items && items.length ? items : [image]).filter(Boolean);
+    const [pos, setPos] = useState(() => clamp(Number(index) || 0, 0, Math.max(0, list.length - 1)));
+    const [zoom, setZoom] = useState(1);
+    const [dragY, setDragY] = useState(0);
+    const [dragging, setDragging] = useState(false);
+    const [maxZoom, setMaxZoom] = useState(2);
     const [natural, setNatural] = useState(null);
     const [hero, setHero] = useState(rect || null);
-    const [scale, setScale] = useState(1);
+    const [ratings, setRatings] = useState({});
     const stageRef = useRef(null);
     const imgRef = useRef(null);
     const view = useRef({ s: 1, x: 0, y: 0 });
@@ -4227,47 +4440,53 @@ void main() {
     const pts = useRef(new Map());
     const lastTap = useRef(0);
 
-    const src = image && image.paths ? rel(image.paths.image || image.paths.thumbnail) : "";
+    const item = list[pos] || image;
+    const src = item && item.paths ? rel(item.paths.image || item.paths.thumbnail) : "";
+    const rated = item && ratings[item.id] !== undefined ? ratings[item.id] : item && item.rating100;
+    const hearted = rated != null && Number(rated) >= 60;
+    const canQuad = maxZoom >= 3.9;
+
+    const step = useCallback(
+      (dir) => {
+        setPos((cur) => {
+          const next = cur + dir;
+          return next < 0 || next >= list.length ? cur : next;
+        });
+      },
+      [list.length]
+    );
+
+    const toggleHeart = useCallback(() => {
+      if (!item) return;
+      const next = hearted ? null : 100;
+      setRatings((cur) => Object.assign({}, cur, { [item.id]: next }));
+      setImageRating(item.id, next).catch(() => {
+        setRatings((cur) => Object.assign({}, cur, { [item.id]: rated }));
+      });
+    }, [item && item.id, hearted, rated]);
 
     useEffect(() => {
       // grow out of the thumbnail instead of popping in
       const t = window.setTimeout(() => setHero(null), 40);
       const onKey = (event) => {
+        if (!event.key) return;
         if (event.key === "Escape") onClose();
+        else if (event.key === "ArrowDown" || event.key === "ArrowRight") step(1);
+        else if (event.key === "ArrowUp" || event.key === "ArrowLeft") step(-1);
       };
       window.addEventListener("keydown", onKey);
       return () => {
         window.clearTimeout(t);
         window.removeEventListener("keydown", onKey);
       };
-    }, []);
+    }, [step, onClose]);
 
-    const geometry = useCallback(() => {
-      const el = stageRef.current;
-      if (!el || !natural) return { contain: 1, fill: 1 };
-      const cw = el.clientWidth || 1;
-      const ch = el.clientHeight || 1;
-      return { contain: Math.min(cw / natural.w, ch / natural.h), fill: Math.max(cw / natural.w, ch / natural.h) };
-    }, [natural]);
-
-    // 1 = fit, fill = cover the frame, original = one image pixel per CSS pixel
-    const scaleFor = useCallback(
-      (next) => {
-        const geo = geometry();
-        if (next === "fill") return geo.fill / geo.contain;
-        if (next === "original") return 1 / geo.contain;
-        return 1;
-      },
-      [geometry]
-    );
-
-    const apply = useCallback(() => {
-      const img = imgRef.current;
-      if (!img) return;
-      const { s, x, y } = view.current;
-      img.style.transform = `translate3d(${x}px, ${y}px, 0) scale(${s})`;
-      setScale(s);
-    }, []);
+    // a new picture starts at 1x, un-panned
+    useEffect(() => {
+      setNatural(null);
+      setZoom(1);
+      view.current = { s: 1, x: 0, y: 0 };
+    }, [pos]);
 
     const clampPan = useCallback(() => {
       const el = stageRef.current;
@@ -4279,17 +4498,53 @@ void main() {
       view.current.y = clamp(view.current.y, -maxY, maxY);
     }, []);
 
-    useEffect(() => {
+    const paint = useCallback((animated) => {
       const img = imgRef.current;
-      if (!img || !natural) return undefined;
-      img.style.transition = "transform 220ms cubic-bezier(.2,.7,.2,1)";
-      view.current = { s: scaleFor(mode), x: 0, y: 0 };
-      apply();
-      const t = window.setTimeout(() => {
-        if (img) img.style.transition = "none";
-      }, 240);
-      return () => window.clearTimeout(t);
-    }, [mode, natural, scaleFor, apply]);
+      if (!img) return;
+      img.style.transition = animated ? "transform 240ms cubic-bezier(.2,.7,.2,1)" : "none";
+      const { s, x, y } = view.current;
+      img.style.transform = `translate3d(${x}px, ${y}px, 0) scale(${s})`;
+    }, []);
+
+    /* How far we can go before the picture is upscaled past one image pixel per
+       device pixel ("100%" / retina). Phones are 2-3x DPR, so a 4000 px photo on a
+       412 px stage tops out around 3x and there is no honest 4x. */
+    useEffect(() => {
+      const el = stageRef.current;
+      if (!el || !natural) return;
+      const contain = Math.min(el.clientWidth / natural.w, el.clientHeight / natural.h);
+      const dpr = window.devicePixelRatio || 1;
+      const cap = contain > 0 ? 1 / (contain * dpr) : 4;
+      setMaxZoom(clamp(cap, 2, 8));
+    }, [natural, pos, hero]);
+
+    // zoom about a point in stage coordinates (0,0 = centre), so a double tap
+    // magnifies what is under the finger
+    const zoomTo = useCallback((next, cx, cy) => {
+      const z0 = view.current.s;
+      const z1 = clamp(next, 1, Math.max(2, maxZoom));
+      if (Math.abs(z1 - z0) < 0.01) return;
+      const k = z1 / z0;
+      const ax = cx == null ? 0 : cx;
+      const ay = cy == null ? 0 : cy;
+      view.current.x = ax - (ax - view.current.x) * k;
+      view.current.y = ay - (ay - view.current.y) * k;
+      view.current.s = z1;
+      if (z1 <= 1.01) {
+        view.current.x = 0;
+        view.current.y = 0;
+      }
+      clampPan();
+      paint(true);
+      setZoom(z1);
+    }, [maxZoom, clampPan, paint]);
+
+    function stagePoint(event) {
+      const el = stageRef.current;
+      if (!el) return { cx: 0, cy: 0 };
+      const r = el.getBoundingClientRect();
+      return { cx: event.clientX - r.left - r.width / 2, cy: event.clientY - r.top - r.height / 2 };
+    }
 
     function onDown(event) {
       pts.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
@@ -4301,6 +4556,8 @@ void main() {
           s0: view.current.s,
           x0: view.current.x,
           y0: view.current.y,
+          cx: (a.x + b.x) / 2,
+          cy: (a.y + b.y) / 2,
         };
         return;
       }
@@ -4309,9 +4566,11 @@ void main() {
       lastTap.current = isDouble ? 0 : now;
       if (isDouble) {
         gesture.current = { mode: "tap" };
-        setMode((prev) => (prev === "original" ? "fit" : "original"));
+        const { cx, cy } = stagePoint(event);
+        zoomTo(view.current.s > 1.01 ? 1 : 2, cx, cy);
         return;
       }
+      setDragging(true);
       gesture.current = { mode: "drag", x0: event.clientX, y0: event.clientY, px: view.current.x, py: view.current.y };
     }
 
@@ -4325,20 +4584,51 @@ void main() {
       if (!g) return;
       if (g.mode === "pinch" && pts.current.size >= 2) {
         const [a, b] = Array.from(pts.current.values());
+        const rect0 = stageRef.current;
+        if (!rect0) return;
+        const bx = rect0.getBoundingClientRect();
         const ratio = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)) / g.d0;
-        view.current.s = clamp(g.s0 * ratio, 0.6, 8);
+        /* pinch is free: past the crisp 2x/4x stops the user may go to 10x */
+        const z1 = clamp(g.s0 * ratio, 1, 10);
+        const k = z1 / g.s0;
+        const startX = g.cx - bx.left - bx.width / 2;
+        const startY = g.cy - bx.top - bx.height / 2;
+        const nowX = (a.x + b.x) / 2 - bx.left - bx.width / 2;
+        const nowY = (a.y + b.y) / 2 - bx.top - bx.height / 2;
+        view.current.s = z1;
+        view.current.x = nowX - (startX - g.x0) * k;
+        view.current.y = nowY - (startY - g.y0) * k;
         clampPan();
-        apply();
+        paint(false);
+        setZoom(z1);
         return;
       }
       if (g.mode !== "drag") return;
+      // at 1x a vertical drag slides the strip of pictures, not the pan
+      if (view.current.s <= 1.01) {
+        const dy = event.clientY - g.y0;
+        const dx = event.clientX - g.x0;
+        if (Math.abs(dy) > Math.abs(dx)) {
+          const canMove = (dy < 0 && pos < list.length - 1) || (dy > 0 && pos > 0);
+          setDragY(canMove ? dy : dy * 0.32);
+          return;
+        }
+      }
       view.current.x = g.px + (event.clientX - g.x0);
       view.current.y = g.py + (event.clientY - g.y0);
       clampPan();
-      apply();
+      paint(false);
     }
 
     function onUp(event) {
+      const g = gesture.current;
+      if (g && g.mode === "drag" && pts.current.size === 1 && view.current.s <= 1.01) {
+        const dy = event.clientY - g.y0;
+        const dx = event.clientX - g.x0;
+        if (Math.abs(dy) > 70 && Math.abs(dy) > Math.abs(dx)) step(dy < 0 ? 1 : -1);
+      }
+      setDragging(false);
+      setDragY(0);
       pts.current.delete(event.pointerId);
       if (pts.current.size === 0) gesture.current = null;
       if (pts.current.size === 1) {
@@ -4347,6 +4637,8 @@ void main() {
       }
     }
 
+    const stopPointer = (event) => event.stopPropagation();
+
     const frame = hero
       ? { left: hero.left + "px", top: hero.top + "px", width: hero.width + "px", height: hero.height + "px", borderRadius: "14px" }
       : { left: "0px", top: "0px", width: window.innerWidth + "px", height: window.innerHeight + "px", borderRadius: "0px" };
@@ -4354,7 +4646,7 @@ void main() {
     return h(
       "div",
       {
-        className: "stk-img-overlay",
+        className: "stk-img-overlay" + (dragging ? " stk-dragging" : ""),
         onPointerDown: onDown,
         onPointerMove: onMove,
         onPointerUp: onUp,
@@ -4366,32 +4658,54 @@ void main() {
         h(
           "div",
           { className: "stk-img-stage", ref: stageRef },
-          src &&
-            h("img", {
-              ref: imgRef,
-              className: "stk-img",
-              src,
-              draggable: false,
-              onLoad: (event) => setNatural({ w: event.currentTarget.naturalWidth, h: event.currentTarget.naturalHeight }),
-            })
+          [pos - 1, pos, pos + 1]
+            .filter((i) => list[i])
+            .map((i) =>
+              h(
+                "div",
+                {
+                  key: list[i].id || i,
+                  className: "stk-img-slide",
+                  style: { transform: "translate3d(0, calc(" + (i - pos) * 100 + "% + " + dragY + "px), 0)" },
+                },
+                h("img", {
+                  ref: i === pos ? imgRef : null,
+                  className: "stk-img",
+                  src: list[i].paths ? rel(list[i].paths.image || list[i].paths.thumbnail) : "",
+                  draggable: false,
+                  onLoad:
+                    i === pos
+                      ? (event) => setNatural({ w: event.currentTarget.naturalWidth, h: event.currentTarget.naturalHeight })
+                      : undefined,
+                })
+              )
+            )
         )
       ),
-      h("button", { className: "stk-img-close", onClick: onClose, "aria-label": "Close" }, h(Icon, { name: "chevron", size: 22 })),
+      h("button", { className: "stk-img-close", onPointerDown: stopPointer, onClick: onClose, "aria-label": "Close" }, h(Icon, { name: "chevron", size: 22 })),
       h(
-        "div",
-        { className: "stk-img-pill" },
-        [
-          ["fit", "Fit"],
-          ["fill", "Fill"],
-          ["original", "Original"],
-        ].map(([value, label]) =>
-          h(
-            "button",
-            { key: value, className: mode === value ? "stk-on" : "", onClick: () => setMode(value) },
-            label
-          )
-        )
-      )
+        "button",
+        {
+          className: "stk-img-heart" + (hearted ? " stk-on" : ""),
+          onPointerDown: stopPointer,
+          onClick: toggleHeart,
+          "aria-label": hearted ? "Remove favourite" : "Favourite",
+        },
+        h(Icon, { name: "heart", size: 22, filled: hearted })
+      ),
+      zoom > 1.01 &&
+        canQuad &&
+        h(
+          "button",
+          {
+            className: "stk-img-zoombtn",
+            onPointerDown: stopPointer,
+            onClick: () => zoomTo(zoom > 2.01 ? 2 : 4, null, null),
+            "aria-label": zoom > 2.01 ? "Zoom to 2x" : "Zoom to 4x",
+          },
+          zoom > 2.01 ? "2×" : "4×"
+        ),
+      list.length > 1 && h("div", { className: "stk-img-count" }, pos + 1 + " / " + list.length)
     );
   }
 
@@ -4541,6 +4855,24 @@ void main() {
     const profileKey = isFolder ? "folder:" + folder : performerId;
     const [performer, setPerformer] = useState(null);
     const [scenes, setScenes] = useState([]);
+
+    /* ---- highlight reel ------------------------------------------- *
+     * The cutter lives beside Stash (tools/reel-service) and serves its own
+     * player page. It has to be a separate top-level tab: Stash's CSP allows
+     * connect-src 'self' only, so the plugin may not fetch the service or play
+     * its MP4 in-page. window.open is a navigation, which CSP does not gate. */
+    const reelBase = () => {
+      const asked = new URLSearchParams(window.location.search).get("reel");
+      return (asked || "http://" + window.location.hostname + ":19000").replace(/\/$/, "");
+    };
+    /* a plain anchor: popup blockers drop window.open, CSP leaves navigations alone.
+       A function, not a const: `performer` is state that arrives after this line. */
+    function reelHref() {
+      if (!performer) return "";
+      return reelBase() + "/player?performerId=" + encodeURIComponent(String(performerId)) +
+        "&port=" + encodeURIComponent(String(window.location.port || "")) +
+        "&name=" + encodeURIComponent(performer.name || "");
+    }
     const [markers, setMarkers] = useState([]);
     const [images, setImages] = useState([]);
     const [markerCount, setMarkerCount] = useState(null);
@@ -4718,7 +5050,7 @@ void main() {
             findImages(image_filter: { path: { value: $p, modifier: INCLUDES } },
                        filter: { per_page: 60, sort: $sort, direction: DESC }) {
               count
-              images { id title paths { thumbnail image } }
+              images { id title rating100 paths { thumbnail image } }
             }
           }`,
           { p: folder, sort: sort === "filesize" || sort === "resolution" ? sort : "updated_at" }
@@ -4738,7 +5070,7 @@ void main() {
           findImages(image_filter: { performers: { value: [$id], modifier: INCLUDES } },
                      filter: { per_page: 60, sort: $sort, direction: DESC }) {
             count
-            images { id title paths { thumbnail image } }
+            images { id title rating100 paths { thumbnail image } }
           }
         }`,
         { id: performerId, sort: sort === "filesize" || sort === "resolution" ? sort : "updated_at" }
@@ -4849,7 +5181,7 @@ void main() {
       /* one history entry: this goTo below is the push, the feed switch must not add another */
       onPlay({ sceneId: scene.id, tab: "scenes", sort, noPush: true });
       if (isFolder) goTo("folder/" + encodeURIComponent(folder) + "/" + scene.id);
-      else goTo("performer/" + encodeURIComponent(performer.name) + "/" + scene.id);
+      else goTo("performers/" + encodeURIComponent(performer.name) + "/" + scene.id);
     }
 
     return h(
@@ -4933,6 +5265,22 @@ void main() {
             h("b", null, typeof value === "number" ? fmtCount(value) : value),
             h("span", null, label)
           )
+        )
+      ),
+      h(
+        "div",
+        { className: "stk-profile-actions" },
+        h(
+          "a",
+          {
+            className: "stk-btn",
+            href: reelHref(),
+            target: "_blank",
+            rel: "noopener noreferrer",
+            title: "3 seconds from each clip, stitched into one edit",
+          },
+          h(Icon, { name: "play", size: 14 }),
+          "Highlight reel"
         )
       ),
       performer.tags && performer.tags.length > 0 &&
@@ -5021,13 +5369,13 @@ void main() {
         ? h(
             "div",
             { className: gridClass },
-            images.map((image) =>
+            images.map((image, imageIndex) =>
               h(
                 "button",
                 {
                   key: image.id,
                   className: "stk-tile",
-                  onClick: (event) => setViewer({ image, rect: event.currentTarget.getBoundingClientRect() }),
+                  onClick: (event) => setViewer({ image, items: images, index: imageIndex, rect: event.currentTarget.getBoundingClientRect() }),
                 },
                 h("div", { className: "stk-tile-photo" }, h(Thumb, { src: rel(image.paths && image.paths.thumbnail) }) )
               )
@@ -5122,20 +5470,20 @@ void main() {
         : h(
             "div",
             { className: gridClass },
-            images.map((image) =>
+            images.map((image, imageIndex) =>
               h(
                 "button",
                 {
                   key: image.id,
                   className: "stk-tile",
-                  onClick: (event) => setViewer({ image, rect: event.currentTarget.getBoundingClientRect() }),
+                  onClick: (event) => setViewer({ image, items: images, index: imageIndex, rect: event.currentTarget.getBoundingClientRect() }),
                 },
                 h("div", { className: "stk-tile-photo" }, h(Thumb, { src: rel(image.paths && image.paths.thumbnail) }) )
               )
             )
           ),
 
-      viewer && h(ImageViewer, { image: viewer.image, rect: viewer.rect, onClose: () => setViewer(null) }),
+      viewer && h(ImageViewer, { image: viewer.image, items: viewer.items, index: viewer.index, rect: viewer.rect, onClose: () => setViewer(null) }),
       contactScene &&
         h(ContactSheet, {
           scene: contactScene,
@@ -5151,7 +5499,11 @@ void main() {
     );
   }
 
-  function PerformersPage({ onPick, onBack, onOpenTag, initialPerformer, prefs, onProfileOpen }) {
+  /* One page for both faces of creativity:
+     /performers — the searchable, sortable grid of creators (a profile at
+     /performers/<name>);  /discover — the dashboard of picks and shelves. */
+  function PerformersPage({ onPick, onBack, onOpenTag, initialPerformer, prefs, onProfileOpen, view, onSeeAll }) {
+    const isDiscover = view === "discover";
     /* the floating settings button sits on top of the profile's own buttons */
     const [rows, setRows] = useState(null);
     const [query, setQuery] = useState("");
@@ -5221,7 +5573,7 @@ void main() {
        One document, one round trip: stats, then a row per sort. */
     const [dash, setDash] = useState(null);
     useEffect(() => {
-      if (query) return undefined;
+      if (query || !isDiscover) return undefined;
       let alive = true;
       gql(
         `query StashTokDash {
@@ -5257,7 +5609,7 @@ void main() {
     const [circles, setCircles] = useState(null);
     const [topTags, setTopTags] = useState(null);
     useEffect(() => {
-      if (query) return undefined;
+      if (query || !isDiscover) return undefined;
       let alive = true;
       gql(
         `query StashTokDiscoverCircles { findPerformers(filter: { per_page: 24, sort: "random" }) {
@@ -5277,6 +5629,7 @@ void main() {
     }, [query]);
 
     useEffect(() => {
+      if (isDiscover) return undefined;
       let alive = true;
       const direction = sort === "name" ? "ASC" : "DESC";
       gql(
@@ -5322,15 +5675,25 @@ void main() {
     return h(
       "div",
       { className: "stk-page", onContextMenu: (event) => event.preventDefault() },
-      h("h2", null, onBack && h("button", { onClick: onBack }, h(Icon, { name: "chevron", size: 18 })), "Discover"),
-      h("input", {
-        type: "search",
-        placeholder: "Search creators",
-        value: query,
-        onChange: (event) => setQuery(event.currentTarget.value),
-        style: { width: "100%", marginBottom: "10px", padding: "9px 11px", borderRadius: "10px", background: "#171717", border: "1px solid #2a2a2a", color: "#fff" },
-      }),
-      !query &&
+      h("h2", null, isDiscover ? "Discover" : "Performers"),
+      isDiscover &&
+        onSeeAll &&
+        h(
+          "button",
+          { className: "stk-btn stk-seeall", onClick: onSeeAll },
+          "See all performers",
+          h(Icon, { name: "chevron", size: 15 })
+        ),
+      !isDiscover &&
+        h("input", {
+          type: "search",
+          placeholder: "Search creators",
+          value: query,
+          onChange: (event) => setQuery(event.currentTarget.value),
+          style: { width: "100%", marginBottom: "10px", padding: "9px 11px", borderRadius: "10px", background: "#171717", border: "1px solid #2a2a2a", color: "#fff" },
+        }),
+      isDiscover &&
+        !query &&
         circles &&
         circles.length > 0 &&
         h(
@@ -5347,8 +5710,9 @@ void main() {
                   key: performer.id,
                   className: "stk-circle",
                   onClick: () => {
-                    goTo("performer/" + encodeURIComponent(performer.name));
-                    setSelected(performer);
+                    /* through the app's opener, so the profile knows where to go back to */
+                    if (onPick) onPick(performer);
+                    else setSelected(performer);
                   },
                 },
                 h("span", { className: "stk-circle-photo" }, h(Thumb, { src: rel(performer.image_path), width: 160 })),
@@ -5357,7 +5721,8 @@ void main() {
             )
           )
         ),
-      !query &&
+      isDiscover &&
+        !query &&
         topTags &&
         topTags.length > 0 &&
         h(
@@ -5377,7 +5742,10 @@ void main() {
             )
           )
         ),
-      !query && dash && dash.stats &&
+      isDiscover &&
+        !query &&
+        dash &&
+        dash.stats &&
         h(
           "div",
           { className: "stk-stats" },
@@ -5388,7 +5756,9 @@ void main() {
               h("div", { key: label, className: "stk-stat" }, h("b", null, fmtCount(total)), h("span", null, label))
             )
         ),
-      !query && dash &&
+      isDiscover &&
+        !query &&
+        dash &&
         h(
           React.Fragment,
           null,
@@ -5407,17 +5777,17 @@ void main() {
           h(DashRow, { title: "Performers - New" },
             ((dash.performersNew || {}).performers || []).map((performer) =>
               h(PerformerCard, { key: "pn" + performer.id, performer, onOpen: (item) => {
-                setSelected(item); goTo("performer/" + encodeURIComponent(item.name));
+                if (onPick) onPick(item); else setSelected(item);
               } }))),
           h(DashRow, { title: "Performers - Top" },
             ((dash.performersTop || {}).performers || []).map((performer) =>
               h(PerformerCard, { key: "pt" + performer.id, performer, onOpen: (item) => {
-                setSelected(item); goTo("performer/" + encodeURIComponent(item.name));
+                if (onPick) onPick(item); else setSelected(item);
               } }))),
           h(DashRow, { title: "Performers - Rating" },
             ((dash.performersRated || {}).performers || []).map((performer) =>
               h(PerformerCard, { key: "pr" + performer.id, performer, onOpen: (item) => {
-                setSelected(item); goTo("performer/" + encodeURIComponent(item.name));
+                if (onPick) onPick(item); else setSelected(item);
               } }))),
           h(DashRow, { title: "Galleries - New" },
             ((dash.galleriesNew || {}).galleries || []).map((gallery) =>
@@ -5426,13 +5796,15 @@ void main() {
             ((dash.galleriesUpdated || {}).galleries || []).map((gallery) =>
               h(GalleryCard, { key: "gu" + gallery.id, gallery, onOpen: (item) => window.open(rel("/gallery/" + item.id), "_blank") })))
         ),
-      h(
-        "div",
-        { className: "stk-sort-bar" },
-        h("button", { className: "stk-sort-btn", onClick: () => setSortOpen(!sortOpen) }, sortLabel, " ▾"),
-        rows && h("span", { className: "stk-sub" }, rows.length + " creators")
-      ),
-      sortOpen &&
+      !isDiscover &&
+        h(
+          "div",
+          { className: "stk-sort-bar" },
+          h("button", { className: "stk-sort-btn", onClick: () => setSortOpen(!sortOpen) }, sortLabel, " ▾"),
+          rows && h("span", { className: "stk-sub" }, rows.length + " creators")
+        ),
+      !isDiscover &&
+        sortOpen &&
         h(
           "div",
           { className: "stk-sort-menu" },
@@ -5456,7 +5828,8 @@ void main() {
             )
           )
         ),
-      !rows
+      !isDiscover &&
+        (!rows
         ? h("div", { className: "stk-state" }, h("div", { className: "stk-spinner" }))
         : rows.length === 0
         ? h("div", { className: "stk-state" }, h("p", null, "No performers match that."))
@@ -5474,7 +5847,7 @@ void main() {
                       holdFired.current = false;
                       return;
                     }
-                    goTo("performer/" + encodeURIComponent(performer.name));
+                    goTo("performers/" + encodeURIComponent(performer.name));
                     setSelected(performer);
                   },
                   onPointerDown: (event) => startPerformerHold(event, performer),
@@ -5492,7 +5865,7 @@ void main() {
                 )
               )
             )
-          )
+          ))
     );
   }
 
@@ -6049,7 +6422,7 @@ void main() {
           findImages(image_filter: { path: { value: $path, modifier: INCLUDES } },
                      filter: { per_page: 60, ${sortArg} }) {
             count
-            images { id title paths { thumbnail image } }
+            images { id title rating100 paths { thumbnail image } }
           }
         }`,
         { path: folder }
@@ -6362,13 +6735,13 @@ void main() {
         ? h(
             "div",
             { className: "stk-grid-3" },
-            images.map((image) =>
+            images.map((image, imageIndex) =>
               h(
                 "button",
                 {
                   key: image.id,
                   className: "stk-tile",
-                  onClick: (event) => setViewer({ image, rect: event.currentTarget.getBoundingClientRect() }),
+                  onClick: (event) => setViewer({ image, items: images, index: imageIndex, rect: event.currentTarget.getBoundingClientRect() }),
                 },
                 h("div", { className: "stk-tile-photo" }, h(Thumb, { src: rel(image.paths && image.paths.thumbnail) }) )
               )
@@ -6407,7 +6780,7 @@ void main() {
             )
           ),
 
-      viewer && h(ImageViewer, { image: viewer.image, rect: viewer.rect, onClose: () => setViewer(null) })
+      viewer && h(ImageViewer, { image: viewer.image, items: viewer.items, index: viewer.index, rect: viewer.rect, onClose: () => setViewer(null) })
     );
   }
 
@@ -7274,7 +7647,7 @@ void main() {
         document.body.classList.remove("stk-anim");
       };
     }, []);
-    const navSlots = (prefs.navSlots && prefs.navSlots.length === 3 ? prefs.navSlots : DEFAULT_NAV_SLOTS).slice();
+    const navSlots = (prefs.navSlots && prefs.navSlots.length === 4 ? prefs.navSlots : DEFAULT_NAV_SLOTS).slice();
 
     function runNav(id) {
       /* every sidebar item is a fresh section: clear whatever page we were on first */
@@ -7286,6 +7659,10 @@ void main() {
         setPerformerFilter(null);
         setTab("performers");
         goTo("performers");
+      } else if (id === "discover") {
+        setPerformerFilter(null);
+        setTab("discover");
+        goTo("discover");
       } else if (id === "search") {
         setTab("search");
         goTo("search");
@@ -7318,6 +7695,20 @@ void main() {
         setTab("ops");
         goTo("ops");
       }
+    }
+
+    /* a bottom-bar slot: Feed is fixed first, these four follow in order */
+    function navSlotButton(id, slot) {
+      const option = NAV_OPTIONS.find((entry) => entry.id === id) || NAV_OPTIONS[0];
+      const target = option.id === "random" ? "home" : option.id;
+      return h(NavButton, {
+        key: "slot-" + slot,
+        active: tab === target,
+        icon: option.icon,
+        label: option.label,
+        onClick: () => runNav(option.id),
+        onLongPress: () => setNavPicker({ slot, id: option.id }),
+      });
     }
 
     const setPref = useCallback((key, value) => {
@@ -7408,6 +7799,8 @@ void main() {
     const [tab, setTab] = useState("home");
     const [feeds, setFeeds] = useState(() => loadFeeds());
     const [activeFeed, setActiveFeed] = useState(defaultFeed());
+    const [duo, setDuo] = useState(false);
+
     const [refreshKey, setRefreshKey] = useState(0);
     const [builder, setBuilder] = useState(null); // {spec} | 'new' | null
     const feedOptionsRef = useDialog(!!feedOptions, () => setFeedOptions(false));
@@ -7477,6 +7870,11 @@ void main() {
         setTab("performers");
         return;
       }
+      if (rest === "discover") {
+        setPerformerFilter(null);
+        setTab("discover");
+        return;
+      }
       if (rest === "tags") {
         setTab("tags");
         return;
@@ -7523,8 +7921,9 @@ void main() {
         setTab("folderProfile");
         return;
       }
-      if (rest.indexOf("performer/") === 0) {
-        const tail = rest.slice("performer/".length);
+      if (rest.indexOf("performer/") === 0 || rest.indexOf("performers/") === 0) {
+        const prefix = rest.indexOf("performers/") === 0 ? "performers/" : "performer/";
+        const tail = rest.slice(prefix.length);
         const slash = tail.indexOf("/");
         const slug = decodeURIComponent(slash === -1 ? tail : tail.slice(0, slash));
         const sceneId = slash === -1 ? null : tail.slice(slash + 1).replace(/\D/g, "");
@@ -7750,18 +8149,38 @@ void main() {
       goTo("");
     }
 
-    /** the profile page: /performer/<name> */
+    /* where a profile was opened from, so its back chevron returns there */
+    const profileOriginRef = useRef("performers");
+
+    /** the profile page: /performers/<name> */
     function openProfile(performer, push) {
       if (!performer) {
         setPerformersOpen(true);
         setTab("performers");
         return;
       }
+      /* liveRef, not the closed-over tab: applyRoute holds the first render's
+         openProfile, where tab was still "home", so back went to the feed */
+      const now = (liveRef.current && liveRef.current.tab) || tab;
+      profileOriginRef.current = now === "discover" || now === "performers" ? now : "home";
       setPerformersOpen(false);
       setPerformerFilter(performer);
       setTagFilter(null);
       setTab("performers");
-      if (push !== false) goTo("performer/" + encodeURIComponent(performer.name));
+      if (push !== false) goTo("performers/" + encodeURIComponent(performer.name));
+    }
+
+    /** back out of a profile: to the index page it came from, or to the feed */
+    function closeProfile() {
+      setPerformerFilter(null);
+      const back = profileOriginRef.current;
+      if (back === "discover" || back === "performers") {
+        setTab(back);
+        goTo(back);
+        return;
+      }
+      setTab("home");
+      goTo("");
     }
 
     /** the clip feed for a performer: /performer/<name>/<sceneId> */
@@ -7788,7 +8207,7 @@ void main() {
       setTab("home");
       setRefreshKey((n) => n + 1);
       if (push !== false && !(payload && payload.noPush)) {
-        const route = "performer/" + encodeURIComponent(performer.name) + (payload && payload.sceneId ? "/" + payload.sceneId : "");
+        const route = "performers/" + encodeURIComponent(performer.name) + (payload && payload.sceneId ? "/" + payload.sceneId : "");
         // we just built this feed; the router must not rebuild it from the URL
         routeClaimRef.current = route;
         goTo(route);
@@ -7848,12 +8267,28 @@ void main() {
     let body;
     if (tab === "performers") {
       body = h(PerformersPage, {
+        view: "performers",
         onPick: openProfile,
-        onBack: () => setTab("home"),
+        onBack: closeProfile,
         onOpenTag: openTag,
         onProfileOpen: setProfileOpen,
         initialPerformer: performerFilter,
         prefs,
+      });
+    } else if (tab === "discover") {
+      body = h(PerformersPage, {
+        view: "discover",
+        onPick: openProfile,
+        onBack: closeProfile,
+        onOpenTag: openTag,
+        onProfileOpen: setProfileOpen,
+        initialPerformer: performerFilter,
+        prefs,
+        onSeeAll: () => {
+          setPerformerFilter(null);
+          setTab("performers");
+          goTo("performers");
+        },
       });
     } else if (tab === "folder" && folderView) {
       body = h(FolderProfile, {
@@ -8055,6 +8490,11 @@ void main() {
         },
         feeds,
         onSwitchFeed: useFeed,
+        onDuo: () => {
+          /* a fresh shuffle each time the split opens, shared by both panes */
+          FEED_SHARED.clear();
+          setDuo(true);
+        },
         onNewFeed: () => setBuilder({ spec: null }),
         onBack: () => {
           /* go back the way the user came: same page entry, same scroll, no reload */
@@ -8065,7 +8505,7 @@ void main() {
           const origin = (activeFeed && activeFeed.origin) || null;
           if (origin && origin.kind === "performer" && origin.performer) {
             openProfile(origin.performer, false);
-            goTo("performer/" + encodeURIComponent(origin.performer.name), true);
+            goTo("performers/" + encodeURIComponent(origin.performer.name), true);
             return;
           }
           if (origin && origin.kind === "favorites") {
@@ -8186,7 +8626,40 @@ void main() {
               )
             )
           ),
-        body,
+        duo
+          ? h(
+              "div",
+              { className: "stk-duo" },
+              [0, 1].map((side) =>
+                h(
+                  "div",
+                  { className: "stk-duo-pane", key: "gd" + side },
+                  h(FeedView, {
+                    key: "gd" + side + ":" + refreshKey,
+                    duo: true,
+                    desktop: false,
+                    prefs,
+                    cfg: Object.assign({}, cfg, { windowDays: 0 }),
+                    spec: { id: "gd" + side, cacheKey: "gd", parity: side, name: side === 0 ? "Feed A" : "Feed B", type: "foryou", sort: "random" },
+                    refreshKey,
+                    feeds,
+                    onOpenPerformer: openProfile,
+                    onDeriveFeed: useFeed,
+                    onSwitchFeed: useFeed,
+                    onNewFeed: () => setBuilder({ spec: null }),
+                    onDuo: () => setDuo(false),
+                    onBack: () => setDuo(false),
+                  })
+                )
+              ),
+              h(
+                "button",
+                { className: "stk-duo-exit", onClick: () => setDuo(false) },
+                h(Icon, { name: "x", size: 14 }),
+                "Gooners Delight"
+              )
+            )
+          : body,
 
         /* operations sits beside settings: one tap, never buried in settings */
         tab !== "settings" && tab !== "ops" && tab !== "home" && tab !== "folderProfile" && !profileOpen &&
@@ -8237,26 +8710,7 @@ void main() {
             onClick: goHome,
             onLongPress: () => setFeedOptions(true),
           }),
-          h(NavButton, {
-            active: tab === "performers",
-            icon: "user",
-            label: "Discover",
-            onClick: () => {
-              setTab("performers");
-              goTo("performers");
-            },
-          }),
-          navSlots.map((id, slot) => {
-            const option = NAV_OPTIONS.find((entry) => entry.id === id) || NAV_OPTIONS[0];
-            return h(NavButton, {
-              key: "slot-" + slot,
-              active: false,
-              icon: option.icon,
-              label: option.label,
-              onClick: () => runNav(option.id),
-              onLongPress: () => setNavPicker({ slot, id: option.id }),
-            });
-          })
+          navSlots.map((id, slot) => navSlotButton(id, slot))
         ),
 
         feedOptions &&
@@ -8306,7 +8760,7 @@ void main() {
                 h("span", null, "Navigation button"),
                 h("button", { className: "stk-btn", onClick: () => setNavPicker(null) }, h(Icon, { name: "x", size: 16 }))
               ),
-              h("p", { className: "stk-sub" }, "Long-press the last three nav buttons to change what they open."),
+              h("p", { className: "stk-sub" }, "Long-press any nav button except Feed to change what it opens."),
               NAV_OPTIONS.map((option) =>
                 h(
                   "button",
