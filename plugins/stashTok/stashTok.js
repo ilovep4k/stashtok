@@ -2185,9 +2185,9 @@ void main() {
        cycle only decides where a double tap starts from. */
 
     const CROP_SCALE = 1 / (1 - CROP_SIDE * 2);
-    /* a clip only a hair off the screen's ratio is filled too: the bars are all
-       the crop removes, so it may lose at most this share of the frame */
-    const NEAR_RATIO = 0.2;
+    /* portrait clips fill the frame too, as long as no edge loses more than a
+       fifth of the picture: 0.4 of the frame in total, i.e. 20 % per edge */
+    const NEAR_RATIO = 0.4;
 
     /** why this clip wants cropping: "wide" (16:9 on a phone), "near" (a hair
         off, so the bars are the only thing lost), or "" for leave it alone. */

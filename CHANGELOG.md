@@ -4,10 +4,10 @@
 
 - **Pull to refresh**: at the first clip, pulling down shows an indicator and reloading
   the feed once past ~120 px; anywhere else a pull down still steps back a clip.
-- **Near-ratio clips fill the screen too.** A portrait clip only a little taller than the
-  screen used to keep a hairline of black on the left and right; it is now cropped evenly
-  at the top and bottom instead (at most 20 % of the frame). A clip genuinely far off the
-  screen's ratio still letterboxes. Double tap flips between the fill and the full frame.
+- **Portrait clips fill the screen too**, 9:16 included: any clip whose framing would
+  cost no more than 20 % of the picture per edge is scaled to cover, so the bars go. Once
+  the crop would eat more than that (4:3, 5:4) it letterboxes as before. Double tap flips
+  between the fill and the 100 % fit.
 - **Auto-crop is a setting**: Settings → Feed → *Auto-crop to fill*, on by default. It
   applies to every clip regardless of what you pinched on another one.
 - Fixed a framing bug where every other clip came up uncropped: a prewarmed clip fires
