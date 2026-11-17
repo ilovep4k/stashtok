@@ -5,7 +5,8 @@
  * fresh (never played), shorts, portrait-only, and any saved Stash filter.
  * Gestures: swipe up/down, tap pause, long-press centre = actions,
  * hold right = fast-forward, hold left = rewind, pinch = zoom (video only),
- * double-tap = heart, drag the scrub bar to seek.
+ * double-tap = step the portrait framing (auto-crop / full / fill height),
+ * drag the scrub bar to seek.
  */
 (function () {
   "use strict";
@@ -30,9 +31,17 @@
   const PAGE_SIZE = 8;
   const HOLD_MS = 380;
   const LONG_PRESS_MS = 250;
+  /* hold this long, then drag, and the frame moves under one finger */
+  const GRAB_MS = 220;
   const SWIPE_PX = 70;
   const MAX_ZOOM = 8;
   const HEART_POP_MS = 700;
+  /* portrait auto-crop: 25 % of the width off each side leaves the middle half */
+  const CROP_SIDE = 0.25;
+  /* a tap only pauses after this long, so a double tap can still win */
+  const TAP_WAIT_MS = 300;
+  /* a second tap up to here is a double tap and zooms; after this it is a new tap */
+  const DOUBLE_TAP_MS = 500;
 
   /* ------------------------------------------------------------------ */
   /* icons                                                              */
@@ -61,6 +70,8 @@
     chevron: "M9 6l6 6-6 6",
     chevronUp: "M6 15l6-6 6 6",
     chevronDown: "M6 9l6 6 6-6",
+    /* a box with an arrow leaving it: opens the page in Stash itself */
+    external: "M13 4h7v7M20 4l-8.2 8.2M18 14v5.5A1.5 1.5 0 0 1 16.5 21h-11A1.5 1.5 0 0 1 4 19.5v-11A1.5 1.5 0 0 1 5.5 7H11",
     sort: "M7 4v16M4 17l3 3 3-3M17 20V4M14 7l3-3 3 3",
     search: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20.5 20.5 16 16",
     folder: "M3.5 7.5A1.5 1.5 0 0 1 5 6h3.6l1.9 2.4H19a1.5 1.5 0 0 1 1.5 1.5V18A1.5 1.5 0 0 1 19 19.5H5A1.5 1.5 0 0 1 3.5 18V7.5z",
@@ -636,6 +647,58 @@
   function baseRoot() {
     const match = window.location.pathname.match(/^(.*?\/stash-tok)(\/|$)/);
     return match ? match[1] : "/stash-tok";
+  }
+
+  /* ---- links into Stash's own UI ----------------------------------- *
+   * The plugin is injected into Stash, so the origin is the instance the
+   * user is already logged into: a relative link needs no other config. */
+  function stashUrl(path) {
+    return window.location.origin + path;
+  }
+
+  /** Stash keeps list filters in the URL as `c=` criteria: JSON with braces
+   *  outside strings swapped for parens, then URI-encoded, then the query
+   *  reserved characters escaped (ListFilterModel.getEncodedParams). */
+  function encodeStashCriterion(criterion) {
+    let out = "";
+    let inString = false;
+    let escaped = false;
+    for (const ch of JSON.stringify(criterion)) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\" && inString) {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = !inString;
+      } else if (!inString && ch === "{") {
+        out += "(";
+        continue;
+      } else if (!inString && ch === "}") {
+        out += ")";
+        continue;
+      }
+      out += ch;
+    }
+    return encodeURI(out)
+      .replace(/\?/g, "%3F")
+      .replace(/#/g, "%23")
+      .replace(/&/g, "%26")
+      .replace(/;/g, "%3B")
+      .replace(/=/g, "%3D")
+      .replace(/\+/g, "%2B");
+  }
+
+  /** The same page in Stash: the performer record, or — for a folder profile —
+   *  the scene list narrowed to that folder with the `path` criterion, which is
+   *  exactly how this page queries it. */
+  function stashHref(spec) {
+    if (!spec) return "";
+    if (spec.folder) {
+      const criterion = { type: "path", modifier: "INCLUDES", value: String(spec.folder) };
+      return stashUrl("/scenes?c=" + encodeStashCriterion(criterion));
+    }
+    if (!spec.performerId) return "";
+    return stashUrl("/performers/" + encodeURIComponent(spec.performerId));
   }
 
   /* the clip on screen, so a route written by the feed is not mistaken for a navigation */
@@ -1375,6 +1438,218 @@ void main() {
     return h("canvas", { className: "stk-vr-canvas", ref: canvasRef });
   }
 
+  /* ---- keeping the display awake while a clip plays -------------------
+     navigator.wakeLock exists only in a secure context, and the phone reaches
+     Stash over plain http on the LAN, where the property is missing outright -
+     an unconditional request therefore did nothing at all. iOS additionally
+     refuses a lock that no gesture preceded, drops it whenever the tab hides
+     and lets low-battery mode deny it. So: request on demand, retry on the next
+     gesture, re-request on every show or release, and when the API is absent
+     fall back to a silent looping clip - the only thing iOS counts as playback
+     without the API (the NoSleep technique). */
+
+  /* 1 s of black, 16x16, 5 fps, no audio, moov first: ~1.5 kB. Served as a
+     blob, not inline: Stash sends `media-src blob: 'self'`, so a data: video
+     is refused by its own CSP. */
+  const SILENT_CLIP =
+      "AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAM3bW9vdgAAAGxtdmhkAAAAAAAAAAAAAAAAAAAD6AAAA+gAAQAAAQAA" +
+      "AAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAA" +
+      "AmF0cmFrAAAAXHRraGQAAAADAAAAAAAAAAAAAAABAAAAAAAAA+gAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAA" +
+      "AAAAAAAAAAAAAABAAAAAABAAAAAQAAAAAAAkZWR0cwAAABxlbHN0AAAAAAAAAAEAAAPoAAAAAAABAAAAAAHZbWRpYQAAACBtZGhk" +
+      "AAAAAAAAAAAAAAAAAAAoAAAAKABVxAAAAAAALWhkbHIAAAAAAAAAAHZpZGUAAAAAAAAAAAAAAABWaWRlb0hhbmRsZXIAAAABhG1p" +
+      "bmYAAAAUdm1oZAAAAAEAAAAAAAAAAAAAACRkaW5mAAAAHGRyZWYAAAAAAAAAAQAAAAx1cmwgAAAAAQAAAURzdGJsAAAAuHN0c2QA" +
+      "AAAAAAAAAQAAAKhhdmMxAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAABAAEABIAAAASAAAAAAAAAABFUxhdmM2MC4zMS4xMDIgbGli" +
+      "eDI2NAAAAAAAAAAAAAAAGP//AAAALmF2Y0MBQsAe/+EAFmdCwB7ZHsBEAAADAAQAAAMAKDxYuSABAAVoy4PLIAAAABBwYXNwAAAA" +
+      "AQAAAAEAAAAUYnRydAAAAAAAABUwAAAVMAAAABhzdHRzAAAAAAAAAAEAAAAFAAAIAAAAABRzdHNzAAAAAAAAAAEAAAABAAAAHHN0" +
+      "c2MAAAAAAAAAAQAAAAEAAAAFAAAAAQAAAChzdHN6AAAAAAAAAAAAAAAFAAACgAAAAAoAAAAKAAAACQAAAAkAAAAUc3RjbwAAAAAA" +
+      "AAABAAADZwAAAGJ1ZHRhAAAAWm1ldGEAAAAAAAAAIWhkbHIAAAAAAAAAAG1kaXJhcHBsAAAAAAAAAAAAAAAALWlsc3QAAAAlqXRv" +
+      "bwAAAB1kYXRhAAAAAQAAAABMYXZmNjAuMTYuMTAwAAAACGZyZWUAAAKubWRhdAAAAm0GBf//adxF6b3m2Ui3lizYINkj7u94MjY0" +
+      "IC0gY29yZSAxNjQgcjMxMDggMzFlMTlmOSAtIEguMjY0L01QRUctNCBBVkMgY29kZWMgLSBDb3B5bGVmdCAyMDAzLTIwMjMgLSBo" +
+      "dHRwOi8vd3d3LnZpZGVvbGFuLm9yZy94MjY0Lmh0bWwgLSBvcHRpb25zOiBjYWJhYz0wIHJlZj0zIGRlYmxvY2s9MTowOjAgYW5h" +
+      "bHlzZT0weDE6MHgxMTEgbWU9aGV4IHN1Ym1lPTcgcHN5PTEgcHN5X3JkPTEuMDA6MC4wMCBtaXhlZF9yZWY9MSBtZV9yYW5nZT0x" +
+      "NiBjaHJvbWFfbWU9MSB0cmVsbGlzPTEgOHg4ZGN0PTAgY3FtPTAgZGVhZHpvbmU9MjEsMTEgZmFzdF9wc2tpcD0xIGNocm9tYV9x" +
+      "cF9vZmZzZXQ9LTIgdGhyZWFkcz0xIGxvb2thaGVhZF90aHJlYWRzPTEgc2xpY2VkX3RocmVhZHM9MCBucj0wIGRlY2ltYXRlPTEg" +
+      "aW50ZXJsYWNlZD0wIGJsdXJheV9jb21wYXQ9MCBjb25zdHJhaW5lZF9pbnRyYT0wIGJmcmFtZXM9MCB3ZWlnaHRwPTAga2V5aW50" +
+      "PTUga2V5aW50X21pbj0xIHNjZW5lY3V0PTQwIGludHJhX3JlZnJlc2g9MCByY19sb29rYWhlYWQ9NSByYz1jcmYgbWJ0cmVlPTEg" +
+      "Y3JmPTIzLjAgcWNvbXA9MC42MCBxcG1pbj0wIHFwbWF4PTY5IHFwc3RlcD00IGlwX3JhdGlvPTEuNDAgYXE9MToxLjAwAIAAAAAL" +
+      "ZYiEBHyYoAA2I4AAAAAGQZo4CPqAAAAABkGaVAI+oAAAAAVBmmAQ9QAAAAVBmoA/1A==";
+
+  let silentUrl = "";
+  function silentClipUrl() {
+    if (silentUrl) return silentUrl;
+    try {
+      const raw = window.atob(SILENT_CLIP);
+      const bytes = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i += 1) bytes[i] = raw.charCodeAt(i);
+      silentUrl = URL.createObjectURL(new Blob([bytes], { type: "video/mp4" }));
+    } catch (e) {
+      silentUrl = "";
+    }
+    return silentUrl;
+  }
+
+  function createAwake() {
+    let sentinel = null;
+    let silent = null;
+    let want = false;
+    let retryTimer = 0;
+    let bound = false;
+
+    const supported = () => !!(navigator.wakeLock && navigator.wakeLock.request);
+
+    const release = () => {
+      const held = sentinel;
+      sentinel = null;
+      if (held) {
+        try { held.release(); } catch (e) { /* already gone */ }
+      }
+    };
+
+    const quiet = () => {
+      const el = silent;
+      silent = null;
+      if (!el) return;
+      try { el.pause(); } catch (e) { /* ignore */ }
+      if (el.parentNode) el.parentNode.removeChild(el);
+    };
+
+    /* 2x2 px in the corner and not display:none: WebKit pauses an inline video
+       it considers offscreen or invisible, and a paused clip holds nothing */
+    const startSilent = () => {
+      if (silent || document.hidden) return;
+      const el = document.createElement("video");
+      el.setAttribute("playsinline", "");
+      el.setAttribute("webkit-playsinline", "");
+      el.setAttribute("muted", "");
+      el.setAttribute("aria-hidden", "true");
+      el.muted = true;
+      el.loop = true;
+      el.preload = "auto";
+      const clip = silentClipUrl();
+      if (!clip) return;
+      el.src = clip;
+      el.style.cssText =
+        "position:fixed;right:0;bottom:0;width:2px;height:2px;opacity:0.01;pointer-events:none;z-index:0;";
+      /* webkit pauses an inline clip for its own reasons; put it back */
+      el.addEventListener("pause", () => {
+        if (!want || document.hidden) return;
+        window.setTimeout(() => {
+          if (silent === el && want && !document.hidden) restartSilent();
+        }, 300);
+      });
+      document.body.appendChild(el);
+      silent = el;
+      const started = el.play();
+      if (started && started.catch) {
+        /* no gesture yet: the next tap arms it (gesture() retries) */
+        started.catch(() => {});
+      }
+    };
+
+    const request = () => {
+      if (!want || document.hidden) return;
+      if (!supported() || sentinel) return;
+      let pending;
+      try {
+        pending = navigator.wakeLock.request("screen");
+      } catch (e) {
+        return;
+      }
+      Promise.resolve(pending)
+        .then((held) => {
+          if (!want || document.hidden) {
+            try { held.release(); } catch (e) { /* ignore */ }
+            return;
+          }
+          sentinel = held;
+          held.addEventListener("release", () => {
+            if (sentinel === held) sentinel = null;
+            /* a system release (low power, app switch) must not spin: retry
+               once, slowly, and let the next gesture do the rest */
+            if (want && !document.hidden && !retryTimer) {
+              retryTimer = window.setTimeout(() => {
+                retryTimer = 0;
+                request();
+              }, 1000);
+            }
+          });
+        })
+        .catch(() => {
+          /* denied: needs a gesture, or the battery saver said no. the silent
+             clip below is already covering the display */
+        });
+    };
+
+    const restartSilent = () => {
+      if (!silent) return;
+      const started = silent.play();
+      if (started && started.catch) started.catch(() => {});
+    };
+
+    const gesture = () => {
+      if (!want) return;
+      request();
+      restartSilent();
+    };
+
+    const onVisibility = () => {
+      if (document.hidden) {
+        release();
+        if (silent) { try { silent.pause(); } catch (e) { /* ignore */ } }
+        return;
+      }
+      if (!want) return;
+      request();
+      restartSilent();
+    };
+
+    const bind = () => {
+      if (bound) return;
+      bound = true;
+      /* capture, so a tap the feed swallows still counts as activation */
+      document.addEventListener("pointerdown", gesture, true);
+      document.addEventListener("touchstart", gesture, true);
+      document.addEventListener("keydown", gesture, true);
+      document.addEventListener("visibilitychange", onVisibility);
+      window.addEventListener("focus", onVisibility);
+    };
+
+    const unbind = () => {
+      if (!bound) return;
+      bound = false;
+      document.removeEventListener("pointerdown", gesture, true);
+      document.removeEventListener("touchstart", gesture, true);
+      document.removeEventListener("keydown", gesture, true);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("focus", onVisibility);
+    };
+
+    return {
+      set(next) {
+        const on = !!next;
+        if (on === want) return;
+        want = on;
+        if (on) {
+          bind();
+          /* the clip runs even when the API answers yes: in low power mode, in
+             a home-screen web app before iOS 18.4 and anywhere the OS quietly
+             ignores the request, a resolved sentinel proves nothing */
+          startSilent();
+          request();
+        } else {
+          unbind();
+          release();
+          quiet();
+          if (retryTimer) { window.clearTimeout(retryTimer); retryTimer = 0; }
+        }
+      },
+      dispose() {
+        this.set(false);
+        unbind();
+      },
+    };
+  }
+
   function FeedView({ prefs, spec, cfg, refreshKey, onBack, onSearch, onSettings, onOpenPerformer, onOpenTag, onDeriveFeed, onEditFeed, onOpenFolder, onOpenFolderProfile, feeds, onSwitchFeed, onNewFeed, desktop }) {
     const sfw = !!cfg.sfw;
     const [items, setItems] = useState([]);
@@ -1387,6 +1662,14 @@ void main() {
     const [streamFallback, setStreamFallback] = useState(false);
     const [failCount, setFailCount] = useState(0);
     const lastTimePush = useRef(0);
+    /* the phone sleeping mid-clip is the complaint this exists for: hold the
+       display while a clip is actually running, let go the moment it stops */
+    const awakeRef = useRef(null);
+    if (!awakeRef.current) awakeRef.current = createAwake();
+    useEffect(() => {
+      awakeRef.current.set(playing);
+    }, [playing]);
+    useEffect(() => () => awakeRef.current.dispose(), []);
     const [revealed, setRevealed] = useState(false);
     const [rotation, setRotation] = useState(0);
     const [speed, setSpeed] = useState(() => Number(window.localStorage.getItem("stashTok.speed")) || 1);
@@ -1423,6 +1706,18 @@ void main() {
     const [dragY, setDragY] = useState(0);
     /* fill the screen unless that would throw away a big slice of the frame */
     const [fitMode, setFitMode] = useState("cover");
+    /* portrait framing of a landscape clip: auto (middle half) → full → height */
+    const [cropMode, setCropMode] = useState(() => {
+      /* only the un-zoomed step comes back after a reload. "fill height" is ~3.6x
+         on a phone, and the HUD is hidden three seconds in, so restoring it meant a
+         refresh landed on a giant cropped frame with nothing to tap. */
+      try {
+        return window.localStorage.getItem("stashTok.crop") === "full" ? "full" : "auto";
+      } catch (e) {
+        return "auto";
+      }
+    });
+    const [cropBadge, setCropBadge] = useState("");
 
     const stageRef = useRef(null);
     const videoRef = useRef(null);
@@ -1436,6 +1731,14 @@ void main() {
     const pressTimer = useRef(0);
     const tapTimer = useRef(null);
     const lastTapAt = useRef(0);
+    /* what the first tap of a possible double tap did, so the second can undo it */
+    const tapUndoRef = useRef(null);
+    const cropModeRef = useRef(cropMode);
+    cropModeRef.current = cropMode;
+    /* true while the current transform came from the crop cycle, not a pinch */
+    const cropZoomRef = useRef(false);
+    const cropRefreshRef = useRef(null);
+    const cropBadgeTimer = useRef(null);
     const rafRef = useRef(0);
     const tf = useRef({ s: 1, x: 0, y: 0 });
 
@@ -1489,7 +1792,11 @@ void main() {
     useEffect(() => {
       const onResize = () => {
         const video = activeVideo();
-        if (video) setFitMode(fitFor(video));
+        if (video) {
+          setFitMode(fitFor(video));
+          /* turning the phone re-decides auto-crop (and re-scales "fill height") */
+          if (cropRefreshRef.current) cropRefreshRef.current();
+        }
       };
       window.addEventListener("resize", onResize);
       window.addEventListener("orientationchange", onResize);
@@ -1635,6 +1942,11 @@ void main() {
       setTime((item && Number(item.startAt)) || 0);
       setRevealed(false);
       resetZoom();
+      /* a tap still waiting out its double-tap window must not pause the next clip */
+      window.clearTimeout(tapTimer.current);
+      tapUndoRef.current = null;
+      lastTapAt.current = 0;
+      cropZoomRef.current = false;
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [item && item.key]);
 
@@ -1660,6 +1972,8 @@ void main() {
       const start = Number(item.startAt) || 0;
       const onLoaded = () => {
         setFitMode(fitFor(video));
+        /* the frame size is only known once metadata lands, so the crop lands here */
+        applyCrop(cropModeRef.current, false);
         const total = video.duration || 0;
         setDuration(total);
         /* canplay fires again every time the browser re-buffers, so seek to the start
@@ -1806,12 +2120,13 @@ void main() {
       }
     }, []);
 
-    const applyTransform = useCallback(() => {
+    const applyTransform = useCallback((animate) => {
       const video = activeVideo();
       if (!video) return;
       const { s, x, y } = tf.current;
       video.style.transform = `translate3d(${x}px, ${y}px, 0) scale(${s})`;
-      video.style.transition = "none";
+      /* a zoom step eases; a drag or a pinch must follow the finger exactly */
+      video.style.transition = animate ? "transform 240ms cubic-bezier(.22,1,.36,1)" : "none";
       setZoom(s);
     }, []);
 
@@ -1829,6 +2144,73 @@ void main() {
       tf.current = { s: 1, x: 0, y: 0 };
       applyTransform();
     }, [applyTransform]);
+
+    /* ---- portrait auto-crop ---------------------------------------
+       A landscape clip on a tall phone screen is framed in three steps: auto
+       (the outer quarter of each side is cut, so the middle half shows), full
+       frame, then fill the device height. Two fingers still zoom freely; the
+       cycle only decides where a double tap starts from. */
+
+    const CROP_SCALE = 1 / (1 - CROP_SIDE * 2);
+
+    /** 16:9-and-wider source on a screen taller than it is wide */
+    const cropEligible = useCallback(() => {
+      const video = activeVideo();
+      const stage = stageRef.current;
+      if (!video || !stage) return false;
+      const vw = video.videoWidth || 0;
+      const vh = video.videoHeight || 0;
+      const sw = stage.clientWidth || 0;
+      const sh = stage.clientHeight || 0;
+      if (!vw || !vh || !sw || !sh) return false;
+      /* 4:3 clips are left alone; this is about 16:9 and wider */
+      return vw / vh >= 1.5 && sh > sw;
+    }, [activeVideo]);
+
+    const applyCrop = useCallback(
+      (mode, animate) => {
+        if (!activeVideo()) return;
+        if (!cropEligible()) {
+          tf.current = { s: 1, x: 0, y: 0 };
+          cropZoomRef.current = false;
+          applyTransform(animate);
+          return;
+        }
+        /* "height" is exactly what `cover` means for a wide clip on a tall screen */
+        const s = mode === "full" ? 1 : mode === "height" ? clamp(coverScale(), 1, MAX_ZOOM) : CROP_SCALE;
+        tf.current = { s, x: 0, y: 0 };
+        cropZoomRef.current = s > 1.02;
+        applyTransform(animate);
+      },
+      [activeVideo, cropEligible, applyTransform]
+    );
+
+    cropRefreshRef.current = () => applyCrop(cropModeRef.current, false);
+
+    const cropLabel = (mode) => (mode === "full" ? "Full frame" : mode === "height" ? "Fill height" : "Crop 50%");
+
+    /** double tap: auto → full → height → auto. On a clip that cannot crop,
+        the old fill toggle still applies. */
+    const cycleCrop = useCallback(() => {
+      if (!cropEligible()) {
+        toggleFill();
+        return;
+      }
+      const current = cropModeRef.current;
+      const next = current === "auto" ? "full" : current === "full" ? "height" : "auto";
+      cropModeRef.current = next;
+      setCropMode(next);
+      try {
+        window.localStorage.setItem("stashTok.crop", next);
+      } catch (e) {
+        /* ignore */
+      }
+      applyCrop(next, true);
+      window.clearTimeout(cropBadgeTimer.current);
+      setCropBadge(cropLabel(next));
+      cropBadgeTimer.current = window.setTimeout(() => setCropBadge(""), 900);
+      buzz(6);
+    }, [applyCrop, cropEligible]);
 
     useLayoutEffect(() => {
       const el = quickRef.current;
@@ -2082,6 +2464,10 @@ void main() {
     const dropGestures = useCallback(() => {
       window.clearTimeout(holdTimer.current);
       window.clearTimeout(tapTimer.current);
+      window.clearTimeout(cropBadgeTimer.current);
+      setCropBadge("");
+      tapUndoRef.current = null;
+      lastTapAt.current = 0;
       pts.current.clear();
       gesture.current = null;
       if (rafRef.current) {
@@ -2217,6 +2603,8 @@ void main() {
       if (!g || !stage) return;
 
       if (g.mode === "pinch" && pts.current.size >= 2) {
+        /* fingers win: from here the transform is the user's, not the crop cycle */
+        cropZoomRef.current = false;
         const [a, b] = Array.from(pts.current.values());
         const ratio = dist(a, b) / g.d0;
         const next = clamp(g.s0 * ratio, 1, MAX_ZOOM);
@@ -2240,12 +2628,34 @@ void main() {
       if (!g.moved && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) {
         g.moved = true;
         window.clearTimeout(holdTimer.current);
+        /* a held thumb that then drags grabs the frame: one finger where a pan
+           used to need two. Only while the picture is bigger than its box, or
+           there is nothing to move; the quick menu and speed holds step aside. */
+        if (
+          (g.mode === "press" || g.mode === "menu") &&
+          tf.current.s > 1.02 &&
+          performance.now() - g.t0 >= GRAB_MS
+        ) {
+          g.mode = "pan";
+          g.grab = true;
+          g.panX = tf.current.x;
+          g.panY = tf.current.y;
+          /* re-anchor so the frame does not jump by the delay's worth of travel */
+          g.x0 = event.clientX;
+          g.y0 = event.clientY;
+          clearPress();
+          setQuick(null);
+          buzz(8);
+          return;
+        }
       }
       if (!g.moved) return;
 
       if (g.mode === "press") {
         clearPress();
-        if (tf.current.s > 1.02) {
+        /* pan only a zoom the fingers made: the crop cycle is already 2x, and
+           treating that as "zoomed" would turn every swipe into a pan */
+        if (tf.current.s > 1.02 && !cropZoomRef.current) {
           g.mode = "pan";
           g.panX = tf.current.x;
           g.panY = tf.current.y;
@@ -2310,30 +2720,59 @@ void main() {
       if (g.mode === "press" && !g.moved) {
         const video = activeVideo();
         if (!video) return;
+        /* anything zoomed — a pinch or a crop step — opens up to the full frame on
+           one tap. The HUD is gone three seconds into playback, so a zoomed frame
+           must never be a dead end. */
         if (tf.current.s > 1.02) {
-          resetZoom();
+          cropModeRef.current = "full";
+          setCropMode("full");
+          try {
+            window.localStorage.setItem("stashTok.crop", "full");
+          } catch (e) {
+            /* ignore */
+          }
+          applyCrop("full", true);
+          window.clearTimeout(cropBadgeTimer.current);
+          setCropBadge(cropLabel("full"));
+          cropBadgeTimer.current = window.setTimeout(() => setCropBadge(""), 900);
           return;
         }
         const now = performance.now();
-        const isDouble = lastTapAt.current && now - lastTapAt.current < 280;
-        lastTapAt.current = isDouble ? 0 : now;
+        const isDouble = lastTapAt.current && now - lastTapAt.current <= DOUBLE_TAP_MS;
         if (isDouble) {
-          // second tap: undo the toggle the first tap applied, then fill the frame
-          if (video.paused) playGuarded(video);
-          else {
+          lastTapAt.current = 0;
+          window.clearTimeout(tapTimer.current);
+          /* the first tap may already have paused (or resumed) the clip: undo it,
+             because two taps mean "zoom", not play/pause */
+          const undo = tapUndoRef.current;
+          tapUndoRef.current = null;
+          if (undo === "resume" && video.paused) playGuarded(video);
+          else if (undo === "pause" && !video.paused) {
             video.pause();
             setPlaying(false);
           }
-          toggleFill();
+          cycleCrop();
           return;
         }
-        // toggle immediately: waiting for a double-tap timer puts play() outside
-        // the user gesture, and the browser then refuses to start playback
-        if (video.paused) playGuarded(video);
-        else {
-          video.pause();
-          setPlaying(false);
+        lastTapAt.current = now;
+        tapUndoRef.current = null;
+        if (video.paused) {
+          /* resuming has to happen inside the gesture or the browser refuses to
+             start playback; a following double tap pauses it again */
+          playGuarded(video);
+          tapUndoRef.current = "pause";
+          return;
         }
+        /* hold the pause for one double-tap window: if a second tap lands, the
+           user meant to zoom and the clip keeps playing */
+        window.clearTimeout(tapTimer.current);
+        tapTimer.current = window.setTimeout(() => {
+          const live = activeVideo();
+          if (!live || live.paused) return;
+          live.pause();
+          setPlaying(false);
+          tapUndoRef.current = "resume";
+        }, TAP_WAIT_MS);
         return;
       }
 
@@ -2802,6 +3241,8 @@ void main() {
           ),
 
         rateBadge && h("div", { className: "stk-rate" }, rateBadge),
+
+        cropBadge && h("div", { className: "stk-rate stk-crop-badge" }, cropBadge),
 
         h(
           "div",
@@ -4239,6 +4680,8 @@ void main() {
     const gridClass = density === 5 ? "stk-grid-5" : "stk-grid-3";
 
     const sortLabel = (SCENE_SORTS.find((entry) => entry[0] === sort) || SCENE_SORTS[0])[1];
+    /* the same page in Stash, so a performer or a folder can be curated there */
+    const stashLink = stashHref(isFolder ? { folder } : { performerId });
 
     function openScene(scene) {
       lastOpenedSceneId = String(scene.id);
@@ -4257,6 +4700,20 @@ void main() {
         ref: pageRef,
         onScroll: (event) => setStuck(event.currentTarget.scrollTop > 128),
       },
+      stashLink
+        ? h(
+            "a",
+            {
+              className: "stk-stash-link",
+              href: stashLink,
+              target: "_blank",
+              rel: "noopener noreferrer",
+              title: isFolder ? "Open this folder in Stash" : "Open this performer in Stash",
+            },
+            h(Icon, { name: "external", size: 13 }),
+            h("span", null, "View on Stash")
+          )
+        : null,
       stuck &&
         performer &&
         h(
@@ -5378,6 +5835,8 @@ void main() {
 
     const sortArg = sortClause({ sort, direction: sort === "random" ? null : "DESC" });
     const sortLabel = (FOLDER_SORTS.find((entry) => entry[0] === sort) || FOLDER_SORTS[0])[1];
+    /* the same folder in Stash, filtered the way this page queries it */
+    const stashLink = stashHref({ folder });
 
     useEffect(() => {
       let alive = true;
@@ -5611,6 +6070,20 @@ void main() {
         ref: pageRef,
         onScroll: (event) => setStuck(event.currentTarget.scrollTop > 128),
       },
+      stashLink
+        ? h(
+            "a",
+            {
+              className: "stk-stash-link",
+              href: stashLink,
+              target: "_blank",
+              rel: "noopener noreferrer",
+              title: "Open this folder in Stash",
+            },
+            h(Icon, { name: "external", size: 13 }),
+            h("span", null, "View on Stash")
+          )
+        : null,
       stuck &&
         h(
           "div",
@@ -6807,31 +7280,8 @@ void main() {
       };
     }, []);
 
-    /* keep the phone awake while the feed is open: it is playing video, so the
-       screen sleeping mid-scroll is never what the user wants. Re-acquired when
-       the tab becomes visible again, released when the feed unmounts. */
-    useEffect(() => {
-      let lock = null;
-      let alive = true;
-      const acquire = async () => {
-        if (!alive || document.hidden || !("wakeLock" in navigator)) return;
-        try {
-          lock = await navigator.wakeLock.request("screen");
-        } catch (e) {
-          /* permission denied or unsupported: nothing to do */
-        }
-      };
-      const onVisibility = () => {
-        if (!document.hidden) acquire();
-      };
-      acquire();
-      document.addEventListener("visibilitychange", onVisibility);
-      return () => {
-        alive = false;
-        document.removeEventListener("visibilitychange", onVisibility);
-        if (lock && lock.release) lock.release().catch(() => {});
-      };
-    }, []);
+    /* the display is held by the feed itself, only while a clip is playing:
+       see createAwake above */
 
     /* ---- routing: the URL is the source of truth --------------------- */
 
@@ -6993,14 +7443,14 @@ void main() {
         if (meta) meta.setAttribute("content", "width=device-width, initial-scale=1, maximum-scale=1");
         window.scrollTo(0, 0);
       };
-      document.documentElement.classList.add("stk-lock");
-      document.body.classList.add("stk-lock");
+      document.documentElement.classList.add("stk-noscroll");
+      document.body.classList.add("stk-noscroll");
       const timer = window.setTimeout(resetPageZoom, 60);
       if (window.visualViewport) window.visualViewport.addEventListener("resize", resetPageZoom);
 
       return () => {
-        document.documentElement.classList.remove("stk-lock");
-        document.body.classList.remove("stk-lock");
+        document.documentElement.classList.remove("stk-noscroll");
+        document.body.classList.remove("stk-noscroll");
         window.clearTimeout(timer);
         if (window.visualViewport) window.visualViewport.removeEventListener("resize", resetPageZoom);
         document.removeEventListener("touchmove", blockPinch);
@@ -7410,7 +7860,7 @@ void main() {
         h(
           "p",
           { className: "stk-sub" },
-          "Long-press the middle of the video for actions · hold the right side to fast-forward · hold the left to rewind · pinch to zoom · double-tap to heart."
+          "Long-press the middle of the video for actions · hold the right side to fast-forward · hold the left to rewind · pinch to zoom · long-press then drag to move the frame · double-tap to step the crop.",
         )
       );
     } else {
@@ -7847,5 +8297,5 @@ void main() {
     );
   });
 
-  window.StashTok = { version: "0.1.0", feeds: loadFeeds };
+  window.StashTok = { version: "0.1.1", feeds: loadFeeds };
 })();

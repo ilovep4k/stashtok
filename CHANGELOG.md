@@ -4,6 +4,49 @@
 
 Desktop mode and the browsing surfaces, plus the fixes found while profiling them.
 
+### A refresh no longer comes up zoomed
+
+- The portrait crop step was remembered in `localStorage` and re-applied on load, so a
+  refresh with the last step on "fill height" reopened the feed at ~3.6x with the HUD
+  already gone: a giant cropped frame and no visible control. Only the un-zoomed step
+  ("full frame") is restored now; anything else starts from the default middle-half crop.
+- A single tap on **any** zoomed frame — crop step or pinch — now opens it to the full
+  frame and shows the "Full frame" badge, instead of being swallowed by the play/pause
+  tap. With the HUD hidden three seconds into playback, a zoomed frame must never be a
+  dead end.
+- The document scroll lock used `stk-lock`, the same class as the PIN pad overlay, so
+  `html` inherited the pad's `display:flex; position:absolute; background:#000`
+  centering for the whole session. Renamed to `stk-noscroll`.
+
+### Keep the screen awake
+
+- The phone used to sleep mid-clip. The old code asked for a wake lock once, on mount —
+  which does nothing on the LAN, because `navigator.wakeLock` exists only in a secure
+  context and Stash is served over plain `http://`. It now also runs a 2x2 px silent
+  looping clip as a blob URL (Stash's CSP is `media-src blob: 'self'`, so a `data:` video
+  would be refused), requested on the next user gesture and re-requested after every hide,
+  focus or system release. The clip runs even when the lock resolves: in low power mode
+  and in a home-screen web app before iOS 18.4 the OS ignores the lock while still
+  answering yes. It is held only while a clip is playing, and dropped when the feed closes.
+
+### Portrait auto-crop
+
+- A 16:9 (or wider) clip on a portrait screen is framed on the middle half: a quarter of
+  the width is cut from each side, so the subject fills more of the phone without losing
+  the middle. Portrait clips and landscape screens are untouched.
+- Double-tap steps the framing: auto-crop → full frame (no crop) → fill the device
+  height → auto-crop. A pinch still zooms freely; the next tap returns to the step the
+  cycle is on. The step is remembered in `localStorage` (`stashTok.crop`).
+- A single tap now pauses after a 300 ms wait, so a double tap can win. A second tap
+  inside 500 ms counts as a double tap: if the first tap already paused the clip it is
+  resumed, and the framing steps instead of the clip pausing. Resuming a paused clip
+  stays immediate, because a delayed `play()` is refused as "not a user gesture".
+- While the crop is on, a drag is still a swipe (up/down) or a scrub (sideways) — only a
+  pinch hands the gesture over to panning.
+- Long-press, then drag, grabs the frame and moves it under one finger — the pan that
+  used to need two. It only engages when the picture is larger than its box (auto-crop or
+  a pinch) and cancels the quick menu / speed hold, which need a still finger anyway.
+
 ### Desktop performance
 
 - Four simultaneous video streams were what stuttered a big desktop pane: only the card

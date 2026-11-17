@@ -271,6 +271,12 @@
   pointer-events: none;
 }
 
+/* "Crop 50%" / "Full frame" / "Fill height": the crop step a double tap chose */
+.stk-crop-badge {
+  top: auto;
+  bottom: 21%;
+}
+
 .stk-state {
   position: absolute;
   inset: 0;
@@ -498,7 +504,33 @@
 }
 
 /* ---------- performer profile ---------- */
-.stk-profile { background: #0a0a0a; }
+/* positioned so "View on Stash" can sit over the cover without being a child
+   of it: the cover is blurred in safe-for-work mode and a filter blurs
+   everything inside the element, including a button placed there */
+.stk-profile { background: #0a0a0a; position: relative; }
+.stk-stash-link {
+  position: absolute;
+  top: calc(10px + env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+.stk-stash-link:hover { background: rgba(0, 0, 0, 0.74); }
+.stk-stash-link:active { transform: translateX(-50%) scale(0.96); }
 .stk-cover {
   height: 150px;
   background-size: cover;
@@ -2636,12 +2668,12 @@ img.stk-scrub-cell {
 
 /* while the feed is mounted the document must not scroll or zoom: a scrollable
    page is what lets Safari drift into a page zoom that survives a refresh */
-html.stk-lock, body.stk-lock {
+html.stk-noscroll, body.stk-noscroll {
   overflow: hidden !important;
   height: 100% !important;
   overscroll-behavior: none;
 }
-html.stk-lock body { position: fixed; width: 100%; }
+html.stk-noscroll body { position: fixed; width: 100%; }
 .stk-fixed { height: 100dvh; max-height: 100dvh; overflow: hidden; }
 
 /* pure black & white UI: pairs with a red or greyscale screen filter */

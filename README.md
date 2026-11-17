@@ -6,17 +6,18 @@ A full-screen, TikTok-style vertical feed for [Stash](https://github.com/stashap
 
 ## What it does
 
-- **Vertical feed** — one scene per screen, 9:16 framing. 16:9 video is letterboxed and centred rather than cropped, with a blurred backdrop behind it.
+- **Vertical feed** — one scene per screen, 9:16 framing. On a portrait phone a 16:9 clip is auto-cropped to its middle half (a quarter off each side); on a wide screen it is letterboxed and centred instead, with a blurred backdrop behind it.
 - **Feeds** — For You (random), Favorites, one or many tags, a performer's scenes in date order, markers, never-played, shorts, portrait-only, or any saved Stash filter. Build and save your own feeds in the app.
 - **Gestures**
   - swipe up / down — next / previous
-  - tap — pause or resume
+  - tap — pause or resume (a 300 ms wait lets a double tap win)
+  - double-tap — step the framing: auto-crop → full frame → fill device height → auto-crop; on a clip that cannot crop it toggles fill
   - long-press the middle — actions (heart, rating, details, performers, markers)
   - hold the right side — fast-forward (rate configurable)
   - hold the left side — rewind
   - pinch — zoom the video inside the viewport; the HUD never scales
+  - long-press, then drag — move the video inside the viewport without a second finger (only while it is larger than its box)
   - drag horizontally — scrub within the scene
-  - double-tap — heart (or reset the zoom when zoomed)
 - **Scrub bar** with a tick per marker, and the marker title as you pass it.
 - **Details sheet** — file path, size, duration, resolution, codecs, bitrate, play counts, plus every performer and tag as a tappable chip.
 - **Hearts are ratings.** Stash has no scene favourite, so a heart writes `rating100` through `sceneUpdate`. Hearts therefore show up in Stash's own rating filters, and in other clients.
