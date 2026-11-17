@@ -30,9 +30,11 @@
   const FOLDER_FAV_KEY = "stashTok.folderFavs.v1";
   const PAGE_SIZE = 8;
   const HOLD_MS = 380;
-  const LONG_PRESS_MS = 250;
+  /* the quick menu owns a still finger for longer than a grab needs: a held
+     thumb that starts moving grabs the frame instead (see GRAB_MS) */
+  const LONG_PRESS_MS = 400;
   /* hold this long, then drag, and the frame moves under one finger */
-  const GRAB_MS = 220;
+  const GRAB_MS = 260;
   const SWIPE_PX = 70;
   const MAX_ZOOM = 8;
   const HEART_POP_MS = 700;
@@ -2720,20 +2722,13 @@ void main() {
       if (g.mode === "press" && !g.moved) {
         const video = activeVideo();
         if (!video) return;
-        /* anything zoomed — a pinch or a crop step — opens up to the full frame on
-           one tap. The HUD is gone three seconds into playback, so a zoomed frame
-           must never be a dead end. */
-        if (tf.current.s > 1.02) {
-          cropModeRef.current = "full";
-          setCropMode("full");
-          try {
-            window.localStorage.setItem("stashTok.crop", "full");
-          } catch (e) {
-            /* ignore */
-          }
-          applyCrop("full", true);
+        /* a pinch left the frame zoomed: the first tap returns to the framing
+           step the cycle is on. The crop's own 2x is not a pinch, so a tap at
+           crop scale still pauses. */
+        if (tf.current.s > 1.02 && !cropZoomRef.current) {
+          applyCrop(cropModeRef.current, true);
           window.clearTimeout(cropBadgeTimer.current);
-          setCropBadge(cropLabel("full"));
+          setCropBadge(cropLabel(cropModeRef.current));
           cropBadgeTimer.current = window.setTimeout(() => setCropBadge(""), 900);
           return;
         }
