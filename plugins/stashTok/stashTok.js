@@ -4857,10 +4857,10 @@ void main() {
     const [scenes, setScenes] = useState([]);
 
     /* ---- highlight reel ------------------------------------------- *
-     * The cutter lives beside Stash (tools/reel-service) and serves its own
-     * player page. It has to be a separate top-level tab: Stash's CSP allows
+     * The reel service lives beside Stash (tools/reel-service) and serves its
+     * own player page. It has to be a separate top-level tab: Stash's CSP allows
      * connect-src 'self' only, so the plugin may not fetch the service or play
-     * its MP4 in-page. window.open is a navigation, which CSP does not gate. */
+     * its streams in-page. An anchor is a navigation, which CSP does not gate. */
     const reelBase = () => {
       const asked = new URLSearchParams(window.location.search).get("reel");
       return (asked || "http://" + window.location.hostname + ":19000").replace(/\/$/, "");
