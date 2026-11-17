@@ -1696,6 +1696,15 @@ void main() {
     const tagDialogRef = useDialog(tagOpen, () => setTagOpen(false));
     const [press, setPress] = useState(null); // {x,y} pip while a long press builds
     const [quick, setQuick] = useState(null); // {x,y} quick menu anchored at the thumb
+    /* "Clear Display" hides every overlay for this clip; gestures keep working */
+    const [clearDisplay, setClearDisplay] = useState(false);
+    const [autoScroll, setAutoScroll] = useState(() => {
+      try {
+        return window.localStorage.getItem("stashTok.autoScroll") === "1";
+      } catch (e) {
+        return false;
+      }
+    });
     const [rating, setRating] = useState(null);
     const [zoom, setZoom] = useState(1);
     const [scrubbing, setScrubbing] = useState(false);
@@ -1737,6 +1746,8 @@ void main() {
     const tapUndoRef = useRef(null);
     const cropModeRef = useRef(cropMode);
     cropModeRef.current = cropMode;
+    const autoScrollRef = useRef(autoScroll);
+    autoScrollRef.current = autoScroll;
     /* true while the current transform came from the crop cycle, not a pinch */
     const cropZoomRef = useRef(false);
     const cropRefreshRef = useRef(null);
@@ -1944,6 +1955,8 @@ void main() {
       setTime((item && Number(item.startAt)) || 0);
       setRevealed(false);
       resetZoom();
+      /* "Clear Display" belongs to one clip: the next one starts with its HUD */
+      setClearDisplay(false);
       /* a tap still waiting out its double-tap window must not pause the next clip */
       window.clearTimeout(tapTimer.current);
       tapUndoRef.current = null;
@@ -1983,8 +1996,10 @@ void main() {
            triggers a refill, and this yanks the playhead forward again */
         if (positionedRef.current === item.key) return;
         positionedRef.current = item.key;
+        /* autoscroll picks its own way into the clip; otherwise the feed's start */
+        const wanted = autoScrollRef.current ? autoScrollStart(total) : start;
         // a remembered playhead can outlive the file it came from: never seek past the end
-        const seekTo = total > 0 ? Math.min(start, Math.max(0, total - 3)) : start;
+        const seekTo = total > 0 ? Math.min(wanted, Math.max(0, total - 3)) : wanted;
         seekThenPlay(video, seekTo, playGuarded);
       };
       video.addEventListener("loadedmetadata", onLoaded);
@@ -2095,9 +2110,11 @@ void main() {
     /* ---- hud auto hide --------------------------------------------- */
 
     const poke = useCallback(() => {
+      /* a cleared display stays clear: the gestures work, nothing comes back */
+      if (clearDisplay) return;
       setHud(true);
       setHudTick((n) => n + 1);
-    }, []);
+    }, [clearDisplay]);
 
     useEffect(() => {
       if (!playing || sheet || scrubbing) return;
@@ -2239,6 +2256,15 @@ void main() {
       playGuarded(video);
     }, [item]);
 
+    /** autoscroll drops the viewer into the action, never into the intro:
+        70 % of clips open a quarter to a half in, 30 % near the payoff */
+    function autoScrollStart(duration) {
+      if (!duration || !isFinite(duration)) return 0;
+      const roll = Math.random();
+      const fraction = roll < 0.7 ? 0.25 + Math.random() * 0.2 : 0.55 + Math.random() * 0.4;
+      return Math.max(0, Math.min(duration - 3, duration * fraction));
+    }
+
     const goNext = useCallback(() => {
       resetZoom();
       setDragY(0);
@@ -2254,6 +2280,20 @@ void main() {
       setPlaying(true);
       setIndex((i) => Math.max(0, i - 1));
     }, [resetZoom]);
+
+    /* ---- autoscroll -------------------------------------------------
+       A 15 s dwell per clip, restarted whenever the clip changes. It stops while
+       the viewer is paused or has a sheet/menu open, so touching the screen never
+       yanks the clip away mid-action. A clip that ends first simply advances. */
+    useEffect(() => {
+      if (!autoScroll || !playing || sheet || quick || tagOpen || people || scrubbing) return undefined;
+      const timer = window.setTimeout(() => {
+        if (document.hidden) return;
+        goNext();
+        buzz(6);
+      }, 15000);
+      return () => window.clearTimeout(timer);
+    }, [autoScroll, index, playing, sheet, quick, tagOpen, people, scrubbing, goNext]);
 
 
     /* ---- rating ---------------------------------------------------- */
@@ -2509,6 +2549,10 @@ void main() {
 
     function onPointerDown(event) {
       if (sheet) return;
+      /* a press on the quick menu belongs to its buttons: dismissing the menu on
+         pointerdown removed them before their click could fire, so every row was
+         dead and only Close-by-tapping-outside worked */
+      if (event.target && event.target.closest && event.target.closest(".stk-quick-menu")) return;
       if (quick) {
         setQuick(null);
         return;
@@ -2972,7 +3016,7 @@ void main() {
 
     return h(
       "div",
-      { className: "stash-tok stk-embedded" + (hud ? "" : " stk-hud-hidden") },
+      { className: "stash-tok stk-embedded" + (hud && !clearDisplay ? "" : " stk-hud-hidden") + (clearDisplay ? " stk-clear" : "") },
       h(
         "div",
         {
@@ -3074,7 +3118,7 @@ void main() {
                 onTimeUpdate: active ? onTimeUpdate : undefined,
                 onPlay: active ? () => setPlaying(true) : undefined,
                 onPause: active ? () => setPlaying(false) : undefined,
-                onEnded: active ? loopCurrent : undefined,
+                onEnded: active ? (autoScroll ? goNext : loopCurrent) : undefined,
                 onError: active
                   ? () => {
                       setPlaying(false);
@@ -3152,6 +3196,18 @@ void main() {
               style: { left: `${quick.x}px`, top: `${quick.y}px` },
             },
             h(
+              "button",
+              {
+                className: "stk-qm-danger",
+                onClick: () => {
+                  setQuick(null);
+                  flagCurrent();
+                },
+              },
+              h(Icon, { name: "flag", size: 15 }),
+              "Mark for Delete"
+            ),
+            h(
               "div",
               { className: "stk-qm-speed" },
               h("span", { className: "stk-qm-speed-label" }, "Speed"),
@@ -3178,16 +3234,41 @@ void main() {
             h(
               "button",
               {
+                className: "stk-qm-wide",
                 onClick: () => {
                   setQuick(null);
-                  flagCurrent();
+                  const on = !clearDisplay;
+                  setClearDisplay(on);
+                  if (!on) {
+                    setHud(true);
+                    setHudTick((n) => n + 1);
+                  }
+                  buzz(8);
                 },
               },
-              h(Icon, { name: "flag", size: 15 }),
-              "Flag",
-              h("span", { className: "stk-qm-key" }, "mark for delete")
+              h(Icon, { name: clearDisplay ? "rotate" : "sparkle", size: 15 }),
+              clearDisplay ? "Restore Display" : "Clear Display"
             ),
-            h("button", { onClick: () => setQuick(null) }, h(Icon, { name: "x", size: 15 }), "Close")
+            h(
+              "button",
+              {
+                className: "stk-qm-wide",
+                onClick: () => {
+                  const next = !autoScroll;
+                  setAutoScroll(next);
+                  try {
+                    window.localStorage.setItem("stashTok.autoScroll", next ? "1" : "0");
+                  } catch (e) {
+                    /* ignore */
+                  }
+                  buzz(8);
+                },
+              },
+              h(Icon, { name: "chevronDown", size: 15 }),
+              "Auto-Scroll",
+              h("span", { className: "stk-qm-state" + (autoScroll ? " stk-on" : "") }, autoScroll ? "On" : "Off")
+            ),
+            h("button", { className: "stk-qm-close", onClick: () => setQuick(null) }, h(Icon, { name: "x", size: 15 }), "Close")
           ),
 
         scrubbing &&

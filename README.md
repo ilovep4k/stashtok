@@ -12,7 +12,7 @@ A full-screen, TikTok-style vertical feed for [Stash](https://github.com/stashap
   - swipe up / down — next / previous
   - tap — pause or resume (a 300 ms wait lets a double tap win)
   - double-tap — step the framing: auto-crop → full frame → fill device height → auto-crop; on a clip that cannot crop it toggles fill
-  - long-press the middle — actions (heart, rating, details, performers, markers)
+  - long-press the middle — quick menu: Mark for Delete, Speed (0.5x/1x/2x), Clear Display, Auto-Scroll, Close
   - hold the right side — fast-forward (rate configurable)
   - hold the left side — rewind
   - pinch — zoom the video inside the viewport; the HUD never scales

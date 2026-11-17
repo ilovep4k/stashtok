@@ -2224,6 +2224,32 @@ body.stk-anim .stk-account:active {
   color: #111;
 }
 
+/* the destructive row reads as destructive, the state row carries a pill */
+.stk-quick-menu button.stk-qm-danger { color: #ff8f8f; }
+.stk-quick-menu button.stk-qm-danger svg { color: #ff8f8f; }
+.stk-qm-state {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.72);
+}
+.stk-qm-state.stk-on { background: #fff; color: #111; }
+.stk-quick-menu button.stk-qm-close { opacity: 0.82; }
+
+/* Clear Display: every overlay off, gestures untouched */
+.stk-clear .stk-timeline,
+.stk-clear .stk-pause,
+.stk-clear .stk-rate,
+.stk-clear .stk-feed-back,
+.stk-clear .stk-touch-hud {
+  opacity: 0;
+  pointer-events: none;
+}
+
 /* performers list on a wide screen: thumbnails keep their size, more per row */
 .stk-desktop .stk-page .stk-grid {
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));

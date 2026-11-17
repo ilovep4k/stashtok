@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased - quick menu, autoscroll
+
+- Quick menu, in the order it is used: **Mark for Delete** (the old flag, now named
+  plainly), **Speed** centred with 0.5x / 1x / 2x, **Clear Display**, **Auto-Scroll**,
+  **Close**.
+- **Clear Display** strips every overlay for that clip — top bar, rail, timeline, caption,
+  badges, the big pause icon — and taps no longer bring them back. Gestures keep working,
+  and the next clip restores the display. The row turns into **Restore Display** while it
+  is on, so the menu is never a dead end.
+- **Auto-Scroll** advances by itself 15 s into a clip, and opens each clip past the intro:
+  70 % of the time a quarter to a half in, 30 % of the time in the last third. It holds
+  while the clip is paused or a menu/sheet is open, and a clip that ends first just
+  advances. The switch is remembered in `localStorage` (`stashTok.autoScroll`).
+
 ## Unreleased - desktop shell, discover, favourites, thumbnails
 
 Desktop mode and the browsing surfaces, plus the fixes found while profiling them.
