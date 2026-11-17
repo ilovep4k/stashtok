@@ -1,14 +1,28 @@
 # Changelog
 
+## Unreleased - pull to refresh, near-ratio crop
+
+- **Pull to refresh**: at the first clip, pulling down shows an indicator and reloading
+  the feed once past ~120 px; anywhere else a pull down still steps back a clip.
+- **Near-ratio clips fill the screen too.** A portrait clip only a little taller than the
+  screen used to keep a hairline of black on the left and right; it is now cropped evenly
+  at the top and bottom instead (at most 20 % of the frame). A clip genuinely far off the
+  screen's ratio still letterboxes. Double tap flips between the fill and the full frame.
+- **Auto-crop is a setting**: Settings → Feed → *Auto-crop to fill*, on by default. It
+  applies to every clip regardless of what you pinched on another one.
+- Fixed a framing bug where every other clip came up uncropped: a prewarmed clip fires
+  `canplay` before it becomes active, so the reset on clip change was the last word.
+
 ## Unreleased - quick menu, autoscroll
 
 - Quick menu, in the order it is used: **Mark for Delete** (the old flag, now named
   plainly), **Speed** centred with 0.5x / 1x / 2x, **Clear Display**, **Auto-Scroll**,
   **Close**.
-- **Clear Display** strips every overlay for that clip — top bar, rail, timeline, caption,
-  badges, the big pause icon — and taps no longer bring them back. Gestures keep working,
-  and the next clip restores the display. The row turns into **Restore Display** while it
-  is on, so the menu is never a dead end.
+- **Clear Display** strips every overlay for that clip — top bar, rail, bottom tab bar,
+  caption, badges, the big pause icon — and taps no longer bring them back. Gestures keep
+  working: the timeline is invisible but still grabbable, and it fades in while you scrub.
+  The next clip restores the display, and the row turns into **Restore Display** so the
+  menu is never a dead end. The quick menu is 30 % wider now that its rows carry words.
 - **Auto-Scroll** advances by itself 15 s into a clip, and opens each clip past the intro:
   70 % of the time a quarter to a half in, 30 % of the time in the last third. It holds
   while the clip is paused or a menu/sheet is open, and a clip that ends first just

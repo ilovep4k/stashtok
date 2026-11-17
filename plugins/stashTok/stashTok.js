@@ -36,6 +36,8 @@
   /* hold this long, then drag, and the frame moves under one finger */
   const GRAB_MS = 260;
   const SWIPE_PX = 70;
+  /* pull the first clip down this far to reload the feed */
+  const REFRESH_PX = 120;
   const MAX_ZOOM = 8;
   const HEART_POP_MS = 700;
   /* portrait auto-crop: 25 % of the width off each side leaves the middle half */
@@ -889,7 +891,8 @@
     performerMarkers: true,
     foldersOnTop: true,
     showPath: false,
-    fitWindow: true,
+    /* portrait framing: on unless turned off in Settings */
+    autoCrop: true,
     mono: false,
     favoritesSort: "updated_at",
     favoritesOpen: "gallery",
@@ -1899,6 +1902,7 @@ void main() {
       [spec, cfg]
     );
 
+    const [refreshTick, setRefreshTick] = useState(0);
     useEffect(() => {
       pageRef.current = 1;
       exhaustedRef.current = false;
@@ -1906,7 +1910,7 @@ void main() {
       setIndex(0);
       loadPage(true);
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [spec.id, spec.type, refreshKey, cfg.heartRating, cfg.source]);
+    }, [spec.id, spec.type, refreshKey, cfg.heartRating, cfg.source, refreshTick]);
 
     useEffect(() => {
       const stage = stageRef.current;
@@ -1954,7 +1958,10 @@ void main() {
       setDuration(0);
       setTime((item && Number(item.startAt)) || 0);
       setRevealed(false);
-      resetZoom();
+      /* reset the user's pinch AND put the clip's framing back: a prewarmed clip
+         fires canplay before it becomes active, so waiting for that event here
+         left every second clip uncropped */
+      applyCrop(cropModeRef.current, false);
       /* "Clear Display" belongs to one clip: the next one starts with its HUD */
       setClearDisplay(false);
       /* a tap still waiting out its double-tap window must not pause the next clip */
@@ -2122,6 +2129,13 @@ void main() {
       return () => window.clearTimeout(timer);
     }, [playing, sheet, scrubbing, hudTick, index]);
 
+    /* the bottom tab bar sits outside this view, so clear mode reaches it through
+       the body; the effect cleanup keeps it off every other screen */
+    useEffect(() => {
+      document.body.classList.toggle("stk-clear-mode", clearDisplay);
+      return () => document.body.classList.remove("stk-clear-mode");
+    }, [clearDisplay]);
+
     /* ---- zoom ------------------------------------------------------ */
 
     const playGuarded = useCallback((video) => {
@@ -2171,52 +2185,89 @@ void main() {
        cycle only decides where a double tap starts from. */
 
     const CROP_SCALE = 1 / (1 - CROP_SIDE * 2);
+    /* a clip only a hair off the screen's ratio is filled too: the bars are all
+       the crop removes, so it may lose at most this share of the frame */
+    const NEAR_RATIO = 0.2;
 
-    /** 16:9-and-wider source on a screen taller than it is wide */
-    const cropEligible = useCallback(() => {
+    /** why this clip wants cropping: "wide" (16:9 on a phone), "near" (a hair
+        off, so the bars are the only thing lost), or "" for leave it alone. */
+    const cropKind = useCallback(() => {
+      /* Settings → Auto-crop to fill; on unless the user turned it off */
+      if (prefs.autoCrop === false) return "";
       const video = activeVideo();
       const stage = stageRef.current;
-      if (!video || !stage) return false;
+      if (!video || !stage) return "";
       const vw = video.videoWidth || 0;
       const vh = video.videoHeight || 0;
       const sw = stage.clientWidth || 0;
       const sh = stage.clientHeight || 0;
-      if (!vw || !vh || !sw || !sh) return false;
-      /* 4:3 clips are left alone; this is about 16:9 and wider */
-      return vw / vh >= 1.5 && sh > sw;
-    }, [activeVideo]);
+      if (!vw || !vh || !sw || !sh) return "";
+      /* only a tall screen is worth filling; a wide pane keeps its letterbox */
+      if (sh <= sw) return "";
+      const vr = vw / vh;
+      const sr = sw / sh;
+      if (vr >= 1.5) return "wide";
+      const lost = vr > sr ? 1 - sr / vr : 1 - vr / sr;
+      return lost <= NEAR_RATIO ? "near" : "";
+    }, [activeVideo, prefs.autoCrop]);
+
+    const cropEligible = useCallback(() => !!cropKind(), [cropKind]);
+
+    /** the scale a framing step lands on; "auto" is the middle half of a wide
+        clip and a plain fill for one nearly the screen's ratio */
+    const cropScaleFor = (mode, kind) => {
+      if (mode === "full") return 1;
+      const cover = clamp(coverScale(), 1, MAX_ZOOM);
+      if (mode === "height") return cover;
+      return kind === "wide" ? CROP_SCALE : cover;
+    };
+
+    /** is the frame zoomed by the user (a pinch) rather than by the crop step?
+        Derived from the numbers, because a stale flag here swallows a tap. */
+    const userZoomed = useCallback(() => {
+      const s = tf.current.s;
+      if (s <= 1.02) return false;
+      const kind = cropKind();
+      if (!kind) return true;
+      return Math.abs(s - cropScaleFor(cropModeRef.current, kind)) > 0.02;
+    }, [cropKind]);
 
     const applyCrop = useCallback(
       (mode, animate) => {
         if (!activeVideo()) return;
-        if (!cropEligible()) {
+        const kind = cropKind();
+        if (!kind) {
           tf.current = { s: 1, x: 0, y: 0 };
           cropZoomRef.current = false;
           applyTransform(animate);
           return;
         }
-        /* "height" is exactly what `cover` means for a wide clip on a tall screen */
-        const s = mode === "full" ? 1 : mode === "height" ? clamp(coverScale(), 1, MAX_ZOOM) : CROP_SCALE;
+        const s = cropScaleFor(mode, kind);
         tf.current = { s, x: 0, y: 0 };
         cropZoomRef.current = s > 1.02;
         applyTransform(animate);
       },
-      [activeVideo, cropEligible, applyTransform]
+      [activeVideo, cropKind, applyTransform]
     );
 
     cropRefreshRef.current = () => applyCrop(cropModeRef.current, false);
 
-    const cropLabel = (mode) => (mode === "full" ? "Full frame" : mode === "height" ? "Fill height" : "Crop 50%");
+    const cropLabel = (mode) =>
+      mode === "full" ? "Full frame" : mode === "height" ? "Fill height" : cropKind() === "wide" ? "Crop 50%" : "Fill frame";
 
-    /** double tap: auto → full → height → auto. On a clip that cannot crop,
-        the old fill toggle still applies. */
+    /** double tap: auto → full → height → auto. A near-ratio portrait clip has
+        only two useful framings (fill and full frame), so it flips between them. */
     const cycleCrop = useCallback(() => {
-      if (!cropEligible()) {
+      const kind = cropKind();
+      if (!kind) {
         toggleFill();
         return;
       }
       const current = cropModeRef.current;
-      const next = current === "auto" ? "full" : current === "full" ? "height" : "auto";
+      const next =
+        kind === "near"
+          ? current === "full" ? "auto" : "full"
+          : current === "auto" ? "full" : current === "full" ? "height" : "auto";
       cropModeRef.current = next;
       setCropMode(next);
       try {
@@ -2229,7 +2280,7 @@ void main() {
       setCropBadge(cropLabel(next));
       cropBadgeTimer.current = window.setTimeout(() => setCropBadge(""), 900);
       buzz(6);
-    }, [applyCrop, cropEligible]);
+    }, [applyCrop, cropKind]);
 
     useLayoutEffect(() => {
       const el = quickRef.current;
@@ -2280,6 +2331,15 @@ void main() {
       setPlaying(true);
       setIndex((i) => Math.max(0, i - 1));
     }, [resetZoom]);
+
+    /** pull-to-refresh at the top of the feed: refetch page 1 and start over */
+    const refreshFeed = useCallback(() => {
+      buzz(12);
+      setRefreshTick((n) => n + 1);
+      window.clearTimeout(cropBadgeTimer.current);
+      setCropBadge("Refreshed");
+      cropBadgeTimer.current = window.setTimeout(() => setCropBadge(""), 900);
+    }, []);
 
     /* ---- autoscroll -------------------------------------------------
        A 15 s dwell per clip, restarted whenever the clip changes. It stops while
@@ -2701,7 +2761,7 @@ void main() {
         clearPress();
         /* pan only a zoom the fingers made: the crop cycle is already 2x, and
            treating that as "zoomed" would turn every swipe into a pan */
-        if (tf.current.s > 1.02 && !cropZoomRef.current) {
+        if (userZoomed()) {
           g.mode = "pan";
           g.panX = tf.current.x;
           g.panY = tf.current.y;
@@ -2769,7 +2829,7 @@ void main() {
         /* a pinch left the frame zoomed: the first tap returns to the framing
            step the cycle is on. The crop's own 2x is not a pinch, so a tap at
            crop scale still pauses. */
-        if (tf.current.s > 1.02 && !cropZoomRef.current) {
+        if (userZoomed()) {
           applyCrop(cropModeRef.current, true);
           window.clearTimeout(cropBadgeTimer.current);
           setCropBadge(cropLabel(cropModeRef.current));
@@ -2823,6 +2883,17 @@ void main() {
         if (!direction || !wrap || !height) {
           setDragY(0);
           if (wrap) wrap.style.transition = "";
+        } else if (direction < 0 && index === 0) {
+          /* nothing above the first clip, so a pull down is a refresh */
+          const armed = dragY >= REFRESH_PX;
+          setDragY(0);
+          if (wrap) {
+            wrap.style.transition = "transform 220ms cubic-bezier(.22,.61,.36,1)";
+            window.setTimeout(() => {
+              wrap.style.transition = "";
+            }, 240);
+          }
+          if (armed) refreshFeed();
         } else {
           // slide the strip out, then swap underneath it with no return animation
           const duration = 190;
@@ -3147,6 +3218,19 @@ void main() {
             }),
         ),
 
+
+        /* the first clip has nothing above it: pulling down reloads the feed */
+        index === 0 &&
+          dragY > 8 &&
+          h(
+            "div",
+            {
+              className: "stk-pull" + (dragY >= REFRESH_PX ? " stk-armed" : ""),
+              style: { opacity: Math.min(1, dragY / 90) },
+            },
+            h(Icon, { name: "rotate", size: 16 }),
+            dragY >= REFRESH_PX ? "Release to refresh" : "Pull to refresh"
+          ),
 
         press &&
           h("div", {
@@ -6909,8 +6993,8 @@ void main() {
       ),
       h(
         PrefRow,
-        { title: "Fit to window", hint: "Letterbox a clip rather than crop more than 25% of the frame" },
-        h(PrefToggle, { label: "Fit to window", on: prefs.fitWindow !== false, onChange: (value) => setPref("fitWindow", value) })
+        { title: "Auto-crop to fill", hint: "Fill a portrait screen: the middle half of a 16:9 clip, or an even top-and-bottom crop when a clip is only a little off the screen's ratio. Off = always letterbox." },
+        h(PrefToggle, { label: "Auto-crop", on: prefs.autoCrop !== false, onChange: (value) => setPref("autoCrop", value) })
       ),
       h(
         PrefRow,

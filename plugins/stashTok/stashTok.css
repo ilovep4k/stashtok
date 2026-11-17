@@ -1866,7 +1866,8 @@
      off against the bottom nav */
   position: fixed;
   z-index: 90;
-  min-width: 168px;
+  /* 30% wider than the original 168px: the rows carry words, not icons */
+  min-width: 218px;
   padding: 6px;
   background: rgba(16, 16, 16, 0.97);
   border: 1px solid rgba(255, 255, 255, 0.14);
@@ -2240,8 +2241,34 @@ body.stk-anim .stk-account:active {
 .stk-qm-state.stk-on { background: #fff; color: #111; }
 .stk-quick-menu button.stk-qm-close { opacity: 0.82; }
 
-/* Clear Display: every overlay off, gestures untouched */
-.stk-clear .stk-timeline,
+/* pull-to-refresh indicator, only above the first clip */
+.stk-pull {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 7;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 12.5px;
+  pointer-events: none;
+  transition: background 140ms ease, color 140ms ease;
+}
+.stk-pull.stk-armed {
+  background: #fff;
+  color: #111;
+  border-color: #fff;
+}
+.stk-pull.stk-armed svg { transform: rotate(180deg); }
+
+/* Clear Display: every overlay off, gestures untouched — the timeline keeps its
+   hit area (grab it blind), it just fades in while a scrub is in progress */
 .stk-clear .stk-pause,
 .stk-clear .stk-rate,
 .stk-clear .stk-feed-back,
@@ -2249,6 +2276,11 @@ body.stk-anim .stk-account:active {
   opacity: 0;
   pointer-events: none;
 }
+.stk-clear .stk-timeline { opacity: 0; }
+.stk-clear .stk-timeline.stk-scrubbing { opacity: 1; }
+
+/* the bottom tab bar is rendered by the app shell, outside the feed */
+body.stk-clear-mode .stk-nav { display: none; }
 
 /* performers list on a wide screen: thumbnails keep their size, more per row */
 .stk-desktop .stk-page .stk-grid {
