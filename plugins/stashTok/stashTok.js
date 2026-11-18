@@ -7150,25 +7150,216 @@ void main() {
     { type: "saved", label: "Saved filter", hint: "Reuse a filter from Stash" },
   ];
 
+  /* Type-to-search tag field: results come from the library as you type, so any
+     tag in the library can be picked (the old picker only listed the top 200 by
+     scene count). Escape closes the results before the sheet. */
+  function TagPicker({ selected, onToggle }) {
+    const [query, setQuery] = useState("");
+    const [rows, setRows] = useState([]);
+    const [names, setNames] = useState({});
+    const [open, setOpen] = useState(false);
+    const [cursor, setCursor] = useState(-1);
+    const [busy, setBusy] = useState(false);
+    const rootRef = useRef(null);
+    const selKey = selected.join(",");
+
+    /* chips for tags that came from an existing feed have no name yet */
+    useEffect(() => {
+      const missing = selected.filter((id) => !names[id]);
+      if (!missing.length) return undefined;
+      let alive = true;
+      const body = missing
+        .map((id, index) => `t${index}: findTag(id: ${JSON.stringify(String(id))}) { id name }`)
+        .join(" ");
+      gql(`query StashTokTagNames { ${body} }`)
+        .then((data) => {
+          if (!alive) return;
+          const add = {};
+          Object.keys(data || {}).forEach((key) => {
+            const tag = data[key];
+            if (tag) add[tag.id] = tag.name;
+          });
+          setNames((current) => Object.assign({}, current, add));
+        })
+        .catch(() => undefined);
+      return () => {
+        alive = false;
+      };
+    }, [selKey]);
+
+    useEffect(() => {
+      if (!open) return undefined;
+      let alive = true;
+      setBusy(true);
+      const timer = window.setTimeout(() => {
+        gql(
+          `query StashTokTagPick($q: String!) {
+            findTags(filter: { q: $q, per_page: 8, sort: "scenes_count", direction: DESC }) {
+              count
+              tags { id name scene_count }
+            }
+          }`,
+          { q: query.trim() }
+        )
+          .then((data) => {
+            if (!alive) return;
+            const list = (data.findTags && data.findTags.tags) || [];
+            const add = {};
+            list.forEach((tag) => {
+              add[tag.id] = tag.name;
+            });
+            if (Object.keys(add).length) setNames((current) => Object.assign({}, current, add));
+            setRows(list);
+            setCursor(list.length ? 0 : -1);
+            setBusy(false);
+          })
+          .catch(() => {
+            if (!alive) return;
+            setRows([]);
+            setCursor(-1);
+            setBusy(false);
+          });
+      }, 180);
+      return () => {
+        alive = false;
+        window.clearTimeout(timer);
+      };
+    }, [query, open]);
+
+    /* the dialog's own Escape listener is a capture handler on document, so the
+       first Escape has to be taken one node earlier or it closes the whole sheet */
+    useEffect(() => {
+      if (!open) return undefined;
+      const onKey = (event) => {
+        if (event.key !== "Escape") return;
+        event.preventDefault();
+        event.stopPropagation();
+        setOpen(false);
+      };
+      window.addEventListener("keydown", onKey, true);
+      return () => window.removeEventListener("keydown", onKey, true);
+    }, [open]);
+
+    useEffect(() => {
+      if (!open) return undefined;
+      const onDown = (event) => {
+        if (rootRef.current && !rootRef.current.contains(event.target)) setOpen(false);
+      };
+      document.addEventListener("mousedown", onDown);
+      return () => document.removeEventListener("mousedown", onDown);
+    }, [open]);
+
+    function pick(tag) {
+      if (!tag) return;
+      onToggle(tag.id);
+      setQuery("");
+      setOpen(true);
+    }
+
+    function onKeyDown(event) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        if (!open) setOpen(true);
+        else setCursor((current) => Math.min(current + 1, rows.length - 1));
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setCursor((current) => Math.max(current - 1, 0));
+        return;
+      }
+      if (event.key === "Enter") {
+        event.preventDefault();
+        if (open && rows.length) pick(rows[cursor >= 0 ? cursor : 0]);
+        return;
+      }
+      if (event.key === "Backspace" && !query && selected.length) {
+        onToggle(selected[selected.length - 1]);
+        return;
+      }
+      if (event.key === "Tab") setOpen(false);
+    }
+
+    return h(
+      "div",
+      { className: "stk-tagac", ref: rootRef },
+      selected.length > 0 &&
+        h(
+          "div",
+          { className: "stk-tagac-chips" },
+          selected.map((id) =>
+            h(
+              "button",
+              { key: id, className: "stk-tagac-chip", onClick: () => onToggle(id), title: "Remove tag" },
+              h("span", null, names[id] || "Tag " + id),
+              h("b", null, "×")
+            )
+          )
+        ),
+      h(
+        "div",
+        { className: "stk-tagac-field" },
+        h(Icon, { name: "search", size: 14 }),
+        h("input", {
+          type: "text",
+          className: "stk-tagac-input",
+          placeholder: selected.length ? "Add another tag" : "Type a tag name",
+          value: query,
+          autoComplete: "off",
+          autoCorrect: "off",
+          autoCapitalize: "off",
+          spellCheck: false,
+          onChange: (event) => {
+            setQuery(event.currentTarget.value);
+            setOpen(true);
+          },
+          onFocus: () => setOpen(true),
+          onKeyDown,
+        }),
+        busy && h("span", { className: "stk-tagac-busy" }, "…")
+      ),
+      open &&
+        h(
+          "div",
+          { className: "stk-tagac-menu" },
+          rows.length === 0
+            ? h(
+                "div",
+                { className: "stk-tagac-empty" },
+                busy ? "Searching…" : query.trim() ? `No tags match “${query.trim()}”` : "No tags found"
+              )
+            : rows.map((tag, index) => {
+                const on = selected.indexOf(tag.id) >= 0;
+                return h(
+                  "button",
+                  {
+                    key: tag.id,
+                    className:
+                      "stk-tagac-row" + (index === cursor ? " stk-hot" : "") + (on ? " stk-on" : ""),
+                    onMouseEnter: () => setCursor(index),
+                    onClick: () => pick(tag),
+                  },
+                  h("span", null, tag.name),
+                  h("b", null, on ? "✓" : tag.scene_count)
+                );
+              })
+        )
+    );
+  }
+
   function FeedBuilder({ spec, feeds, onSave, onDelete, onClose, onUse }) {
     const dialogRef = useDialog(true, onClose);
     const [draft, setDraft] = useState(
       spec || { name: "New feed", type: "foryou", tags: [], tagMode: "OR" }
     );
-    const [tags, setTags] = useState([]);
     const [savedFilters, setSavedFilters] = useState([]);
-    const [tagQuery, setTagQuery] = useState("");
 
     useEffect(() => {
-      gql(`query StashTokTagPicker { findTags(filter: { per_page: 200, sort: "scenes_count", direction: DESC }) { tags { id name scene_count } } }`)
-        .then((data) => setTags(data.findTags.tags))
-        .catch(() => setTags([]));
       gql(`query StashTokSavedFilters { findSavedFilters(mode: SCENES) { id name } }`)
         .then((data) => setSavedFilters(data.findSavedFilters || []))
         .catch(() => setSavedFilters([]));
     }, []);
 
-    const filteredTags = tags.filter((tag) => !tagQuery || tag.name.toLowerCase().includes(tagQuery.toLowerCase()));
     const selected = new Set(draft.tags || []);
 
     function toggleTag(id) {
@@ -7232,47 +7423,24 @@ void main() {
           )
         ),
 
-        draft.type === "tags" &&
+        /* tags narrow every feed type, not only the "Tags" one, so the field is
+           always on screen instead of hiding behind a type choice */
+        h("h4", null, "Tags"),
+        h("p", { className: "stk-hint" }, "Optional — type a tag name and pick it from the results."),
+        h(TagPicker, { selected: Array.from(selected), onToggle: toggleTag }),
+        selected.size > 0 &&
           h(
-            React.Fragment,
-            null,
+            "div",
+            { style: { display: "flex", gap: "8px", marginTop: "8px", alignItems: "center" } },
             h(
-              "div",
-              { style: { display: "flex", gap: "8px", marginTop: "12px", alignItems: "center" } },
-              h(
-                "button",
-                {
-                  className: "stk-btn",
-                  onClick: () => setDraft(Object.assign({}, draft, { tagMode: draft.tagMode === "AND" ? "OR" : "AND" })),
-                },
-                draft.tagMode === "AND" ? "All tags (AND)" : "Any tag (OR)"
-              ),
-              h("span", { style: { fontSize: "11px", color: "rgba(255,255,255,.5)" } }, `${selected.size} selected`)
+              "button",
+              {
+                className: "stk-btn",
+                onClick: () => setDraft(Object.assign({}, draft, { tagMode: draft.tagMode === "AND" ? "OR" : "AND" })),
+              },
+              draft.tagMode === "AND" ? "All tags (AND)" : "Any tag (OR)"
             ),
-            h("input", {
-              type: "search",
-              placeholder: "Filter tags",
-              value: tagQuery,
-              onChange: (event) => setTagQuery(event.currentTarget.value),
-              style: { width: "100%", margin: "10px 0", padding: "8px 10px", borderRadius: "9px", background: "#171717", border: "1px solid #2a2a2a", color: "#fff" },
-            }),
-            h(
-              "div",
-              { style: { maxHeight: "220px", overflowY: "auto" } },
-              filteredTags.map((tag) =>
-                h(
-                  "button",
-                  {
-                    key: tag.id,
-                    className: "stk-tagpill",
-                    style: selected.has(tag.id) ? { background: "#243", borderColor: "#3a7" } : undefined,
-                    onClick: () => toggleTag(tag.id),
-                  },
-                  tag.name,
-                  h("b", null, tag.scene_count)
-                )
-              )
-            )
+            h("span", { style: { fontSize: "11px", color: "rgba(255,255,255,.5)" } }, `${selected.size} selected`)
           ),
 
         draft.type === "saved" &&

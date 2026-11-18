@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased - tag autocomplete in the feed builder
+
+- **New feed → Tags is a type-to-search field.** Any tag in the library can be picked
+  from a live results list (debounced 180 ms, `findTags(filter:{q})` sorted by scene
+  count), with ↑/↓/Enter to pick, chips to remove and Backspace on an empty field to
+  drop the last one. Escape clears the results before it closes the sheet.
+- **Tags are no longer hidden behind the "Tags" feed type.** The field sits under *How
+  recent* for every feed, so "For You", "Fresh", "Markers" and the rest can all be
+  narrowed by tag; the AND/OR switch appears once a tag is picked. Saved feeds reload
+  their chips by name (`findTag(id)`) even when the tag is outside the top 200.
+
 ## Unreleased - View on Stash
 
 - A **View on Stash** pill centred at the top of every profile opens the same page in
