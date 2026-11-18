@@ -1173,6 +1173,10 @@
 .stk-search-head { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
 .stk-search-back { background: none; border: 0; color: #fff; display: inline-flex; padding: 4px; }
 .stk-search-back svg { transform: rotate(180deg); }
+.stk-search-reel { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+  width: 38px; height: 38px; border-radius: 10px; color: #fff; text-decoration: none;
+  background: rgba(255,255,255,.06); border: 1px solid #2a2a2a; }
+.stk-search-reel:hover { background: rgba(255,255,255,.12); }
 .stk-search-input {
   flex: 1 1 auto;
   padding: 10px 12px;
@@ -2055,7 +2059,12 @@ body.stk-anim .stk-account:active {
 .stk-desktop .stk-fixed {
   background: #101010 !important;
   padding-left: 240px;
+  transition: padding-left 0.18s ease;
 }
+
+/* the rail tucks away to an icon strip whenever the pointer is elsewhere, so the
+   video gets the width back; pinning it keeps it open */
+.stk-desktop.stk-rail-min .stk-fixed { padding-left: 64px; }
 
 .stk-desktop .stk-desk-rail {
   position: fixed;
@@ -2070,9 +2079,19 @@ body.stk-anim .stk-account:active {
   background: #0a0a0a;
   border-right: 1px solid rgba(255, 255, 255, 0.07);
   z-index: 9100;
+  overflow: hidden;
+  transition: width 0.18s ease, padding 0.18s ease;
+}
+
+.stk-desktop .stk-desk-rail.stk-min {
+  width: 64px;
+  padding: 22px 10px;
 }
 
 .stk-desk-logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 22px;
   font-weight: 800;
   letter-spacing: -0.4px;
@@ -2080,7 +2099,35 @@ body.stk-anim .stk-account:active {
   padding: 4px 10px 18px;
 }
 
+.stk-desk-mark { display: none; }
+.stk-desk-word { flex: 1; }
+
+.stk-desk-rail.stk-min .stk-desk-logo { padding: 4px 0 18px; justify-content: center; }
+.stk-desk-rail.stk-min .stk-desk-mark { display: inline; }
+.stk-desk-rail.stk-min .stk-desk-word { display: none; }
+
+/* the pin: latch the rail open instead of letting it shrink on mouse-out */
+.stk-desk-pin {
+  border: 0;
+  background: none;
+  color: rgba(255, 255, 255, 0.45);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s ease, background 0.15s ease, transform 0.18s ease;
+}
+.stk-desk-pin:hover { color: #fff; background: rgba(255, 255, 255, 0.08); }
+.stk-desk-pin.stk-on { color: #fe2c55; }
+.stk-desk-rail.stk-min .stk-desk-pin { transform: rotate(180deg); }
+.stk-desk-rail.stk-min .stk-desk-pin { margin: 0 auto; }
+
 .stk-desk-link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
   text-align: left;
   padding: 11px 12px;
   border: 0;
@@ -2090,23 +2137,123 @@ body.stk-anim .stk-account:active {
   font-size: 15px;
   font-weight: 600;
   cursor: pointer;
+  white-space: nowrap;
 }
+
+.stk-desk-link svg { flex: 0 0 auto; }
+.stk-desk-link span { overflow: hidden; text-overflow: ellipsis; }
+
+.stk-desk-rail.stk-min .stk-desk-link {
+  justify-content: center;
+  padding: 11px 0;
+  gap: 0;
+}
+.stk-desk-rail.stk-min .stk-desk-link span { display: none; }
+
+.stk-desk-link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  white-space: nowrap;
+}
+
+.stk-desk-link svg { flex: 0 0 auto; opacity: .82; }
+.stk-desk-link.stk-on svg { opacity: 1; }
 
 .stk-desk-link:hover { background: rgba(255, 255, 255, 0.06); }
 .stk-desk-link.stk-on { background: rgba(254, 44, 85, 0.14); color: #fff; }
 
-/* the video pane: one rounded rectangle holding video, rail, caption, timeline */
-/* desktop: the whole player (video, handle, timeline) lives in one rounded card */
+/* ---- the rail collapses to icons when the pointer leaves it ---- */
+.stk-desk-logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.stk-desk-mark { display: none; font-size: 20px; font-weight: 800; letter-spacing: -0.4px; }
+.stk-desk-pin {
+  margin-left: auto;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, .06);
+  color: #9a9a9a;
+  cursor: pointer;
+  transition: transform .18s ease, color .15s ease, background .15s ease;
+}
+.stk-desk-pin:hover { background: rgba(255, 255, 255, .12); color: #fff; }
+.stk-desk-pin.stk-on { background: rgba(254, 44, 85, .18); color: #ff2d55; }
+
+.stk-desktop .stk-desk-rail {
+  transition: width .22s cubic-bezier(.4, 0, .2, 1), padding .22s cubic-bezier(.4, 0, .2, 1);
+}
+.stk-desktop.stash-tok-wrap,
+.stk-desktop .stk-fixed {
+  transition: padding-left .22s cubic-bezier(.4, 0, .2, 1);
+}
+
+.stk-desktop.stk-rail-min .stk-fixed { padding-left: 64px; }
+.stk-desktop.stk-rail-min .stk-desk-rail { width: 64px; padding: 22px 10px; }
+.stk-desktop.stk-rail-min .stk-desk-logo { justify-content: center; padding: 4px 0 18px; }
+.stk-desktop.stk-rail-min .stk-desk-word { display: none; }
+.stk-desktop.stk-rail-min .stk-desk-mark { display: inline; }
+.stk-desktop.stk-rail-min .stk-desk-pin { margin-left: 0; position: absolute; top: 8px; right: 8px; }
+.stk-desktop.stk-rail-min .stk-desk-link { justify-content: center; padding: 11px 0; gap: 0; }
+.stk-desktop.stk-rail-min .stk-desk-link span { display: none; }
+.stk-desktop.stk-rail-min .stk-desk-link svg { opacity: 1; }
+
+/* ---- icons in the rail, and a rail that shrinks when the pointer leaves ---- */
+
+.stk-desk-rail { transition: width 0.18s ease, padding 0.18s ease; overflow: hidden; }
+
+.stk-desk-logo { display: flex; align-items: center; gap: 8px; }
+.stk-desk-mark { display: none; font-size: 20px; font-weight: 800; color: #ff2d55; }
+
+.stk-desk-pin {
+  margin-left: auto;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+}
+.stk-desk-pin:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
+.stk-desk-pin.stk-on { background: rgba(254, 44, 85, 0.16); color: #fff; }
+.stk-desk-rail:not(.stk-min) .stk-desk-pin svg { transform: rotate(180deg); }
+
+.stk-desk-link { display: flex; align-items: center; gap: 12px; white-space: nowrap; }
+.stk-desk-link svg { flex: none; opacity: 0.85; }
+.stk-desk-link.stk-on svg { opacity: 1; }
+
+/* collapsed: icon-only column, the pane takes the width back */
+.stk-desktop.stk-rail-min .stk-fixed { padding-left: 64px; }
+.stk-desktop.stk-rail-min .stk-desk-rail { width: 64px; padding: 22px 10px; }
+.stk-rail-min .stk-desk-word,
+.stk-rail-min .stk-desk-link span { display: none; }
+.stk-rail-min .stk-desk-mark { display: inline; }
+.stk-rail-min .stk-desk-logo { flex-direction: column; gap: 8px; padding: 2px 0 12px; }
+.stk-rail-min .stk-desk-pin { margin: 0; }
+.stk-rail-min .stk-desk-link { justify-content: center; padding: 11px 0; }
+
+/* the video pane: edge to edge, no card. A full-bleed player reads as the whole
+   screen and hands the clip every pixel; the sidebar is the only chrome left. */
 .stk-desktop .stash-tok {
-  /* fills everything right of the sidebar: the clip stays centred, edges run outward */
-  width: calc(100% - 40px);
+  width: 100%;
   max-width: none;
-  height: calc(100vh - 40px);
-  margin: 20px auto;
-  border-radius: 24px;
+  height: 100vh;
+  height: 100dvh;
+  margin: 0;
+  border-radius: 0;
   overflow: hidden;
   background: #000;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.09), 0 18px 50px rgba(0, 0, 0, 0.6);
+  box-shadow: none;
   position: relative;
   inset: auto;
 }
@@ -3379,3 +3526,34 @@ html.stk-mono { filter: grayscale(1) contrast(1.06); }
   background: #000;
 }
 .stk-reel-sfw { filter: blur(26px) saturate(.8); }
+
+/* ---------------- tablet (iPad): tab bar, never the mouse rail ----------------
+   An iPad is wide enough to trip the 900px desktop breakpoint, but a finger wants
+   the bottom tab bar, not a hover sidebar. These rules only ever apply with
+   .stk-tablet on the shell; a real desktop is untouched. */
+.stk-tablet.stash-tok-wrap .stk-desk-rail { display: none !important; }
+.stk-tablet .stk-fixed { padding-left: 0 !important; }
+
+/* iPadOS reserves the bottom edge for the app-switch / dock swipe: keep the tab
+   bar clear of it even on iPads whose safe-area inset is 0 (no home indicator). */
+.stk-tablet .stk-nav {
+  padding-bottom: calc(6px + max(env(safe-area-inset-bottom, 0px), 14px));
+}
+.stk-tablet .stk-nav button { padding-bottom: 6px; }
+
+/* the scrub bar sits above the tab bar, so this only widens its grab area inward
+   instead of pushing it into the gesture strip */
+.stk-tablet .stk-timeline { bottom: 0; }
+
+/* the 520px phone column is for desktop browsers peeking at the feed; a tablet has
+   the screen for the clip, so it runs edge to edge in both orientations */
+.stk-tablet .stash-tok {
+  max-width: none;
+  width: 100%;
+  left: 0;
+  right: 0;
+  margin: 0;
+  transform: none;
+  border-left: 0;
+  border-right: 0;
+}

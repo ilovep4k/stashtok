@@ -2443,6 +2443,95 @@ void main() {
       setIndex((i) => Math.max(0, i - 1));
     }, [resetZoom]);
 
+    /* slide the strip out, swap the clip underneath it, slide back in: the same
+       motion a swipe makes, so a wheel step does not look like a hard cut */
+    const slideStep = useCallback(
+      (direction) => {
+        const wrap = wrapRef.current;
+        const stageEl = stageRef.current;
+        const height = stageEl ? stageEl.getBoundingClientRect().height : 0;
+        if (!wrap || !height) {
+          setDragY(0);
+          return;
+        }
+        const duration = 190;
+        wrap.style.transition = `transform ${duration}ms cubic-bezier(.22,.61,.36,1)`;
+        setDragY(direction > 0 ? -height : height);
+        window.setTimeout(() => {
+          wrap.style.transition = "none";
+          wrap.style.transform = "translateY(0px) rotate(0deg)";
+          if (direction > 0) goNext();
+          else goPrev();
+          setDragY(0);
+          // give React a frame to commit the swap before transitions come back
+          window.setTimeout(() => {
+            wrap.style.transition = "";
+          }, 80);
+        }, duration);
+      },
+      [goNext, goPrev]
+    );
+
+    /* ---- desktop wheel -------------------------------------------------
+       A mouse wheel or a two-finger trackpad flick is the desktop form of the
+       phone's swipe: one notch, one clip. A trackpad keeps firing wheel events
+       from inertia long after the fingers lift, so a gesture is spent once and
+       only re-arms after the wheel has been quiet for WHEEL_IDLE; a real mouse
+       notch (line/page delta, or a delta far larger than a trackpad's) counts
+       on its own. The listener is native and non-passive because React attaches
+       wheel passively, and preventDefault is what stops the page scrolling. */
+    const wheelRef = useRef({ acc: 0, at: 0, cool: 0 });
+    useEffect(() => {
+      const WHEEL_STEP = 40; // accumulated px that mean "next"
+      const WHEEL_IDLE = 260; // quiet time that starts a new gesture
+      const WHEEL_COOL = 260; // ignore the inertia tail after a step
+      /* a sheet, the details list or any other scrollable box keeps its wheel */
+      const scrolls = (el) => {
+        for (let node = el; node && node !== document.body; node = node.parentElement) {
+          if (node.nodeType !== 1) continue;
+          if (node.scrollHeight - node.clientHeight > 4) {
+            const oy = window.getComputedStyle(node).overflowY;
+            if (oy === "auto" || oy === "scroll") return true;
+          }
+        }
+        return false;
+      };
+      const onWheel = (event) => {
+        const stage = stageRef.current;
+        if (!stage || !event.target) return;
+        /* the whole feed shell answers, not just the video box: a wheel over the
+           caption, the scrub bar or the desktop rail is still "next clip". The
+           shell only holds the feed while this tab is the one on screen, and any
+           dialog is portaled to document.body, so a sheet keeps its own wheel. */
+        const shell = stage.closest(".stk-fixed") || stage;
+        if (!shell.contains(event.target)) return;
+        if (event.ctrlKey) return; // trackpad pinch-zoom
+        if (sheet || quick || people || tagOpen) return;
+        if (event.target.closest && event.target.closest(".stk-vr-canvas")) return; // VR owns its wheel
+        if (event.target.closest && event.target.closest("input, textarea, select")) return;
+        if (scrolls(event.target)) return;
+        if (!event.deltaY) return;
+        event.preventDefault();
+        const now = performance.now();
+        const w = wheelRef.current;
+        const notch = event.deltaMode !== 0 || Math.abs(event.deltaY) >= 90;
+        if (now < w.cool) {
+          w.acc = 0;
+          return;
+        }
+        if (notch || now - w.at > WHEEL_IDLE) w.acc = 0;
+        w.at = now;
+        w.acc += event.deltaY;
+        if (Math.abs(w.acc) < (notch ? 1 : WHEEL_STEP)) return;
+        const direction = w.acc > 0 ? 1 : -1;
+        w.acc = 0;
+        w.cool = now + WHEEL_COOL;
+        slideStep(direction);
+      };
+      document.addEventListener("wheel", onWheel, { passive: false });
+      return () => document.removeEventListener("wheel", onWheel);
+    }, [slideStep, sheet, quick, people, tagOpen]);
+
     /** pull-to-refresh at the top of the feed: refetch page 1 and start over */
     const refreshFeed = useCallback(() => {
       buzz(12);
@@ -3017,21 +3106,7 @@ void main() {
           }
           if (armed) refreshFeed();
         } else {
-          // slide the strip out, then swap underneath it with no return animation
-          const duration = 190;
-          wrap.style.transition = `transform ${duration}ms cubic-bezier(.22,.61,.36,1)`;
-          setDragY(direction > 0 ? -height : height);
-          window.setTimeout(() => {
-            wrap.style.transition = "none";
-            wrap.style.transform = "translateY(0px) rotate(0deg)";
-            if (direction > 0) goNext();
-            else goPrev();
-            setDragY(0);
-            // give React a frame to commit the swap before transitions come back
-            window.setTimeout(() => {
-              wrap.style.transition = "";
-            }, 80);
-          }, duration);
+          slideStep(direction);
         }
       }
       if (g.mode === "seek") {
@@ -3583,7 +3658,24 @@ void main() {
               },
             },
             h(Icon, { name: muted ? "mute" : "volume", size: 18 })
-          )
+          ),
+          /* a one-tag feed is exactly "this tag", so it gets the reel too.
+             A plain anchor: CSP blocks fetches to the service, not navigations. */
+          spec.type === "tags" && spec.tags && spec.tags.length === 1 &&
+            h(
+              "a",
+              {
+                className: "stk-top-btn",
+                title: "Highlight reel",
+                target: "_blank",
+                rel: "noopener",
+                href: reelServiceBase() + "/player?tagId=" +
+                  encodeURIComponent(String(spec.tags[0])) +
+                  "&port=" + encodeURIComponent(String(window.location.port || "")) +
+                  "&name=" + encodeURIComponent(spec.name || ""),
+              },
+              h(Icon, { name: "play", size: 18 })
+            )
         ),
 
         h(
@@ -4480,6 +4572,36 @@ void main() {
         window.removeEventListener("keydown", onKey);
       };
     }, [step, onClose]);
+
+    /* desktop wheel steps through the pictures, same notch-per-item rule as the
+       feed: a trackpad's inertia tail must not skip three images at once */
+    useEffect(() => {
+      const el = stageRef.current;
+      if (!el) return undefined;
+      let acc = 0;
+      let at = 0;
+      let cool = 0;
+      const onWheel = (event) => {
+        if (event.ctrlKey || !event.deltaY) return;
+        event.preventDefault();
+        const now = performance.now();
+        const notch = event.deltaMode !== 0 || Math.abs(event.deltaY) >= 90;
+        if (now < cool) {
+          acc = 0;
+          return;
+        }
+        if (notch || now - at > 260) acc = 0;
+        at = now;
+        acc += event.deltaY;
+        if (Math.abs(acc) < (notch ? 1 : 40)) return;
+        const direction = acc > 0 ? 1 : -1;
+        acc = 0;
+        cool = now + 260;
+        step(direction);
+      };
+      el.addEventListener("wheel", onWheel, { passive: false });
+      return () => el.removeEventListener("wheel", onWheel);
+    }, [step]);
 
     // a new picture starts at 1x, un-panned
     useEffect(() => {
@@ -6151,6 +6273,13 @@ void main() {
 
   /* ---- global search ------------------------------------------------ */
 
+  /* the reel service lives beside Stash; a plain anchor because CSP blocks
+     fetches to it, not navigations */
+  function reelServiceBase() {
+    const asked = new URLSearchParams(window.location.search).get("reel");
+    return (asked || "http://" + window.location.hostname + ":19000").replace(/\/$/, "");
+  }
+
   function SearchPage({ onPickScene, onPickPerformer, onPickFolder, onBack }) {
     const [query, setQuery] = useState("");
     const [results, setResults] = useState({ folders: [], performers: [], markers: [], scenes: [], busy: false, term: "" });
@@ -6227,7 +6356,21 @@ void main() {
           value: query,
           onChange: (event) => setQuery(event.currentTarget.value),
           className: "stk-search-input",
-        })
+        }),
+        query.trim().length >= 2 &&
+          h(
+            "a",
+            {
+              className: "stk-search-reel",
+              title: "Highlight reel for this search",
+              target: "_blank",
+              rel: "noopener",
+              href: reelServiceBase() + "/player?q=" + encodeURIComponent(query.trim()) +
+                "&port=" + encodeURIComponent(String(window.location.port || "")) +
+                "&name=" + encodeURIComponent(query.trim()),
+            },
+            h(Icon, { name: "play", size: 18 })
+          )
       ),
       query.trim().length < 2
         ? h("div", { className: "stk-state" }, h("p", null, "Type at least two characters."))
@@ -7519,6 +7662,7 @@ void main() {
 
   const SFW_KEY = "stashtok.sfw";
   const PIN_KEY = "stashTok.pin";
+  const RAIL_KEY = "stashTok.railPin";
 
   /** Cheap, salted digest. crypto.subtle needs a secure context, and Stash on a
    *  LAN IP is plain http, so it is unavailable exactly where this matters. */
@@ -7588,18 +7732,34 @@ void main() {
     const [navPicker, setNavPicker] = useState(null);
     const [feedOptions, setFeedOptions] = useState(false);
 
-    /* wide screens get the desktop shell: sidebar + one rounded video pane */
+    /* iPadOS reports itself as a Mac once "request desktop site" is on, so touch
+       points decide whether this is a tablet, not the user agent. A touch-screen
+       Windows laptop stays a desktop: it reports Windows, never Macintosh. */
+    const isTablet = () =>
+      typeof navigator !== "undefined" &&
+      (navigator.maxTouchPoints || 0) > 1 &&
+      /iPad|Macintosh/.test(navigator.userAgent || "");
+
+    /* wide screens get the desktop shell: sidebar + video pane. A tablet is wide
+       enough to trip that breakpoint but the mouse rail is the wrong furniture for
+       a finger — it keeps the phone shell, with the bottom tab bar. */
     const [desktop, setDesktop] = useState(
-      () => typeof window !== "undefined" && window.matchMedia("(min-width: 900px)").matches
+      () => typeof window !== "undefined" && window.matchMedia("(min-width: 900px)").matches && !isTablet()
     );
+    const [tablet, setTablet] = useState(isTablet);
     useEffect(() => {
       const mq = window.matchMedia("(min-width: 900px)");
-      const onChange = () => setDesktop(mq.matches);
+      const onChange = () => {
+        setTablet(isTablet());
+        setDesktop(mq.matches && !isTablet());
+      };
       if (mq.addEventListener) mq.addEventListener("change", onChange);
       else if (mq.addListener) mq.addListener(onChange);
+      window.addEventListener("orientationchange", onChange);
       return () => {
         if (mq.removeEventListener) mq.removeEventListener("change", onChange);
         else if (mq.removeListener) mq.removeListener(onChange);
+        window.removeEventListener("orientationchange", onChange);
       };
     }, []);
 
@@ -7734,6 +7894,30 @@ void main() {
         /* ignore */
       }
       setSfw(next);
+    }
+
+    /* the desktop rail shrinks to icons when the pointer leaves it, so the video
+       gets the width back; pinning keeps it open across reloads */
+    const [railPin, setRailPin] = useState(() => {
+      try {
+        return window.localStorage.getItem(RAIL_KEY) === "1";
+      } catch (e) {
+        return false;
+      }
+    });
+    const [railHover, setRailHover] = useState(false);
+    const railMin = desktop && !railPin && !railHover;
+    function toggleRailPin() {
+      setRailPin((cur) => {
+        const next = !cur;
+        try {
+          if (next) window.localStorage.setItem(RAIL_KEY, "1");
+          else window.localStorage.removeItem(RAIL_KEY);
+        } catch (e) {
+          /* ignore */
+        }
+        return next;
+      });
     }
     const shellRef = useRef(null);
     const coverRef = useRef(null);
@@ -7971,6 +8155,47 @@ void main() {
         document.documentElement.style.filter = "";
       };
     }, [prefs.mono]);
+
+    /* ---- keep the shell inside the visible viewport --------------------
+       Safari's toolbars shrink visualViewport.height without touching the layout
+       viewport, and `position: fixed; inset: 0` is sized to the layout viewport:
+       the bottom tab bar then lands behind the toolbar and reads as missing. Size
+       the shell to the *visual* height instead, which is what the user can see. */
+    useEffect(() => {
+      const view = window.visualViewport;
+      if (!view) return undefined;
+      let cancelled = false;
+      const apply = () => {
+        if (cancelled) return;
+        const shell = shellRef.current;
+        const box = shell && shell.querySelector(".stk-fixed");
+        if (!box) return;
+        const h = Math.round(view.height || window.innerHeight || 0);
+        if (h > 0) box.style.height = h + "px";
+      };
+      apply();
+      view.addEventListener("resize", apply);
+      window.addEventListener("orientationchange", apply);
+      const timer = window.setTimeout(apply, 250);
+      return () => {
+        cancelled = true;
+        window.clearTimeout(timer);
+        view.removeEventListener("resize", apply);
+        window.removeEventListener("orientationchange", apply);
+      };
+    }, [routed]);
+
+    /* Stash ships `width=device-width, initial-scale=1, maximum-scale=1` and no
+       viewport-fit: without it env(safe-area-inset-*) is always 0, so nothing can
+       keep the tab bar out of the home-indicator / app-switch strip at the bottom
+       of an iPad. Re-assert it with cover once. */
+    useEffect(() => {
+      const meta = document.querySelector('meta[name="viewport"]');
+      if (!meta) return;
+      const content = meta.getAttribute("content") || "";
+      if (/viewport-fit/.test(content)) return;
+      meta.setAttribute("content", content.replace(/\s*$/, "") + ", viewport-fit=cover");
+    }, []);
 
     /* the page itself must never zoom: pinch belongs to the video only.
        BUT if the page is already page-zoomed (Safari restores a site zoom on
@@ -8590,7 +8815,9 @@ void main() {
           (locked ? " stk-locked" : "") +
           (sfw ? " stk-sfw" : "") +
           (prefs.mono ? " stk-mono" : "") +
-          (desktop ? " stk-desktop" : ""),
+          (desktop ? " stk-desktop" : "") +
+          (tablet ? " stk-tablet" : "") +
+          (railMin ? " stk-rail-min" : ""),
         ref: shellRef,
       },
       h(
@@ -8602,27 +8829,53 @@ void main() {
         desktop &&
           h(
             "aside",
-            { className: "stk-desk-rail" },
-            h("div", { className: "stk-desk-logo" }, "StashTok"),
+            {
+              className: "stk-desk-rail" + (railMin ? " stk-min" : ""),
+              onMouseEnter: () => setRailHover(true),
+              onMouseLeave: () => setRailHover(false),
+              onFocusCapture: () => setRailHover(true),
+              onBlurCapture: (event) => {
+                if (!event.currentTarget.contains(event.relatedTarget)) setRailHover(false);
+              },
+            },
+            h(
+              "div",
+              { className: "stk-desk-logo" },
+              h("span", { className: "stk-desk-mark" }, "S"),
+              h("span", { className: "stk-desk-word" }, "StashTok"),
+              h(
+                "button",
+                {
+                  className: "stk-desk-pin" + (railPin ? " stk-on" : ""),
+                  title: railPin ? "Let the sidebar shrink again" : "Keep the sidebar open",
+                  "aria-label": railPin ? "Unpin the sidebar" : "Pin the sidebar",
+                  "aria-expanded": railPin ? "true" : "false",
+                  onClick: toggleRailPin,
+                },
+                h(Icon, { name: "chevron", size: 14 })
+              )
+            ),
             [
-              ["feed", "Feed"],
-              ["search", "Search"],
-              ["performers", "Performers"],
-              ["favorites", "Favorites"],
-              ["tags", "Tags"],
-              ["markers", "Markers"],
-              ["folders", "Folders"],
-            ].map(([id, label]) =>
+              ["feed", "Feed", "play"],
+              ["search", "Search", "search"],
+              ["performers", "Performers", "user"],
+              ["favorites", "Favorites", "heart"],
+              ["tags", "Tags", "tag"],
+              ["markers", "Markers", "chapter"],
+              ["folders", "Folders", "folder"],
+            ].map(([id, label, icon]) =>
               h(
                 "button",
                 {
                   key: id,
+                  title: label,
                   className:
                     "stk-desk-link" +
                     ((id === "feed" && tab === "home") || tab === id ? " stk-on" : ""),
                   onClick: () => (id === "feed" ? goHome() : runNav(id)),
                 },
-                label
+                h(Icon, { name: icon, size: 18 }),
+                h("span", { className: "stk-desk-label" }, label)
               )
             )
           ),
