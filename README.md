@@ -19,7 +19,7 @@ A full-screen, TikTok-style vertical feed for [Stash](https://github.com/stashap
   - pinch — zoom the video inside the viewport; the HUD never scales
   - long-press, then drag — move the video inside the viewport without a second finger (only while it is larger than its box)
   - drag horizontally — scrub within the scene
-  - swipe right (past ~120 px) — open the performer page of the clip on screen; swipe left steps the channel carousel
+  - swipe left (past ~120 px) — step the channel carousel; a rightward drag keeps scrubbing (the old swipe-right-to-profile shortcut is gone, it fought hold-to-fast-forward)
 - **Scrub bar** with a tick per marker, and the marker title as you pass it.
 - **Details sheet** — file path, size, duration, resolution, codecs, bitrate, play counts, plus every performer and tag as a tappable chip.
 - **Hearts are ratings.** Stash has no scene favourite, so a heart writes `rating100` through `sceneUpdate`. Hearts therefore show up in Stash's own rating filters, and in other clients.

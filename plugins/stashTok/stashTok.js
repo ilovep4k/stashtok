@@ -54,8 +54,9 @@
   /* hold this long, then drag, and the frame moves under one finger */
   const GRAB_MS = 260;
   const SWIPE_PX = 70;
-  /* a horizontal drag longer than this switches from scrubbing to a swipe:
-     right opens the performer page of the clip on screen, left steps channel */
+  /* a leftward drag longer than this switches from scrubbing to the channel
+     carousel. Rightward drags stay scrubbing: the old "swipe right = performer
+     page" fought hold-to-fast-forward on the right half of the screen. */
   const CHANNEL_PX = 120;
   /* pull the first clip down this far to reload the feed */
   const REFRESH_PX = 120;
@@ -3034,8 +3035,8 @@ void main() {
       } else if (g.mode === "swipe") {
         setDragY(dy);
       } else if (g.mode === "seek") {
-        /* a long horizontal drag is the crossbar, a short one still scrubs */
-        if (Math.abs(dx) > CHANNEL_PX) {
+        /* only a leftward drag leaves scrubbing; rightward keeps seeking */
+        if (dx < -CHANNEL_PX) {
           g.mode = "channel";
           setScrubbing(false);
           setTip(null);
@@ -3164,18 +3165,10 @@ void main() {
         setTip(null);
       }
       if (g.mode === "channel") {
-        const dx = event.clientX - g.x0;
-        /* swipe right: the performer page of the clip on screen (not the goon cave
-           channel). swipe left keeps stepping the channel carousel. */
-        if (dx > 0) {
-          const performer = item && item.scene && item.scene.performers && item.scene.performers[0];
-          if (performer && onOpenPerformer) {
-            buzz(10);
-            onOpenPerformer(performer);
-          }
-        } else {
-          goChannel(1);
-        }
+        /* leftward only: the carousel steps forward. The performer shortcut that
+           used to live on a rightward drag is gone — it stole the right half,
+           which is hold-to-fast-forward. */
+        goChannel(1);
       }
       if (g.mode === "pan") poke();
       poke();

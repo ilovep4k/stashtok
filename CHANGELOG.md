@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased - no swipe-right to profile
+
+- **Swipe right no longer opens the performer page.** The shortcut swallowed the right
+  half of the screen, which is hold-to-fast-forward, so a slightly diagonal hold turned
+  into a profile jump or a dead gesture. Rightward drags scrub the clip now; a leftward
+  drag past ~120 px still steps the channel carousel.
+
 ## Unreleased - tag autocomplete in the feed builder
 
 - **New feed → Tags is a type-to-search field.** Any tag in the library can be picked
