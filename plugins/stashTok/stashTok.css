@@ -3531,8 +3531,10 @@ html.stk-mono { filter: grayscale(1) contrast(1.06); }
    An iPad is wide enough to trip the 900px desktop breakpoint, but a finger wants
    the bottom tab bar, not a hover sidebar. These rules only ever apply with
    .stk-tablet on the shell; a real desktop is untouched. */
-.stk-tablet.stash-tok-wrap .stk-desk-rail { display: none !important; }
-.stk-tablet .stk-fixed { padding-left: 0 !important; }
+/* portrait keeps the tab bar and no rail; landscape runs the desktop shell, so
+   these two only apply while the shell is the touch one */
+.stk-tablet:not(.stk-desktop) .stk-desk-rail { display: none !important; }
+.stk-tablet:not(.stk-desktop) .stk-fixed { padding-left: 0 !important; }
 
 /* iPadOS reserves the bottom edge for the app-switch / dock swipe: keep the tab
    bar clear of it even on iPads whose safe-area inset is 0 (no home indicator). */
@@ -3557,3 +3559,19 @@ html.stk-mono { filter: grayscale(1) contrast(1.06); }
   border-left: 0;
   border-right: 0;
 }
+
+
+/* landscape tablet: the rail returns and the bottom tab bar goes away, so the clip
+   runs to the very bottom edge. Only the scrub bar and the caption keep a lift, so a
+   thumb reaching for the progress bar does not trigger the iPad's app-switch swipe. */
+.stk-tablet.stk-desktop {
+  --stk-safe-bottom: max(env(safe-area-inset-bottom, 0px), 16px);
+}
+.stk-tablet.stk-desktop .stk-nav { display: none !important; }
+.stk-tablet.stk-desktop .stk-desk-rail {
+  padding-left: calc(16px + env(safe-area-inset-left, 0px));
+  padding-right: calc(16px + env(safe-area-inset-right, 0px));
+}
+.stk-tablet.stk-desktop .stk-timeline { bottom: var(--stk-safe-bottom); }
+.stk-tablet.stk-desktop .stk-info { bottom: calc(44px + var(--stk-safe-bottom)); }
+.stk-tablet.stk-desktop .stk-hud-hidden .stk-info { bottom: calc(34px + var(--stk-safe-bottom)); }

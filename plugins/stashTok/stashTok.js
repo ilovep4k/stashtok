@@ -2621,27 +2621,46 @@ void main() {
       }
     }, [item, tagPicked, tagOptions]);
 
-    /* desktop keyboard map: arrows scroll and scrub, space pauses, L likes, M mutes */
+    /* desktop keyboard map. Every control has a key that matches what the rest of
+       the web uses: space/K play, arrows seek, , and . nudge a frame, digits jump,
+       L likes, M mutes, I details, O the scene in Stash, / search, R reshuffle,
+       Enter the performer, Backspace/Esc back. */
     useEffect(() => {
-      if (!desktop) return undefined;
+      /* No desktop gate: an iPad with a Magic Keyboard is a touch device that types,
+         and its arrow keys must step the feed like a laptop's. iOS also reports the
+         odd key as "Unidentified", so fall back to keyCode. */
+      const CODE_KEYS = {
+        8: "Backspace", 9: "Tab", 13: "Enter", 27: "Escape", 32: " ", 33: "PageUp", 34: "PageDown",
+        35: "End", 36: "Home", 37: "ArrowLeft", 38: "ArrowUp", 39: "ArrowRight", 40: "ArrowDown",
+        188: ",", 190: ".",
+      };
       function onKey(event) {
         const tag = (event.target && event.target.tagName) || "";
         if (tag === "INPUT" || tag === "TEXTAREA" || (event.target && event.target.isContentEditable)) return;
         const video = activeVideo ? activeVideo() : null;
-        const key = event.key;
+        const key = event.key && event.key !== "Unidentified" ? event.key : CODE_KEYS[event.keyCode] || "";
         if (key === "ArrowDown" || key === "PageDown") {
           event.preventDefault();
           goNext();
         } else if (key === "ArrowUp" || key === "PageUp") {
           event.preventDefault();
           goPrev();
+        } else if (key === "Home") {
+          event.preventDefault();
+          setIndex(0);
+        } else if (key === "End") {
+          event.preventDefault();
+          setIndex(Math.max(0, items.length - 1));
         } else if (key === "Enter") {
           /* enter opens whoever posted this clip */
           event.preventDefault();
           openHandle();
-        } else if (key === "Backspace") {
+        } else if (key === "Backspace" || key === "Escape") {
           event.preventDefault();
-          if (onBack) onBack();
+          /* escape peels one layer first: sheet, quick menu, then back */
+          if (sheet) setSheet(null);
+          else if (quick) setQuick(null);
+          else if (onBack) onBack();
         } else if (key === "Tab") {
           event.preventDefault();
           if (event.shiftKey) goPrev();
@@ -2655,7 +2674,22 @@ void main() {
           const delta = key === "ArrowRight" ? step : -step;
           video.currentTime = Math.max(0, Math.min(total - 0.2, video.currentTime + delta));
           setScrubTime(video.currentTime);
-        } else if (key === " " || key === "k") {
+        } else if (key === "." || key === ",") {
+          /* frame step, for finding the exact frame to stop on */
+          if (!video) return;
+          event.preventDefault();
+          const total = video.duration || 0;
+          const next = video.currentTime + (key === "." ? 1 / 25 : -1 / 25);
+          video.currentTime = Math.max(0, Math.min(total - 0.05, next));
+          setScrubTime(video.currentTime);
+        } else if (/^[0-9]$/.test(key)) {
+          /* 1..9 jump to that tenth of the clip, 0 goes back to the start */
+          if (!video || !video.duration) return;
+          event.preventDefault();
+          const at = video.duration * (Number(key) / 10);
+          video.currentTime = Math.max(0, Math.min(video.duration - 0.2, at));
+          setScrubTime(video.currentTime);
+        } else if (key === " " || key === "k" || key === "K") {
           event.preventDefault();
           if (!video) return;
           if (video.paused) playGuarded(video);
@@ -2666,6 +2700,15 @@ void main() {
         } else if (key === "f" || key === "F") {
           event.preventDefault();
           flagCurrent();
+        } else if (key === "i" || key === "I") {
+          event.preventDefault();
+          setSheet((cur) => (cur === "details" ? null : "details"));
+        } else if (key === "o" || key === "O") {
+          /* the same page Stash itself would show, in a new tab */
+          const id = item && item.scene && item.scene.id;
+          if (!id) return;
+          event.preventDefault();
+          window.open(window.location.origin + "/scenes/" + id, "_blank", "noopener");
         } else if (key === "v" || key === "V") {
           event.preventDefault();
           setVrMode((on) => !on);
@@ -2675,11 +2718,18 @@ void main() {
           const next = !video.muted;
           video.muted = next;
           setMuted(next);
+        } else if (key === "r" || key === "R") {
+          event.preventDefault();
+          refreshFeed();
+        } else if (key === "/") {
+          if (!onSearch) return;
+          event.preventDefault();
+          onSearch();
         }
       }
       window.addEventListener("keydown", onKey);
       return () => window.removeEventListener("keydown", onKey);
-    }, [desktop, goNext, goPrev, toggleHeart, flagCurrent, vrMode]);
+    }, [desktop, goNext, goPrev, toggleHeart, flagCurrent, vrMode, sheet, quick, items, refreshFeed, onSearch, onBack]);
 
     /* ---- scrubber sprites -----------------------------------------
        Stash already renders a sprite sheet plus a WebVTT index for scenes with
@@ -7740,26 +7790,32 @@ void main() {
       (navigator.maxTouchPoints || 0) > 1 &&
       /iPad|Macintosh/.test(navigator.userAgent || "");
 
-    /* wide screens get the desktop shell: sidebar + video pane. A tablet is wide
-       enough to trip that breakpoint but the mouse rail is the wrong furniture for
-       a finger — it keeps the phone shell, with the bottom tab bar. */
-    const [desktop, setDesktop] = useState(
-      () => typeof window !== "undefined" && window.matchMedia("(min-width: 900px)").matches && !isTablet()
-    );
+    /* wide screens get the desktop shell: sidebar + video pane. A tablet portrait
+       is wide enough to trip that breakpoint but a finger there wants the bottom
+       tab bar, not a hover rail. Landscape is the opposite: there is width for the
+       rail and the tab bar is the only thing standing between the clip and the
+       bottom edge — so landscape runs the desktop shell and goes full-bleed. */
+    const wantsDesktop = () =>
+      typeof window !== "undefined" &&
+      window.matchMedia("(min-width: 900px)").matches &&
+      (!isTablet() || window.innerWidth > window.innerHeight);
+    const [desktop, setDesktop] = useState(wantsDesktop);
     const [tablet, setTablet] = useState(isTablet);
     useEffect(() => {
       const mq = window.matchMedia("(min-width: 900px)");
       const onChange = () => {
         setTablet(isTablet());
-        setDesktop(mq.matches && !isTablet());
+        setDesktop(mq.matches && (!isTablet() || window.innerWidth > window.innerHeight));
       };
       if (mq.addEventListener) mq.addEventListener("change", onChange);
       else if (mq.addListener) mq.addListener(onChange);
       window.addEventListener("orientationchange", onChange);
+      window.addEventListener("resize", onChange);
       return () => {
         if (mq.removeEventListener) mq.removeEventListener("change", onChange);
         else if (mq.removeListener) mq.removeListener(onChange);
         window.removeEventListener("orientationchange", onChange);
+        window.removeEventListener("resize", onChange);
       };
     }, []);
 
@@ -7906,7 +7962,7 @@ void main() {
       }
     });
     const [railHover, setRailHover] = useState(false);
-    const railMin = desktop && !railPin && !railHover;
+    const railMin = desktop && !railPin && !railHover && !isTablet();
     function toggleRailPin() {
       setRailPin((cur) => {
         const next = !cur;
