@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased - profile header without a banner
+
+- **The performer header is a plain identity row.** No cover art behind it: avatar on
+  the left, then the name with a favourite heart beside it (one tap on, one tap off,
+  replacing the old wide Favourite button), and a single counts line
+  "526 scenes, 283 markers" -- one line, never two stacked stat blocks. Both counts
+  still tap through to their tab. Links, tags and Highlight reel stay below.
+- **The tab bar reads as labels on a wide screen**: `[ Scenes ][ Images ][ Markers ]`
+  with the tile-size toggle alone on the far right as a four-pane gallery icon, the
+  same control that used to hide as "Smaller icons" inside each sort dropdown.
+- **Desktop tiles are 200 px wide** (were 224) and the profile page no longer caps at
+  1180 px, so the grid uses the whole pane.
+
 ## Unreleased - no swipe-right to profile
 
 - **Swipe right no longer opens the performer page.** The shortcut swallowed the right

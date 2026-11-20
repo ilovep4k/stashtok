@@ -564,7 +564,11 @@
 .stk-info-with { max-height: 60px; }
 .stk-caption-time { max-height: 40px; }
 .stk-info { transition: bottom 260ms ease; }
-.stk-hud-hidden .stk-info { bottom: 34px; }
+/* the caption is gone, so the handle takes its place: same bottom offset as when
+   the date/size/resolution line was there, and no leftover gap where it used to be */
+.stk-hud-hidden .stk-caption { display: none; }
+.stk-hud-hidden .stk-info { bottom: 10px; }
+.stk-hud-hidden .stk-handle-row { transition: transform 220ms ease; }
 .stk-hashtext-more {
   border: 1px dashed rgba(255, 255, 255, 0.35);
   background: transparent;
@@ -794,6 +798,9 @@
   gap: 3px;
   pointer-events: none;
   text-shadow: 0 1px 4px rgba(0,0,0,.85);
+  /* above the timeline's 44px grab band: with the HUD hidden the info block
+     drops onto the bar, and the hashtags under the username must stay tappable */
+  z-index: 31;
 }
 .stk-info > * { pointer-events: auto; }
 .stk-info-perf {
@@ -1035,26 +1042,44 @@
 .stk-sort-menu .stk-sort-on { background: #ff2d55; border-color: #ff2d55; color: #fff; }
 .stk-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 
+/* 5-across profile density: a masonry of flex columns, built in JS.
+   CSS multicol (`column-count: 5`) measured correctly in Chrome, but on iPad Safari
+   the columns past the first two never painted, and its gutters disagreed: the
+   column gap came from `gap` while the vertical one came from `margin-bottom`, so
+   they could never match. One gap value now governs both axes. */
 .stk-grid-5 {
-  display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 3px;
-  padding: 0 8px 16px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 8px 16px;
 }
-/* 5-across becomes a masonry so 16:9 and 9:16 keep their own shape */
-.stk-grid-5 {
-  display: block;
-  column-count: 5;
-  column-gap: 3px;
-  padding: 0 8px 16px;
+.stk-grid-5 .stk-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1 1 0;
+  min-width: 0;
 }
 .stk-grid-5 .stk-tile {
   display: block;
   width: 100%;
-  margin: 0 0 3px;
-  break-inside: avoid;
+  margin: 0;
+  /* content-visibility:auto inside the grid is the other half of the blank-column
+     bug; a few hundred 9:16 tiles do not need it */
+  content-visibility: visible;
+  contain-intrinsic-size: auto;
 }
 .stk-grid-5 .stk-tile-dur { font-size: 9px; padding: 1px 3px; }
+/* a masonry of five columns plus a per-tile rise reads as jitter, and until each
+   tile's stagger lands it sits 12 px low and 1% small — which is exactly what made
+   the dense gutters look uneven. This grid appears at once; only the press feedback
+   keeps its transition. */
+body.stk-anim .stk-grid-5 .stk-tile {
+  opacity: 1;
+  transform: none;
+  transition: transform 160ms cubic-bezier(0.23, 1, 0.32, 1);
+  will-change: auto;
+}
 
 .stk-tile-heart {
   position: absolute;
@@ -1599,14 +1624,16 @@
     0 6px 18px rgba(0, 0, 0, 0.45);
 }
 
-/* icon-only tabs: scenes / images / markers / sort */
+/* tabs: scenes / images / markers (labels on a wide screen, icons on a phone)
+   and the tile-size toggle alone on the far right */
 .stk-tabs.stk-tabbar {
   gap: 0;
   padding: 4px 8px 0;
-  justify-content: space-around;
+  justify-content: space-between;
   align-items: stretch;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
+.stk-tabbar .stk-cat { flex: 1 1 0; justify-content: center; }
 .stk-tabbar button {
   flex: 1 1 0;
   display: inline-flex;
@@ -1621,15 +1648,18 @@
   cursor: pointer;
   transition: color 140ms ease, border-color 140ms ease;
 }
+.stk-tab-label { display: none; font-size: 13.5px; font-weight: 600; }
+.stk-tabbar .stk-cat > button:first-child { flex: 0 1 auto; }
 .stk-tabbar button.stk-active {
   color: #fff;
   border-bottom-color: #fff;
 }
 .stk-tabbar button.stk-density {
-  flex: 0 0 44px;
-  font-size: 15px;
-  color: rgba(255, 255, 255, 0.4);
+  flex: 0 0 48px;
+  color: rgba(255, 255, 255, 0.42);
 }
+.stk-tabbar button.stk-density:hover { color: rgba(255, 255, 255, 0.8); }
+.stk-tabbar button.stk-density-on { color: #fff; }
 .stk-sort-drop {
   padding: 8px 12px 4px;
 }
@@ -1862,9 +1892,11 @@
 .stk-fv-caret { color: rgba(255, 255, 255, 0.3); transform: rotate(180deg); }
 
 /* the bottom vignette is z-index 3: the caption painted under it, which is why
-   pure-white text still rendered grey. Lift the info block above the scrim. */
+   pure-white text still rendered grey. Lift the info block above the scrim — and
+   above the timeline's 44px grab band (30), or the caption's hashtags become
+   untappable and every tap on them seeks instead. */
 .stk-info {
-  z-index: 5;
+  z-index: 31;
 }
 .stk-info .stk-handle-at {
   color: #fff;
@@ -1915,6 +1947,61 @@
 /* flush with the tab bar, edge to edge */
 .stk-timeline-inner { border-radius: 0; }
 .stk-timeline-fill { border-radius: 0; }
+
+/* the undo pill for the last tag write: above the timeline, out of the caption */
+.stk-undo {
+  position: absolute;
+  left: 50%;
+  bottom: 56px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 8px 7px 14px;
+  border-radius: 999px;
+  background: rgba(20, 20, 22, .94);
+  border: 1px solid rgba(255, 255, 255, .14);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .55);
+  font-size: 12px;
+  color: #fff;
+  z-index: 32;
+  pointer-events: auto;
+  white-space: nowrap;
+  max-width: calc(100% - 24px);
+}
+.stk-undo span { overflow: hidden; text-overflow: ellipsis; }
+.stk-undo button {
+  background: none;
+  border: 0;
+  color: #ff2d55;
+  font-weight: 700;
+  font-size: 12px;
+  padding: 3px 6px;
+  pointer-events: auto;
+}
+
+/* tapping the caption opens a real scrub bar: taller, with a knob to grab, and
+   the empty track readable against bright frames */
+.stk-timeline.stk-open { height: 58px; }
+.stk-timeline.stk-open .stk-timeline-inner {
+  height: 16px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, .3);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, .5);
+}
+.stk-timeline.stk-open .stk-timeline-fill { border-radius: 8px 0 0 8px; }
+.stk-timeline-knob {
+  position: absolute;
+  top: 50%;
+  width: 22px;
+  height: 22px;
+  margin: -11px 0 0 -11px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 7px rgba(0, 0, 0, .6);
+  pointer-events: none;
+  z-index: 3;
+}
 
 /* ---------------- long press: pip, then a quick menu at the thumb ---------------- */
 
@@ -2018,9 +2105,14 @@ body.stk-anim .stk-fv-row {
   will-change: opacity, transform;
 }
 
-body.stk-anim .stk-tile.stk-in,
-body.stk-anim .stk-account.stk-in,
-body.stk-anim .stk-fv-row.stk-in {
+/* the revealed state is a DATA ATTRIBUTE, not a class: React owns these elements'
+   className (selection adds/removes "stk-sel"), and a className write replaces the
+   whole attribute, silently wiping an imperatively-added "stk-in" — the tile then
+   matched the opacity:0 rule below and the freshly selected card went invisible
+   for good, because the observer's `seen` set refused to re-observe it. */
+body.stk-anim .stk-tile[data-in],
+body.stk-anim .stk-account[data-in],
+body.stk-anim .stk-fv-row[data-in] {
   opacity: 1;
   transform: none;
   will-change: auto;
@@ -2342,12 +2434,20 @@ body.stk-anim .stk-account:active {
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
 }
 
-.stk-desktop .stk-page .stk-grid-3,
-.stk-desktop .stk-page .stk-grid-5 {
-  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+/* profile pages use the whole pane: 200 px tiles, as many per row as fit */
+.stk-desktop .stk-page.stk-profile { max-width: none; }
+
+.stk-desktop .stk-page .stk-grid-3 {
+  grid-template-columns: repeat(auto-fill, minmax(0, 200px));
+  justify-content: space-between;
   gap: 8px;
   padding: 8px;
 }
+
+/* wide bar: [ Scenes ][ Images ][ Markers ][ ▦ ] */
+.stk-desktop .stk-tabbar .stk-cat > button:first-child { flex: 1 1 auto; }
+.stk-desktop .stk-tabbar button { padding: 12px 0 11px; }
+.stk-desktop .stk-tab-label { display: inline; }
 
 .stk-desktop .stk-page .stk-cover {
   height: 190px;
@@ -2501,11 +2601,35 @@ body.stk-anim .stk-account:active {
 /* the bottom tab bar is rendered by the app shell, outside the feed */
 body.stk-clear-mode .stk-nav { display: none; }
 
+/* one scene opened from the highlight reel: no bottom nav, no gear, no sidebar
+   chrome — the feed card fills the screen and the back chevron is the only way
+   out. (The nav is a flex item, so hiding it gives the video the space back.) */
+body.stk-clip-mode .stk-nav,
+body.stk-clip-mode .stk-gear-fab { display: none; }
+
 /* performers list on a wide screen: thumbnails keep their size, more per row */
 .stk-desktop .stk-page .stk-grid {
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
   gap: 8px;
   padding: 8px;
+}
+
+/* "184 of 906" under a paged image grid, and a tap target for the rest */
+.stk-more {
+  padding: 14px 12px calc(24px + env(safe-area-inset-bottom));
+  text-align: center;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
+}
+.stk-more-btn {
+  font: inherit;
+  font-size: 12px;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  padding: 8px 16px;
+  cursor: pointer;
 }
 
 /* keyboard selection ring on grid pages */
@@ -2601,7 +2725,8 @@ img.stk-scrub-cell {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  margin-bottom: 4px;
+  /* clear of the performer's head: the avatar sits directly under these */
+  margin-bottom: 54px;
 }
 .stk-rail .stk-rail-arrow {
   width: 38px;
@@ -2935,6 +3060,98 @@ img.stk-scrub-cell {
   border-color: #ff2d55;
   color: #fff;
 }
+/* already on the scene: filled in the app's pink, not just a tick — a saved tag
+   and an unsaved pick are both "on", the tick is what tells them apart */
+.stk-tagpick.stk-have {
+  background: #ff2d55;
+  border-color: #ff2d55;
+  color: #fff;
+}
+.stk-tagpick.stk-have::before { content: "✓ "; opacity: .85; }
+
+/* sections below the ethnicity row, laid out like the Discover page */
+.stk-tag-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: 4px;
+}
+.stk-tag-section { margin: 0 0 16px; }
+.stk-tag-section h4 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,.5);
+}
+.stk-tag-section .stk-tag-grid { overflow: visible; padding-bottom: 0; flex: 0 0 auto; }
+.stk-tag-note {
+  margin: -2px 0 10px;
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: rgba(255,255,255,.45);
+}
+.stk-tag-note b { color: rgba(255,255,255,.85); font-weight: 600; }
+.stk-tag-empty { padding: 14px 2px; font-size: 12px; color: rgba(255,255,255,.45); }
+
+/* ethnicity picker: circular photos, one per ethnicity */
+.stk-eth-row {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding: 2px 2px 8px;
+  scrollbar-width: none;
+}
+.stk-eth-row::-webkit-scrollbar { display: none; }
+.stk-eth {
+  flex: 0 0 auto;
+  width: 64px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: 0;
+  padding: 0;
+  color: rgba(255,255,255,.78);
+  font-size: 11px;
+  line-height: 1.15;
+}
+.stk-eth-circle {
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255,255,255,.08);
+  border: 2px solid transparent;
+  transition: border-color .15s, transform .15s;
+}
+.stk-eth-circle img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.stk-eth-initial { font-size: 22px; font-weight: 700; color: rgba(255,255,255,.45); }
+.stk-eth-label { text-align: center; }
+.stk-eth.stk-on .stk-eth-circle {
+  /* a ring outside the photo, the way a story avatar marks "seen" — the border
+     alone disappeared against a dark crop */
+  box-shadow: 0 0 0 3px #ff2d55, 0 0 0 5px rgba(0, 0, 0, .45);
+  border-color: transparent;
+}
+.stk-eth.stk-on .stk-eth-initial { color: #fff; }
+/* some of its tags are on (Black without Ebony): half a ring, and a tap
+   completes it instead of pretending it is done */
+.stk-eth.stk-part .stk-eth-circle {
+  box-shadow: 0 0 0 3px rgba(255, 45, 85, .5), 0 0 0 5px rgba(0, 0, 0, .35);
+}
+.stk-eth.stk-on .stk-eth-label { color: #fff; font-weight: 600; }
+.stk-eth.stk-busy .stk-eth-circle { opacity: .55; }
+.stk-eth:disabled { opacity: .55; cursor: default; }
+.stk-eth.stk-on:disabled { opacity: 1; }
+.stk-rail .stk-rail-tagbtn,
+.stk-rail .stk-rail-tagbtn.stk-on { color: #fff; }
 .stk-tag-done {
   margin-top: 10px;
   width: 100%;
@@ -2969,22 +3186,24 @@ html.stk-mono { filter: grayscale(1) contrast(1.06); }
 
 /* the add-a-tag affordance on the rail */
 .stk-rail-icoplus { position: relative; display: inline-flex; }
+/* the rail's tag affordance is monochrome white — glyph and the + alike, no red
+   badge (the user reads a coloured + as a different control from the tag) */
 .stk-rail-plus {
   position: absolute;
-  top: -3px;
-  right: -5px;
+  top: -5px;
+  right: -7px;
   font-style: normal;
-  font-size: 13px;
+  font-size: 16px;
   line-height: 1;
-  width: 14px;
-  height: 14px;
+  width: auto;
+  height: auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 999px;
-  background: #ff2d55;
+  background: none;
   color: #fff;
-  font-weight: 700;
+  font-weight: 600;
+  text-shadow: 0 1px 4px rgba(0,0,0,.9);
 }
 
 /* empty cell keeps the 3x4 pin pad square */
@@ -3252,14 +3471,28 @@ html.stk-mono { filter: grayscale(1) contrast(1.06); }
   justify-content: center;
   overflow: hidden;
 }
+.stk-img-slide {
+  /* the thumbnail is painted here first, so a photo the device refuses to draw
+     shows the low-res frame instead of a black hole */
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+  background-color: #000;
+}
 .stk-img {
   display: block;
   width: 100%;
   height: 100%;
   object-fit: contain;
   transform-origin: 50% 50%;
-  will-change: transform;
+  /* `will-change: transform` here promoted every photo to its own GPU layer, and an
+     iPad refuses to texture a 21 MP image: the slide came up black. It is switched
+     on per-pan in paint() instead, when a zoom actually needs it. */
+  /* fade the full-size file in over the thumbnail once it has actually decoded */
+  opacity: 0;
+  transition: opacity 180ms ease;
 }
+.stk-img.stk-img-ready { opacity: 1; }
 .stk-img-close {
   position: fixed;
   top: calc(10px + env(safe-area-inset-top, 0px));
@@ -3647,3 +3880,606 @@ html.stk-mono { filter: grayscale(1) contrast(1.06); }
 .stk-tablet.stk-desktop .stk-timeline { bottom: var(--stk-safe-bottom); }
 .stk-tablet.stk-desktop .stk-info { bottom: calc(44px + var(--stk-safe-bottom)); }
 .stk-tablet.stk-desktop .stk-hud-hidden .stk-info { bottom: calc(34px + var(--stk-safe-bottom)); }
+
+/* ---- photo long-press actions ---- */
+.stk-photo-actions .stk-actionrow,
+.stk-menu-sheet .stk-actionrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  background: #171717;
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 12px;
+  padding: 12px;
+  margin-top: 8px;
+  color: #fff;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.stk-photo-actions .stk-actionrow > span,
+.stk-menu-sheet .stk-actionrow > span { flex: 1 1 auto; }
+.stk-photo-actions .stk-actionrow > small,
+.stk-menu-sheet .stk-actionrow > small {
+  color: rgba(255,255,255,.45);
+  font-size: 11px;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stk-photo-actions .stk-actionrow-on { border-color: #ff2d55; color: #ff5f7a; }
+.stk-menu-sheet .stk-actionrow:active { background: #1f1f1f; }
+.stk-photo-actions .stk-actionrow[disabled] { opacity: .55; }
+.stk-photo-perfs { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 2px; }
+.stk-photo-perf {
+  font-size: 11px;
+  color: rgba(255,255,255,.75);
+  background: rgba(255,255,255,.08);
+  border-radius: 999px;
+  padding: 3px 9px;
+}
+.stk-photo-stephead { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.stk-photo-stephead h4 { margin: 0; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: rgba(255,255,255,.45); }
+.stk-actionsearch {
+  width: 100%;
+  box-sizing: border-box;
+  background: #171717;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 10px;
+  color: #fff;
+  padding: 10px 12px;
+  font-size: 13px;
+  margin-top: 10px;
+}
+.stk-actionlist { max-height: 42vh; overflow-y: auto; margin-top: 10px; }
+.stk-actionlist .stk-marker-row { margin-bottom: 6px; }
+.stk-actionlist .stk-marker-row > span { flex: 1 1 auto; }
+.stk-actionavatar { width: 26px; height: 26px; border-radius: 50%; object-fit: cover; background: #222; flex: 0 0 auto; }
+.stk-actionerror { color: #ff5f7a; font-size: 12px; margin-top: 10px; }
+
+
+/* ---- performer header, X-shaped -------------------------------------
+   name big, path as the handle, three counts (scenes / images / markers),
+   Highlight reel + Favorite where follow/message would be, ⋯ for the rest. */
+.stk-cover-back {
+  position: fixed;
+  left: 10px;
+  top: calc(10px + env(safe-area-inset-top, 0px));
+  z-index: 40;
+  padding: 9px;
+  background: rgba(0, 0, 0, .55);
+}
+/* a page's back arrow: the player's circle, pinned over the cover */
+.stk-back-fixed {
+  position: fixed;
+  top: calc(12px + env(safe-area-inset-top, 0px));
+  left: 10px;
+  z-index: 40;
+}
+.stk-xhead {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  /* no cover behind it any more: the block starts below the fixed back arrow */
+  padding: calc(56px + env(safe-area-inset-top, 0px)) 16px 0;
+  margin-top: 0;
+  position: relative;
+  z-index: 2;
+}
+.stk-xhead .stk-avatar { width: 88px; height: 88px; border-width: 3px; }
+.stk-xid { flex: 1 1 auto; min-width: 0; }
+/* spacer that used to push the ⋯ right; the identity column does that now */
+.stk-xhead-fill { display: none; }
+.stk-xmore {
+  width: 38px;
+  height: 38px;
+  margin-bottom: 6px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, .25);
+  background: rgba(0, 0, 0, .35);
+  color: #fff;
+  cursor: pointer;
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+.stk-xbody { padding: 8px 16px 0; }
+.stk-xname {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: -.02em;
+  line-height: 1.15;
+  min-width: 0;
+}
+.stk-xname-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* favourite: a heart beside the name, on/off in one tap */
+.stk-xfav {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+  transition: transform 120ms ease, background 160ms ease, color 160ms ease, border-color 160ms ease;
+}
+.stk-xfav:active { transform: scale(0.9); }
+.stk-xfav-on {
+  background: #fe2c55;
+  border-color: #fe2c55;
+  color: #fff;
+}
+/* "526 scenes, 283 markers" -- one line, both counts still tap through */
+.stk-xcounts {
+  margin-top: 6px;
+  font-size: 13.5px;
+  color: rgba(255, 255, 255, 0.55);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.stk-xcount {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.stk-xcount:hover { color: #fff; }
+.stk-xcount b { font-weight: 700; color: rgba(255, 255, 255, 0.86); }
+.stk-xcounts-sep { color: rgba(255, 255, 255, 0.35); }
+.stk-xhandle {
+  margin-top: 2px;
+  font-size: 13px;
+  color: #8a8a8a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.stk-xbio {
+  margin-top: 10px;
+  font-size: 14px;
+  line-height: 1.45;
+  color: #e8e8e8;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.stk-xlinks { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.stk-xlink {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: #8fb7ff;
+  text-decoration: none;
+  background: rgba(255, 255, 255, .06);
+  border: 1px solid rgba(255, 255, 255, .12);
+  border-radius: 999px;
+  padding: 5px 10px;
+}
+/* counts moved into the identity column, beside the name */
+.stk-xactions { display: flex; gap: 8px; margin: 14px 0 10px; justify-content: flex-start; }
+.stk-xbtn {
+  flex: 0 0 auto;
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, .28);
+  background: transparent;
+  color: #fff;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+}
+.stk-xbtn-primary { background: #ff2d55; border-color: #ff2d55; }
+.stk-xbtn-on { color: #ff7d99; border-color: #ff2d55; }
+.stk-dupe-sheet { max-height: 72vh; overflow-y: auto; }
+.stk-dupe-note { margin: 6px 0 12px; font-size: 12px; line-height: 1.4; color: #9a9a9a; }
+.stk-dupe-group { margin-bottom: 14px; }
+.stk-dupe-head { margin-bottom: 6px; font-size: 12px; color: #c8c8c8; }
+.stk-dupe-row { display: flex; gap: 6px; overflow-x: auto; }
+.stk-dupe-thumb {
+  flex: 0 0 auto;
+  width: 84px;
+  height: 112px;
+  border: 0;
+  border-radius: 8px;
+  background-color: #1a1a1a;
+  background-size: cover;
+  background-position: center;
+  cursor: pointer;
+}
+
+
+/* ---- per-category sort: icon + caret, one dropdown each --------------- */
+.stk-cat {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+.stk-caret {
+  background: none;
+  border: 0;
+  padding: 2px 3px 2px 1px;
+  color: rgba(255, 255, 255, .42);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+}
+.stk-cat-open .stk-caret { color: #fff; }
+.stk-cat .stk-cat-pop {
+  left: 0;
+  right: auto;
+  top: calc(100% + 8px);
+  min-width: 258px;
+}
+.stk-cat-pop .stk-pop-item { font-size: 13px; }
+.stk-cat-pop .stk-pop-check { color: #ff2d55; font-size: 13px; }
+.stk-cat-pop .stk-pop-toggle .stk-pop-check { color: #ff2d55; font-size: 14px; }
+
+
+/* ---- the ⋯ menu as a popup beside its button ------------------------- */
+.stk-xmenu { position: relative; display: flex; align-items: center; margin-bottom: 6px; }
+.stk-xmenu .stk-xmore { margin-bottom: 0; }
+.stk-menu-pop {
+  left: auto;
+  right: 0;
+  top: calc(100% + 8px);
+  min-width: 232px;
+}
+.stk-menu-pop .stk-pop-item { justify-content: flex-start; gap: 10px; font-size: 13.5px; font-weight: 500; }
+.stk-menu-pop .stk-pop-item > span { flex: 0 1 auto; }
+.stk-menu-pop .stk-pop-item > small {
+  margin-left: auto;
+  color: rgba(255, 255, 255, .38);
+  font-size: 11px;
+}
+/* the sort dropdowns: plain, quiet type -- no bold, no shouting */
+.stk-cat-pop { font-family: inherit; }
+.stk-cat-pop .stk-pop-item,
+.stk-cat-pop .stk-pop-toggle {
+  font-size: 14px;
+  font-weight: 450;
+  letter-spacing: 0;
+  padding: 11px 12px;
+}
+.stk-cat-pop .stk-pop-item.stk-on { font-weight: 550; }
+.stk-cat-pop .stk-pop-check { color: rgba(255, 255, 255, .85); font-size: 12.5px; font-weight: 500; }
+
+
+/* ---- category tabs: spread evenly across the bar ---------------------- */
+.stk-tabs.stk-tabbar {
+  justify-content: space-evenly;
+  gap: 0;
+}
+.stk-tabbar .stk-cat,
+.stk-tabbar > button {
+  flex: 0 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+/* a centred icon with its caret tucked against it, so the pair reads as one
+   control and still sits on the bar's own grid */
+.stk-tabbar .stk-cat { gap: 3px; padding: 0 2px; }
+.stk-tabbar .stk-cat > button { padding: 6px 0; }
+
+
+/* ---- favorites: discovery page with row-per-sort carousels ------------ */
+.stk-fav-page { padding-bottom: 24px; }
+.stk-fav-h1 {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 10px 0 6px;
+  padding: 0 14px;
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -.02em;
+  cursor: pointer;
+}
+.stk-fav-h1 small { font-size: 11px; font-weight: 500; color: rgba(255, 255, 255, .4); }
+.stk-fav-chip {
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 45, 85, .16);
+  border: 1px solid rgba(255, 45, 85, .5);
+  color: #ff7d99;
+  font-size: 11px;
+  font-weight: 600;
+  vertical-align: middle;
+}
+.stk-fav-section { margin-top: 14px; }
+.stk-fav-rowhead {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0 0 8px;
+  padding: 0 14px;
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+  cursor: pointer;
+}
+.stk-fav-rowhead small { font-size: 11px; font-weight: 500; color: #ff5f7a; margin-left: auto; }
+.stk-fav-perfs,
+.stk-fav-strip {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 2px 14px 6px;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.stk-fav-perfs::-webkit-scrollbar,
+.stk-fav-strip::-webkit-scrollbar { display: none; }
+.stk-fav-perf {
+  flex: 0 0 auto;
+  width: 76px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  background: none;
+  border: 0;
+  padding: 0;
+  color: #fff;
+  cursor: pointer;
+}
+.stk-fav-perf-img {
+  width: 70px;
+  height: 70px;
+  border-radius: 50%;
+  background-size: cover;
+  background-position: center;
+  background-color: #1b1b1b;
+  border: 2px solid rgba(255, 255, 255, .12);
+}
+.stk-fav-perf-name {
+  max-width: 76px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, .75);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.stk-fav-tile {
+  position: relative;
+  flex: 0 0 auto;
+  width: 112px;
+  aspect-ratio: 9 / 16;
+  border: 0;
+  padding: 0;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #141414;
+  cursor: pointer;
+}
+.stk-fav-photo {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+}
+.stk-fav-dur {
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: rgba(0, 0, 0, .6);
+  font-size: 10px;
+  color: #fff;
+}
+.stk-fav-more {
+  flex: 0 0 auto;
+  width: 112px;
+  height: 100%;
+  min-height: 180px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px dashed rgba(255, 255, 255, .22);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .03);
+  color: rgba(255, 255, 255, .75);
+  font-size: 12px;
+  cursor: pointer;
+}
+.stk-fav-ghost {
+  flex: 0 0 auto;
+  width: 112px;
+  aspect-ratio: 9 / 16;
+  border-radius: 10px;
+  background: #151515;
+}
+
+
+/* ---- rail heart: a white glyph, outline then fill -------------------- */
+.stk-rail .stk-rail-heart,
+.stk-rail .stk-rail-heart.stk-on { color: #fff; }
+.stk-rail .stk-rail-heart svg { filter: drop-shadow(0 1px 4px rgba(0, 0, 0, .8)); }
+
+.stk-rail-menu {
+  position: fixed;
+  z-index: 60;
+  min-width: 232px;
+  padding: 6px;
+  border-radius: 14px;
+  background: rgba(24, 24, 26, .97);
+  border: 1px solid rgba(255, 255, 255, .12);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, .6);
+  backdrop-filter: blur(18px);
+}
+.stk-rail-menu button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 11px 12px;
+  border: 0;
+  border-radius: 9px;
+  background: none;
+  color: #fff;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+.stk-rail-menu button:active { background: rgba(255, 255, 255, .1); }
+.stk-rail-menu button span { color: rgba(255, 255, 255, .55); font-size: 12px; margin-left: auto; }
+
+
+/* ---- the feed name: plain text with a down arrow, no pill ------------ */
+.stk-feed-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 2px;
+  border: 0;
+  background: none;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: .01em;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, .65);
+  cursor: pointer;
+}
+.stk-feed-name .stk-pill-caret { opacity: .75; }
+.stk-feed-name.stk-open .stk-pill-caret { transform: rotate(180deg); }
+
+.stk-chan-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 61;
+  background: rgba(0, 0, 0, .28);
+}
+.stk-chan-menu { z-index: 62; position: relative; }
+
+/* ---- left drawer ----------------------------------------------------- */
+.stk-drawer-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(0, 0, 0, .55);
+  backdrop-filter: blur(2px);
+  display: flex;
+}
+.stk-drawer {
+  width: 268px;
+  max-width: 82vw;
+  height: 100%;
+  padding: 18px 10px 22px;
+  background: rgba(18, 18, 20, .98);
+  border-right: 1px solid rgba(255, 255, 255, .08);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  animation: stk-drawer-in 200ms ease;
+}
+@keyframes stk-drawer-in { from { transform: translateX(-14px); opacity: .4; } to { transform: none; opacity: 1; } }
+.stk-drawer-title {
+  padding: 6px 12px 14px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, .45);
+}
+.stk-drawer-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: rgba(255, 255, 255, .88);
+  font-size: 15px;
+  text-align: left;
+  cursor: pointer;
+}
+.stk-drawer-row.stk-on { background: rgba(255, 255, 255, .1); color: #fff; }
+.stk-drawer-row:active { background: rgba(255, 255, 255, .14); }
+
+
+/* ---- picking a performer for an image: a floating quick menu --------
+   One choice over the picture, so it floats near the middle and closes the
+   moment you pick, instead of sliding up a panel that owns the screen. */
+.stk-photo-actions.stk-photo-pick {
+  left: 50%;
+  right: auto;
+  bottom: auto;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(360px, 92vw);
+  max-height: 64vh;
+  padding: 12px 14px calc(12px + env(safe-area-inset-bottom));
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, .12);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, .6);
+  animation: stk-pop-in 160ms ease-out;
+}
+@keyframes stk-pop-in {
+  from { opacity: 0; transform: translate(-50%, -46%) scale(.97); }
+  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+.stk-photo-actions.stk-photo-pick .stk-photo-grip { display: none; }
+.stk-photo-pickhead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.stk-photo-pickhead h4 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: #fff;
+}
+.stk-photo-pickx { margin-left: auto; }
+.stk-photo-actions.stk-photo-pick .stk-actionsearch { margin-top: 0; }
+.stk-photo-actions.stk-photo-pick .stk-actionlist { max-height: 42vh; }
+.stk-photo-actions.stk-photo-pick .stk-marker-row { padding: 9px 10px; }
+
+/* ---- the open scrub bar and the caption share the bottom band ---- *
+ * The caption block sits 10px off the base of the stage, which is fine for the
+ * resting 5px track but not once a drag opens the scrub bar: `.stk-open` makes
+ * the track 16px tall inside a 58px band and adds a 22px knob, all bottom
+ * anchored, so the bar rose straight through the last caption line (the
+ * date • size • resolution line, which also carries the duration). Lift the
+ * whole info block while the bar is open — `.stk-info` already transitions
+ * `bottom`, so it slides up on grab and settles back when the bar folds away.
+ * 52px clears the 22px knob (top edge 881) and the marker label (854-874). */
+/* the JS class is the primary hook; :has() covers any render path that does not
+   set it (older engines without :has just fall through to the class) */
+.stk-info.stk-up,
+.stk-stage:has(.stk-timeline.stk-open) .stk-info { bottom: 52px; }
