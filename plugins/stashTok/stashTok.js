@@ -6566,7 +6566,7 @@ void main() {
         `query StashTokPerformer($id: ID!) {
           findPerformer(id: $id) {
             id name alias_list image_path scene_count image_count gallery_count o_counter rating100 favorite
-            birthdate country height_cm measurements details urls
+            birthdate country ethnicity fake_tits height_cm measurements details urls
             tags { id name }
           }
         }`,
@@ -6943,42 +6943,37 @@ void main() {
         (performer.alias_list || []).slice(0, 3).join(" · ");
 
     const bioText = isFolder ? "" : String(performer.details || "").trim();
-    /* links: Stash stores a performer's urls; label by site so x / onlyfans /
-       simpcity read at a glance. A per-folder .links file is coming later and will
-       populate this same list. */
+    /* links: only the sites a profile is actually looked up on. imdb / iafd /
+       bang.com and the rest of the catalog URLs are noise here. One chip per site. */
+    const LINK_SITES = [
+      [/simpcity/i, "SimpCity"],
+      [/(?:\/\/|\.)(?:x\.com|twitter\.com)(?:\/|$)/i, "X"],
+      [/instagram/i, "IG"],
+      [/linktr\.ee|linktree/i, "Linktree"],
+      [/onlyfans/i, "OnlyFans"],
+      [/babepedia/i, "Babepedia"],
+    ];
     const seenLink = {};
     const links = (isFolder ? [] : performer.urls || [])
       .filter(Boolean)
-      .filter((url) => {
-        /* three onlyfans urls label identically; one chip per site is enough */
-        const site = (String(url).match(/^https?:\/\/(?:www\.)?([^/]+)/i) || [])[1] || String(url);
-        const key = String(site).toLowerCase().replace(/^www\./, "").replace(/^m\./, "");
-        if (seenLink[key]) return false;
-        seenLink[key] = true;
-        return true;
-      })
-      .slice(0, 4)
       .map((url) => {
         const clean = String(url).trim();
-        const label = /x\.com|twitter\.com/i.test(clean)
-          ? "X"
-          : /onlyfans/i.test(clean)
-          ? "OnlyFans"
-          : /simpcity/i.test(clean)
-          ? "SimpCity"
-          : /instagram/i.test(clean)
-          ? "Instagram"
-          : /fansly/i.test(clean)
-          ? "Fansly"
-          : (clean.match(/^https?:\/\/([^/]+)/i) || [])[1] || clean;
-        return { url: clean, label: String(label).replace(/^www\./, "") };
+        const site = LINK_SITES.find(([pattern]) => pattern.test(clean));
+        return site ? { url: clean, label: site[1] } : null;
+      })
+      .filter((link) => {
+        if (!link) return false;
+        if (seenLink[link.label]) return false;
+        seenLink[link.label] = true;
+        return true;
       });
-    /* no location/birthdate: aliases for a performer, the path for a folder */
+    /* the strip under the counts: ethnicity | country | natural-or-fake */
     const metaLine = isFolder
-      ? String(folder).indexOf("/") >= 0
-        ? folder
-        : ""
-      : (performer.alias_list || []).slice(0, 3).join(" · ");
+      ? ""
+      : [performer.ethnicity, performer.country, performer.fake_tits]
+          .map((value) => String(value || "").trim())
+          .filter(Boolean)
+          .join(" | ");
     const gridClass = density === 5 ? "stk-grid-5" : "stk-grid-3";
     /* dense mode packs the same tiles into JS-balanced columns; normal mode keeps
        the 3-across grid. `ratios` is optional: a branch that knows its aspect
@@ -7085,20 +7080,6 @@ void main() {
           }
         },
       },
-      stashLink
-        ? h(
-            "a",
-            {
-              className: "stk-stash-link",
-              href: stashLink,
-              target: "_blank",
-              rel: "noopener noreferrer",
-              title: isFolder ? "Open this folder in Stash" : "Open this performer in Stash",
-            },
-            h(Icon, { name: "external", size: 13 }),
-            h("span", null, "View on Stash")
-          )
-        : null,
       stuck &&
         performer &&
         h(
@@ -7152,12 +7133,12 @@ void main() {
               h(Icon, { name: "heart", size: 15, filled: !!performer.favorite })
             )
           ),
-          /* one line, never two: "526 scenes, 283 markers" -- each count still taps
-             through to its own tab */
+          /* one line, never two: "526 scenes, 0 images, 283 markers" -- each count
+             still taps through to its own tab */
           h(
             "div",
             { className: "stk-xcounts" },
-            stats.slice(0, 1).concat(stats.slice(2, 3)).map(([label, value, onClick], index) =>
+            stats.map(([label, value, onClick], index) =>
               h(
                 React.Fragment,
                 { key: label },
@@ -7171,46 +7152,49 @@ void main() {
               )
             )
           ),
+          /* ethnicity | country | natural-or-fake, then the tags, then the links */
+          metaLine ? h("div", { className: "stk-xmeta" }, metaLine) : null,
+          performer.tags && performer.tags.length > 0
+            ? h(
+                "div",
+                { className: "stk-xid-tags" },
+                performer.tags.map((tag) =>
+                  h("button", { key: tag.id, className: "stk-tagpill", onClick: () => onOpenTag(tag) }, tag.name)
+                )
+              )
+            : null,
+          links.length > 0
+            ? h(
+                "div",
+                { className: "stk-xlinks" },
+                links.map((link) =>
+                  h(
+                    "a",
+                    {
+                      key: link.url,
+                      className: "stk-xlink",
+                      href: link.url,
+                      target: "_blank",
+                      rel: "noopener noreferrer",
+                      title: link.url,
+                    },
+                    "(",
+                    link.label,
+                    ")"
+                  )
+                )
+              )
+            : null,
           /* folders are identified by their path; a performer is not. One clip filed
              under another site's folder was enough to label a person /SiteRip/NetVideoGirls,
              which is a statement about a download, not about them. */
           isFolder && handleText ? h("div", { className: "stk-xhandle" }, handleText) : null
-        ),
-        h(
-          "div",
-          { className: "stk-xmenu" + (menuOpen ? " stk-xmenu-open" : "") },
-          h(
-            "button",
-            {
-              className: "stk-xmore",
-              onClick: () => setMenuOpen(!menuOpen),
-              "aria-label": "More",
-              "aria-haspopup": "menu",
-              "aria-expanded": menuOpen ? "true" : "false",
-            },
-            h(Icon, { name: "more", size: 22 })
-          ),
-          menuOpen && menuPopup()
         )
       ),
       h(
         "div",
         { className: "stk-xbody" },
         bioText ? h("div", { className: "stk-xbio" }, bioText) : null,
-        links.length > 0
-          ? h(
-              "div",
-              { className: "stk-xlinks" },
-              links.map((link) =>
-                h(
-                  "a",
-                  { key: link.url, className: "stk-xlink", href: link.url, target: "_blank", rel: "noopener noreferrer" },
-                  h(Icon, { name: "link", size: 12 }),
-                  link.label
-                )
-              )
-            )
-          : null,
         h(
           "div",
           { className: "stk-xactions" },
@@ -7225,15 +7209,26 @@ void main() {
             },
             h(Icon, { name: "play", size: 14 }),
             "Highlight reel"
+          ),
+          /* the ⋯ sits beside the last button, and it is where "View on Stash" lives */
+          h(
+            "div",
+            { className: "stk-xmenu stk-xmenu-inline" + (menuOpen ? " stk-xmenu-open" : "") },
+            h(
+              "button",
+              {
+                className: "stk-xmore",
+                onClick: () => setMenuOpen(!menuOpen),
+                "aria-label": "More",
+                "aria-haspopup": "menu",
+                "aria-expanded": menuOpen ? "true" : "false",
+              },
+              h(Icon, { name: "more", size: 22 })
+            ),
+            menuOpen && menuPopup()
           )
         )
       ),
-      performer.tags && performer.tags.length > 0 &&
-        h(
-          "div",
-          { className: "stk-profile-tags" },
-          performer.tags.map((tag) => h("button", { key: tag.id, className: "stk-tagpill", onClick: () => onOpenTag(tag) }, tag.name))
-        ),
 
       h(
         "div",

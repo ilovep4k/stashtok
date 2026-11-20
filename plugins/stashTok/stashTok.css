@@ -4024,10 +4024,10 @@ html.stk-mono { filter: grayscale(1) contrast(1.06); }
   border-color: #fe2c55;
   color: #fff;
 }
-/* "526 scenes, 283 markers" -- one line, both counts still tap through */
+/* "526 scenes, 0 images, 283 markers" -- one line, each count taps through */
 .stk-xcounts {
-  margin-top: 6px;
-  font-size: 13.5px;
+  margin-top: 7px;
+  font-size: 15.5px;
   color: rgba(255, 255, 255, 0.55);
   white-space: nowrap;
   overflow: hidden;
@@ -4042,8 +4042,21 @@ html.stk-mono { filter: grayscale(1) contrast(1.06); }
   cursor: pointer;
 }
 .stk-xcount:hover { color: #fff; }
-.stk-xcount b { font-weight: 700; color: rgba(255, 255, 255, 0.86); }
+.stk-xcount b { font-size: 16.5px; font-weight: 700; color: rgba(255, 255, 255, 0.9); }
 .stk-xcounts-sep { color: rgba(255, 255, 255, 0.35); }
+/* ethnicity | country | natural-or-fake */
+.stk-xmeta {
+  margin-top: 6px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.62);
+}
+.stk-xid-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 9px;
+}
+.stk-xid-tags .stk-tagpill { margin: 0; }
 .stk-xhandle {
   margin-top: 2px;
   font-size: 13px;
@@ -4062,19 +4075,15 @@ html.stk-mono { filter: grayscale(1) contrast(1.06); }
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.stk-xlinks { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+/* (SimpCity) (X) (OnlyFans) -- plain parenthesised labels, no chrome */
+.stk-xlinks { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 7px; }
 .stk-xlink {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 12px;
+  font-size: 12.5px;
   color: #8fb7ff;
   text-decoration: none;
-  background: rgba(255, 255, 255, .06);
-  border: 1px solid rgba(255, 255, 255, .12);
-  border-radius: 999px;
-  padding: 5px 10px;
+  padding: 0;
 }
+.stk-xlink:hover { text-decoration: underline; }
 /* counts moved into the identity column, beside the name */
 .stk-xactions { display: flex; gap: 8px; margin: 14px 0 10px; justify-content: flex-start; }
 .stk-xbtn {
@@ -4145,6 +4154,9 @@ html.stk-mono { filter: grayscale(1) contrast(1.06); }
 
 /* ---- the ⋯ menu as a popup beside its button ------------------------- */
 .stk-xmenu { position: relative; display: flex; align-items: center; margin-bottom: 6px; }
+/* beside Highlight reel: same height as the button, no offset of its own */
+.stk-xmenu-inline { margin-bottom: 0; }
+.stk-xmenu-inline .stk-xmore { margin-bottom: 0; height: 40px; width: 40px; }
 .stk-xmenu .stk-xmore { margin-bottom: 0; }
 .stk-menu-pop {
   left: auto;

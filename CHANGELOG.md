@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased - profile identity stack
+
+- **Counts line reads "526 scenes, 0 images, 283 markers"** in a larger 15.5 px face,
+  one line, each count still tapping through to its tab.
+- **Metadata strip under the counts**: `ethnicity | country | natural-or-fake`, then
+  the performer's tags, then parenthesised site links `(X) (OnlyFans) (IG)`.
+- **Links are filtered to SimpCity, X, IG, Linktree, OnlyFans and Babepedia.** imdb,
+  iafd, bang.com and the rest of the catalogue URLs are dropped; one per site.
+- **"View on Stash" moved off the header** into the ⋯ menu, which now sits beside the
+  Highlight reel button instead of floating at the top right.
+
 ## Unreleased - profile header without a banner
 
 - **The performer header is a plain identity row.** No cover art behind it: avatar on
