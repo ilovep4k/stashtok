@@ -2,6 +2,9 @@
 
 ## Unreleased - profile identity stack
 
+- **Award tags are hidden on the profile strip** ("[AVN Award Nominated]", "[Award
+  Winner]", nominees, hall of fame). They stay in Stash, they just are not metadata.
+
 - **Counts line reads "526 scenes, 0 images, 283 markers"** in a larger 15.5 px face,
   one line, each count still tapping through to its tab.
 - **Metadata strip under the counts**: `ethnicity | country | natural-or-fake`, then

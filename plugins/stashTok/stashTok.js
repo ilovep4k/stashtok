@@ -246,11 +246,11 @@
     });
   }
 
-  /* Desktop hover: play the scene's own file, not a generated preview.
-     The preview mp4s are generated content and are regularly absent — a 404
-     leaves a video element that never paints, which is what made hovered tiles
-     look blank. The file itself needs nothing generated. To keep it cheap it
-     plays a second, jumps 30s, plays a second, and starts over at the end. */
+  /* Optional desktop hover preview (Settings → Performer page, off by default).
+     It streams the scene's own file — generated preview mp4s 404 behind the LAN
+     proxy and leave a blank tile — and seeks +30 s about once a second so a long
+     clip is sampled rather than played. Off unless the user turns it on: the
+     seeking costs real bandwidth and decode work. */
   const HOVER_PLAY = 1;
   const HOVER_STEP = 30;
 
@@ -271,8 +271,8 @@
         if (!el || !el.duration || !isFinite(el.duration)) return;
         if (el.currentTime - lastJump < HOVER_PLAY) return;
         /* lastJump is the position we just seeked TO: comparing against the
-           position we left made the next tick see a 30 s delta and jump again
-           immediately, so the whole file flew past in a few seconds. */
+           position we left makes the next tick see a 30 s delta and jump again
+           immediately, so the whole file flies past in seconds. */
         const next = el.currentTime + HOVER_STEP;
         const target = next >= el.duration - 1 ? 0 : next;
         lastJump = target;
@@ -286,7 +286,7 @@
         try {
           v.currentTime = 0;
         } catch (e) {
-          /* seeking before the metadata is known just throws; the next event retries */
+          /* seeking before metadata is known throws; the next event retries */
         }
         const playing = v.play();
         if (playing && playing.catch) playing.catch(() => {});
@@ -309,8 +309,8 @@
       autoPlay: true,
       playsInline: true,
       preload: "metadata",
-      /* reveal only once a frame can actually paint; a file the browser cannot
-         decode stays hidden and the still underneath keeps showing */
+      /* reveal only once a frame can paint; a file the browser cannot decode
+         stays hidden and the still underneath keeps showing */
       onLoadedData: (event) => {
         const v = event && event.currentTarget;
         if (v && v.videoWidth > 0) setReady(true);
@@ -1427,6 +1427,9 @@
        clip jumping on its own. The scrub bar is opened by tapping the caption. */
     dragScrub: false,
     mono: false,
+    /* hover a grid tile to play its file: off by default — it streams the real
+       scene and seeks every second, which is real work for a decoration */
+    hoverPreview: false,
     favoritesSort: "updated_at",
     favoritesOpen: "gallery",
     feedWindow: "all",
@@ -6254,6 +6257,18 @@ void main() {
      at even marks, no new assets and no ffmpeg calls. */
   function ContactSheet({ scene, duration, onClose, onPick }) {
     const [tiles, setTiles] = useState(null);
+    /* re-fit when the viewport changes: rotating the phone or resizing the window
+       must re-run the width/height fit, not leave the old tile size behind */
+    const [, setFitTick] = useState(0);
+    useEffect(() => {
+      const onResize = () => setFitTick((n) => n + 1);
+      window.addEventListener("resize", onResize);
+      window.addEventListener("orientationchange", onResize);
+      return () => {
+        window.removeEventListener("resize", onResize);
+        window.removeEventListener("orientationchange", onResize);
+      };
+    }, []);
     const COLS = 3;
     const ROWS = 4;
 
@@ -6281,14 +6296,20 @@ void main() {
       };
     }, [scene && scene.id, duration]);
 
-    /* keep the popup inside the viewport with a 10% margin on every side */
+    /* the sheet fills the viewport: grow until width or height binds, whichever
+       comes first. No fixed pixel cap -- a 3x4 grid is always 3 wide and 4 tall,
+       so the tile is the smaller of the two fits. */
     const vw = (typeof window !== "undefined" ? window.innerWidth : 380) || 380;
     const vh = (typeof window !== "undefined" ? window.innerHeight : 700) || 700;
-    const boxW = Math.min(380, vw * 0.8);
-    const boxH = vh * 0.8;
-    const byWidth = Math.floor((boxW - 46) / COLS);
-    const byHeight = Math.floor((boxH - 90) / ROWS / 0.5625);
-    const TILE = Math.max(64, Math.min(104, byWidth, byHeight));
+    const GAP = 6;
+    const PAD_X = 16;            /* .stk-sheet padding: 14px 16px */
+    const PAD_Y = 14;
+    const HEAD = 46;             /* title row + its margin */
+    const boxW = vw * 0.8 - PAD_X * 2;
+    const boxH = vh * 0.8 - HEAD - PAD_Y * 2;
+    const byWidth = Math.floor((boxW - GAP * (COLS - 1)) / COLS);
+    const byHeight = Math.floor((boxH - GAP * (ROWS - 1)) / ROWS / 0.5625);
+    const TILE = Math.max(64, Math.min(byWidth, byHeight));
     return h(
       React.Fragment,
       null,
@@ -6306,7 +6327,7 @@ void main() {
           ? h("div", { className: "stk-state" }, h("div", { className: "stk-spinner" }))
           : h(
               "div",
-              { className: "stk-contact-grid" },
+              { className: "stk-contact-grid", style: { gridTemplateColumns: `repeat(${COLS}, ${TILE}px)` } },
               tiles.map((tile, index) => {
                 const scale = tile.cue ? TILE / tile.cue.w : 1;
                 return h(
@@ -6503,6 +6524,8 @@ void main() {
       }
     }
     const [folderPick, setFolderPick] = useState(null);
+    /* opt-in hover preview (Settings → Performer page); off = tiles never mount a video */
+    const hoverOn = !!(prefs && prefs.hoverPreview);
     const [hoverScene, setHoverScene] = useState(null);
     const [sel, setSel] = useState(-1);
     /* long press = contact sheet instead of opening the clip */
@@ -6974,6 +6997,11 @@ void main() {
           .map((value) => String(value || "").trim())
           .filter(Boolean)
           .join(" | ");
+    /* award noise is not metadata: "[AVN Award Nominated]", "[Award Winner]" and
+       friends are dropped from the profile strip (the tags themselves stay in Stash) */
+    const tagList = (performer.tags || []).filter(
+      (tag) => !/award|nominat|nominee|winner|hall of fame/i.test(String(tag.name || ""))
+    );
     const gridClass = density === 5 ? "stk-grid-5" : "stk-grid-3";
     /* dense mode packs the same tiles into JS-balanced columns; normal mode keeps
        the 3-across grid. `ratios` is optional: a branch that knows its aspect
@@ -7154,11 +7182,11 @@ void main() {
           ),
           /* ethnicity | country | natural-or-fake, then the tags, then the links */
           metaLine ? h("div", { className: "stk-xmeta" }, metaLine) : null,
-          performer.tags && performer.tags.length > 0
+          tagList.length > 0
             ? h(
                 "div",
                 { className: "stk-xid-tags" },
-                performer.tags.map((tag) =>
+                tagList.map((tag) =>
                   h("button", { key: tag.id, className: "stk-tagpill", onClick: () => onOpenTag(tag) }, tag.name)
                 )
               )
@@ -7451,13 +7479,16 @@ void main() {
                     setSel(tileIndex);
                     openScene(scene);
                   },
-                  onMouseEnter: () => {
-                    if (window.innerWidth >= 900) setHoverScene(scene.id);
-                  },
-                  onMouseLeave: () => setHoverScene((cur) => (cur === scene.id ? null : cur)),
+                  onMouseEnter: hoverOn
+                    ? () => {
+                        if (window.innerWidth >= 900) setHoverScene(scene.id);
+                      }
+                    : undefined,
+                  onMouseLeave: hoverOn ? () => setHoverScene((cur) => (cur === scene.id ? null : cur)) : undefined,
                 },
                 h("div", { className: "stk-tile-photo" }, h(Thumb, { src: rel(scene.paths && scene.paths.screenshot) })),
-                hoverScene === scene.id &&
+                hoverOn &&
+                  hoverScene === scene.id &&
                   h(HoverPreview, {
                     key: "hover-" + scene.id,
                     /* the unsigned path: Stash signs stream URLs for its own host,
@@ -9926,6 +9957,18 @@ function TagsPage({ onPick, onMarkers, onBack }) {
         PrefRow,
         { title: "Folders on top", hint: "Group a performer's clips by folder above the grid" },
         h(PrefToggle, { label: "Folders on top", on: prefs.foldersOnTop, onChange: (value) => setPref("foldersOnTop", value) })
+      ),
+      h(
+        PrefRow,
+        {
+          title: "Hover previews",
+          hint: "Playing the clip when the pointer rests on a tile. Off by default: it streams the real file and skips ahead every second, which is heavy for a decoration.",
+        },
+        h(PrefToggle, {
+          label: "Hover previews",
+          on: prefs.hoverPreview === true,
+          onChange: (value) => setPref("hoverPreview", value),
+        })
       ),
       h(
         PrefRow,
