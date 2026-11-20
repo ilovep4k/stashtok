@@ -703,7 +703,6 @@
 }
 .stk-stat b { display: block; font-size: 14px; }
 .stk-stat span { font-size: 10px; color: rgba(255,255,255,.5); }
-.stk-profile-tags { padding: 0 14px 10px; }
 .stk-tabs {
   display: flex;
   gap: 10px;
@@ -1104,7 +1103,8 @@ body.stk-anim .stk-grid-5 .stk-tile {
   display: flex;
   align-items: center;
   justify-content: center;
-  transform: rotate(90deg);
+  /* no transform: the icon is already the left-pointing back chevron. A stray
+     rotate(90deg) here turned every back button into an up arrow. */
   backdrop-filter: blur(6px);
 }
 
@@ -2766,20 +2766,22 @@ img.stk-scrub-cell {
 
 /* ---- long-press contact sheet (3x4 from the scrubber sprites) ---- */
 .stk-sheet.stk-contact-sheet {
-  /* centred in the viewport with a 10% gutter all round, never clipped at an edge */
+  /* centred in the viewport with a 10% gutter all round, never clipped at an edge.
+     The sheet hugs its grid: the JS picks the largest tile that fits width or
+     height, whichever binds first, so no fixed max-width. */
   position: fixed;
   inset: 10%;
   margin: auto;
-  width: auto;
-  max-width: 380px;
-  height: -moz-fit-content;
+  width: fit-content;
+  max-width: none;
   height: fit-content;
   max-height: 100%;
   overflow: auto;
 }
 .stk-contact-grid {
   display: grid;
-  grid-template-columns: repeat(3, 96px);
+  /* columns come from the JS tile size; one gap governs both axes so the
+     gutters between columns and the valleys between rows are identical */
   gap: 6px;
   justify-content: center;
   padding: 2px 0 4px;
@@ -4050,13 +4052,6 @@ html.stk-mono { filter: grayscale(1) contrast(1.06); }
   font-size: 13px;
   color: rgba(255, 255, 255, 0.62);
 }
-.stk-xid-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 9px;
-}
-.stk-xid-tags .stk-tagpill { margin: 0; }
 .stk-xhandle {
   margin-top: 2px;
   font-size: 13px;

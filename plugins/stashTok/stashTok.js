@@ -6590,7 +6590,6 @@ void main() {
           findPerformer(id: $id) {
             id name alias_list image_path scene_count image_count gallery_count o_counter rating100 favorite
             birthdate country ethnicity fake_tits height_cm measurements details urls
-            tags { id name }
           }
         }`,
         { id: performerId }
@@ -6997,11 +6996,6 @@ void main() {
           .map((value) => String(value || "").trim())
           .filter(Boolean)
           .join(" | ");
-    /* award noise is not metadata: "[AVN Award Nominated]", "[Award Winner]" and
-       friends are dropped from the profile strip (the tags themselves stay in Stash) */
-    const tagList = (performer.tags || []).filter(
-      (tag) => !/award|nominat|nominee|winner|hall of fame/i.test(String(tag.name || ""))
-    );
     const gridClass = density === 5 ? "stk-grid-5" : "stk-grid-3";
     /* dense mode packs the same tiles into JS-balanced columns; normal mode keeps
        the 3-across grid. `ratios` is optional: a branch that knows its aspect
@@ -7180,17 +7174,8 @@ void main() {
               )
             )
           ),
-          /* ethnicity | country | natural-or-fake, then the tags, then the links */
+          /* ethnicity | country | natural-or-fake, then the links */
           metaLine ? h("div", { className: "stk-xmeta" }, metaLine) : null,
-          tagList.length > 0
-            ? h(
-                "div",
-                { className: "stk-xid-tags" },
-                tagList.map((tag) =>
-                  h("button", { key: tag.id, className: "stk-tagpill", onClick: () => onOpenTag(tag) }, tag.name)
-                )
-              )
-            : null,
           links.length > 0
             ? h(
                 "div",
