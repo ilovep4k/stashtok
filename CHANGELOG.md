@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased - feed chrome
+
+- **Hashtags are one line.** Whatever does not fit is cut and the strip ends in
+  "…more", which opens a **More Tags** sheet with every tag as a chip. Pure React
+  state, not a URL param, so browser Back never lands you back inside the sheet.
+- **The right rail sits higher** (104 px off the bottom) so its last button clears
+  the timeline and a wrapped caption on a short window.
+- **The rail's action button always reads "More".** It used to relabel itself "2x"
+  whenever the playback speed was not 1, which read as a speed button.
+- **The profile tab bar is a fixed widget**: it sticks to the top of the pane, with
+  the tile-size toggle locked to its right edge.
+
 ## Unreleased - profile identity stack
 
 - **Performer tags are gone from the profile strip.** The only performer tags this

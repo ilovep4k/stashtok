@@ -2317,6 +2317,18 @@ void main() {
     const [duration, setDuration] = useState(0);
     const [time, setTime] = useState(0);
     const [rateBadge, setRateBadge] = useState("");
+    /* the hashtag strip is one line; "…more" opens the full list in a sheet */
+    const [tagsOpen, setTagsOpen] = useState(false);
+    const [tagsOverflow, setTagsOverflow] = useState(false);
+    const tagsRef = useRef(null);
+    /* callback ref, not an effect: it measures once the node is in the DOM and
+       never re-renders the card a second time on its own */
+    const measureTags = (node) => {
+      tagsRef.current = node;
+      if (!node) return;
+      const over = node.scrollWidth - node.clientWidth > 4;
+      setTagsOverflow((cur) => (cur === over ? cur : over));
+    };
     const [heartBurst, setHeartBurst] = useState(0);
     /* long-press on the heart asks which kind of favourite, instead of guessing */
     const [railMenu, setRailMenu] = useState(null);
@@ -4063,7 +4075,6 @@ void main() {
     const tags = scene.tags || [];
     const handle = resolveHandle(scene, file);
     const showPath = !!(prefs && prefs.showPath);
-    const TAG_LIMIT = 4;
 
     /* tag sheet: sections mirror the Discover page — a heading, then the tags
        under it. Chips are keyed by tag NAME (the section lists are names; ids
@@ -4700,36 +4711,39 @@ void main() {
           tags.length > 0 &&
             h(
               "div",
-              { className: "stk-hashtags" },
-              tags.map((tag, tagIndex) =>
-                h(
-                  "button",
-                  {
-                    key: tag.id,
-                    className: "stk-hashtext" + (tagIndex >= TAG_LIMIT ? " stk-tag-extra" : ""),
-                    onClick: (event) => {
-                      event.stopPropagation();
-                      onOpenTag(tag);
+              { className: "stk-hashtagwrap" },
+              h(
+                "div",
+                { className: "stk-hashtags", ref: measureTags },
+                tags.map((tag) =>
+                  h(
+                    "button",
+                    {
+                      key: tag.id,
+                      className: "stk-hashtext",
+                      onClick: (event) => {
+                        event.stopPropagation();
+                        onOpenTag(tag);
+                      },
                     },
-                  },
-                  "#" + tag.name.replace(/\s+/g, "-").toLowerCase()
+                    "#" + tag.name.replace(/\s+/g, "-").toLowerCase()
+                  )
                 )
               ),
-              tags.length > TAG_LIMIT &&
+              /* the whole list is on one line; when it runs past the card the
+                 last visible character becomes "…more", which opens the full
+                 list. State, not a URL param: browser back must not re-open it. */
+              tagsOverflow &&
                 h(
                   "button",
                   {
                     className: "stk-hashtext stk-hashtext-more",
-                    /* toggled on the DOM node: a state change here re-renders the feed
-                       card and the current clip can jump underneath you */
                     onClick: (event) => {
                       event.stopPropagation();
-                      const box = event.currentTarget.parentElement;
-                      const open = box.classList.toggle("stk-tags-open");
-                      event.currentTarget.textContent = open ? "less" : "+" + (tags.length - TAG_LIMIT) + " more";
+                      setTagsOpen(true);
                     },
                   },
-                  "+" + (tags.length - TAG_LIMIT) + " more"
+                  "…more"
                 )
             ),
         ),
@@ -4841,7 +4855,7 @@ void main() {
               },
             },
             h(Icon, { name: "sparkle", size: 26 }),
-            h("span", null, speed === 1 ? "More" : speed + "x")
+            h("span", null, "More")
           )
         ),
 
@@ -4965,6 +4979,41 @@ void main() {
               )
           )
         ),
+
+        tagsOpen &&
+          h(
+            React.Fragment,
+            null,
+            h("div", { className: "stk-sheet-backdrop", onClick: () => setTagsOpen(false) }),
+            h(
+              "div",
+              { className: "stk-sheet stk-moretags-sheet", onClick: (event) => event.stopPropagation() },
+              h(
+                "h3",
+                null,
+                h("span", null, "More Tags"),
+                h("button", { className: "stk-btn", onClick: () => setTagsOpen(false), "aria-label": "Close" }, h(Icon, { name: "x", size: 16 }))
+              ),
+              h(
+                "div",
+                { className: "stk-moretags-list" },
+                tags.map((tag) =>
+                  h(
+                    "button",
+                    {
+                      key: tag.id,
+                      className: "stk-tagpill",
+                      onClick: () => {
+                        setTagsOpen(false);
+                        onOpenTag(tag);
+                      },
+                    },
+                    "#" + tag.name.replace(/\s+/g, "-").toLowerCase()
+                  )
+                )
+              )
+            )
+          ),
 
         sheet === "feeds" &&
           h(FeedPicker, {
