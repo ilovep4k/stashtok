@@ -2114,14 +2114,20 @@ void main() {
       gl.bindTexture(gl.TEXTURE_2D, tex);
       /* Mipmaps, not plain LINEAR: the shader reads a 3840-wide fisheye eye into a
          ~400pt view, so most of the frame is minified 4-10x and bilinear sampling
-         alone aliases into the crawling jaggies. webgl1 only permits mipmaps on a
-         power-of-two texture, so texSize() rounds for that case. */
+         alone aliases into the crawling jaggies. webgl1 cannot mipmap a
+         non-power-of-two texture, and the frame is uploaded at its native size, so
+         webgl1 gets plain LINEAR instead. */
       const isGL2 = typeof gl.texStorage2D === "function";
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+      /* webgl1 has no mipmaps for a non-power-of-two texture, and the frame is now
+         uploaded at its native size: asking for mips there would leave the texture
+         incomplete, which renders black */
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, isGL2 ? gl.LINEAR_MIPMAP_LINEAR : gl.LINEAR);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-      const maxTex = Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE) || 4096, 4096);
+      /* the driver's real limit: a 4320-wide VR frame must not be shrunk by an
+         arbitrary cap, only by what the GPU cannot hold */
+      const maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE) || 4096;
       /* if the driver refuses mipmaps (incomplete texture = a black canvas) fall
          back to plain bilinear rather than losing the picture entirely */
       let mipOk = true;
@@ -2135,24 +2141,6 @@ void main() {
           gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
         }
       }
-      /* Target the canvas at device resolution, a bit above it because the fisheye
-         stretch magnifies the centre. Never below 1024 (a 4K source deserves more
-         than the screen) and never above the source or the GPU limit. */
-      function texSize(target, vw, vh) {
-        const want = Math.max(1024, Math.min(target, maxTex, vw));
-        let w = want;
-        if (!isGL2) w = Math.pow(2, Math.floor(Math.log2(want)));
-        const h = Math.max(2, isGL2 ? Math.round((w * vh) / vw) : Math.pow(2, Math.round(Math.log2((w * vh) / vw))));
-        return { w, h };
-      }
-      const u = {
-        tex: gl.getUniformLocation(prog, "tex"),
-        yaw: gl.getUniformLocation(prog, "yaw"),
-        pitch: gl.getUniformLocation(prog, "pitch"),
-        fov: gl.getUniformLocation(prog, "fov"),
-        aspect: gl.getUniformLocation(prog, "aspect"),
-        kind: gl.getUniformLocation(prog, "kind"),
-      };
       const scratch = document.createElement("canvas");
       scratch.width = 1024;
       scratch.height = 512;
@@ -2203,7 +2191,6 @@ void main() {
       let last = 0;
       let lastFrame = -1;
       let lastKind = "";
-      let uploadIdle = true;
       const draw = (now) => {
         raf = requestAnimationFrame(draw);
         if (now - last < 16) return;
@@ -2240,11 +2227,13 @@ void main() {
         lastFrame = source.currentTime;
         const vw = source.videoWidth || 1920;
         const vh = source.videoHeight || 960;
-        /* 2048 was the cap, and on a phone w*1.15 landed near 950: a 4K fisheye
-           squeezed into a sub-screen texture. Size from the canvas instead. */
-        const size = texSize(Math.round(Math.max(canvas.width, 1024) * 1.5), vw, vh);
-        const texW = size.w;
-        const texH = size.h;
+        /* No resampling at all: the decoded frame goes to the GPU at the size it
+           was decoded at, so nothing between the file and the screen softens it.
+           The only exception is a frame wider than the GPU's texture limit, which
+           has to be shrunk to that limit to be uploaded at all. */
+        const fits = vw <= maxTex && vh <= maxTex;
+        const texW = fits ? vw : maxTex;
+        const texH = fits ? vh : Math.max(2, Math.round((maxTex * vh) / vw));
         const master = videoRef.current;
         if (source === fallback && master && master.currentTime > 1 && fallback.duration > 2) {
           /* keep the stand-in roughly where the timeline says we are */
@@ -2262,29 +2251,13 @@ void main() {
           gl.uniform1i(u.kind, layout === "equirect" ? 1 : 0);
           gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
         };
-        /* Upload through createImageBitmap so the resize happens on the GPU: an 8K
-           frame pushed through a 2D canvas every frame is what stutters on iOS. */
-        if (window.createImageBitmap) {
-          if (!uploadIdle) {
-            /* an upload is already in flight: repaint the last texture, do not queue another */
-            paint();
-            return;
-          }
-          uploadIdle = false;
-          createImageBitmap(source, { resizeWidth: texW, resizeHeight: texH, resizeQuality: "medium" })
-            .then((bitmap) => {
-              gl.bindTexture(gl.TEXTURE_2D, tex);
-              gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bitmap);
-              bitmap.close();
-              mip();
-              uploadIdle = true;
-              paint();
-            })
-            .catch(() => {
-              uploadIdle = true;
-              legacyUpload(texW, texH);
-              paint();
-            });
+        if (fits) {
+          /* straight from the video element: one GPU-to-GPU copy, no canvas, no
+             bitmap, no scale step */
+          gl.bindTexture(gl.TEXTURE_2D, tex);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+          if (isGL2) mip();
+          paint();
         } else {
           legacyUpload(texW, texH);
           paint();
@@ -2302,7 +2275,7 @@ void main() {
           }
           gl.bindTexture(gl.TEXTURE_2D, tex);
           gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, scratch);
-          mip();
+          if (isGL2) mip();
         }
       };
       raf = requestAnimationFrame(draw);
@@ -2348,7 +2321,8 @@ void main() {
         moved += Math.abs(dx) + Math.abs(dy);
         const view = viewRef.current;
         if (points.size === 1) {
-          view.yaw -= dx * 0.0052;
+          /* dragging right must pull the world right; the sign was flipped */
+          view.yaw += dx * 0.0052;
           view.pitch = Math.max(-1.15, Math.min(1.15, view.pitch - dy * 0.0042));
         } else if (points.size >= 2) {
           const entries = Array.from(points.values());
@@ -3169,7 +3143,7 @@ void main() {
       /* reset the user's pinch AND put the clip's framing back: a prewarmed clip
          fires canplay before it becomes active, so waiting for that event here
          left every second clip uncropped */
-      applyCrop(cropModeRef.current, false);
+      applyCrop(cropModeRef.current, false, true);
       /* "Clear Display" belongs to one clip: the next one starts with its HUD */
       setClearDisplay(false);
       /* a tap still waiting out its double-tap window must not pause the next clip */
@@ -3558,24 +3532,26 @@ void main() {
     }, [cropKind]);
 
     const applyCrop = useCallback(
-      (mode, animate) => {
+      (mode, animate, reset) => {
         if (!activeVideo()) return;
         const kind = cropKind();
-        if (!kind) {
-          tf.current = { s: 1, x: 0, y: 0 };
-          cropZoomRef.current = false;
-          applyTransform(animate);
-          return;
-        }
-        const s = cropScaleFor(mode, kind);
-        tf.current = { s, x: 0, y: 0 };
-        cropZoomRef.current = s > 1.02;
+        const s = kind ? cropScaleFor(mode, kind) : 1;
+        /* canplay fires again on every re-buffer, and this runs from it: without
+           this guard a grab on a cropped clip snapped back to centre mid-pan.
+           Only a new clip, a framing step or a scale change recentres. */
+        const keepPan = !reset && Math.abs((tf.current.s || 1) - s) < 0.001;
+        tf.current = {
+          s,
+          x: keepPan ? tf.current.x : 0,
+          y: keepPan ? tf.current.y : 0,
+        };
+        cropZoomRef.current = kind ? s > 1.02 : false;
         applyTransform(animate);
       },
       [activeVideo, cropKind, applyTransform]
     );
 
-    cropRefreshRef.current = () => applyCrop(cropModeRef.current, false);
+    cropRefreshRef.current = () => applyCrop(cropModeRef.current, false, false);
     useEffect(() => {
       cropRefreshRef.current();
     }, [fullscreen, fullscreenFit]);
@@ -3603,7 +3579,7 @@ void main() {
       } catch (e) {
         /* ignore */
       }
-      applyCrop(next, true);
+      applyCrop(next, true, true);
       window.clearTimeout(cropBadgeTimer.current);
       setCropBadge(cropLabel(next));
       cropBadgeTimer.current = window.setTimeout(() => setCropBadge(""), 900);
@@ -4465,7 +4441,7 @@ void main() {
            step the cycle is on. The crop's own 2x is not a pinch, so a tap at
            crop scale still pauses. */
         if (userZoomed()) {
-          applyCrop(cropModeRef.current, true);
+          applyCrop(cropModeRef.current, true, true);
           window.clearTimeout(cropBadgeTimer.current);
           setCropBadge(cropLabel(cropModeRef.current));
           cropBadgeTimer.current = window.setTimeout(() => setCropBadge(""), 900);
@@ -4549,7 +4525,6 @@ void main() {
         const ox = g.overX || 0;
         const oy = g.overY || 0;
         const vertical = Math.abs(oy) >= Math.abs(ox);
-        window.__stkPan = { oy, ox, vertical, height, index, items: items.length };
         if (vertical && Math.abs(oy) > SWIPE_PX && height) {
           /* the picture was already at its edge and the finger kept going: the
              leftover travel is the swipe, so paging never needs a second gesture */
@@ -9720,7 +9695,7 @@ void main() {
   }
 
   /* Favorites, as a discovery page: the performers you have favourited, then rows
-     of favourite scenes by recent / largest / longest. Every row is its own feed --
+     of favourite scenes by recent / largest / most viewed. Every row is its own feed --
      the row header, the "View all" card and a tap on a tile all open one, built from
      the same Stash query the row was drawn from, so a swipe keeps walking that row. */
   const FAVORITE_SORTS = [
@@ -9733,8 +9708,13 @@ void main() {
 
   const FAVORITE_ROWS = [
     { key: "recent", title: "Recently favorited", sort: "updated_at", direction: "DESC" },
+    /* a fresh draw of the same favourites on every visit: the rows below are
+       stable sorts, so this is the one that never shows the same order twice */
+    { key: "random", title: "Random Favorites", sort: "random", direction: "DESC" },
     { key: "largest", title: "Largest", sort: "filesize", direction: "DESC" },
-    { key: "longest", title: "Longest", sort: "duration", direction: "DESC" },
+    /* play_count is Stash's own view counter, so "most viewed" is the library's
+       real history rather than a proxy for it */
+    { key: "viewed", title: "Most viewed", sort: "play_count", direction: "DESC" },
   ];
 
   /* first performer on the scene: the byline a favourites tile shows */
