@@ -147,6 +147,18 @@
 }
 .stk-rail button svg { width: 26px; height: 26px; filter: drop-shadow(0 1px 3px rgba(0,0,0,.7)); }
 .stk-rail .stk-on { color: #ff2d55; }
+/* the "more" quick action: a thin white circle with three dots inside, so it
+   reads as a button next to the bare glyphs around it */
+.stk-rail-circle {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 1.5px solid rgba(255, 255, 255, .85);
+  border-radius: 50%;
+  background: rgba(0, 0, 0, .18);
+}
+.stk-rail .stk-rail-circle svg { width: 20px; height: 20px; }
 .stk-heart-pop { animation: stk-pop 420ms ease-out; }
 @keyframes stk-pop {
   0% { transform: scale(1); }
@@ -4440,6 +4452,11 @@ html.stk-mono { filter: grayscale(1) contrast(1.06); }
   letter-spacing: .01em;
   text-shadow: 0 1px 6px rgba(0, 0, 0, .65);
   cursor: pointer;
+  /* `.stk-top` is pointer-events: none so the HUD never eats the stage's taps;
+     every control inside it has to re-enable itself. The pill used to inherit
+     `auto` from `.stk-feed-pill` and lost it when the class was renamed —
+     which is why tapping the feed name did nothing at all. */
+  pointer-events: auto;
 }
 .stk-feed-name .stk-pill-caret { opacity: .75; }
 .stk-feed-name.stk-open .stk-pill-caret { transform: rotate(180deg); }
@@ -4447,10 +4464,13 @@ html.stk-mono { filter: grayscale(1) contrast(1.06); }
 .stk-chan-scrim {
   position: fixed;
   inset: 0;
-  z-index: 61;
+  z-index: 9700;
   background: rgba(0, 0, 0, .28);
 }
-.stk-chan-menu { z-index: 62; position: relative; }
+/* a fixed overlay under the pill, above every app layer: the stage and the
+   embedded shell paint at 9000+, so a local z-index put the list behind the
+   video and the tap read as "nothing happens" */
+.stk-chan-menu { z-index: 9800; }
 
 /* ---- left drawer -----------------------------------------------------
    The drawer must sit above the feed's own layers, not at "normal dialog" 80.

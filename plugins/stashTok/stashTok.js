@@ -1699,6 +1699,9 @@
     favoriteTags: [],
     favoritesAlgo: {},
     folderView: "list",
+    /* the gear in the feed's top bar: the settings page is one tap away from the
+       feed, and this is the switch that hides it again for a cleaner stage */
+    topSettings: true,
     /* Feed is fixed on the far left, then four slots:
        Feed | Discover | Performers | Favorites | Settings */
     navSlots: ["discover", "performers", "favorites", "settings"],
@@ -4045,8 +4048,15 @@ void main() {
          dead and only Close-by-tapping-outside worked */
       if (event.target && event.target.closest && event.target.closest(".stk-quick-menu")) return;
       if (chanOpen) {
-        setChanOpen(false);
-        if (!(event.target && event.target.closest && event.target.closest(".stk-top"))) return;
+        /* a press inside the top bar belongs to the bar: closing here unmounted
+           the dropdown between pointerdown and click, so every feed row was
+           dead and the tap "did nothing". Outside the bar, the press is the
+           dismiss gesture. */
+        const inTop = event.target && event.target.closest && event.target.closest(".stk-top");
+        if (!inTop) {
+          setChanOpen(false);
+          return;
+        }
       }
       if (quick) {
         setQuick(null);
@@ -5130,6 +5140,23 @@ void main() {
           { className: "stk-top stk-top-right" },
           !duo && h("button", { type: "button", className: "stk-top-btn", title: "Full screen", "aria-label": "Full screen",
             onClick: enterFullscreen }, h(Icon, { name: "fullscreen", size: 18 })),
+          /* settings sits between full screen and search, and the switch in
+             Settings → Navigation removes it for a bare stage */
+          prefs.topSettings !== false && onSettings &&
+            h(
+              "button",
+              {
+                type: "button",
+                className: "stk-top-btn",
+                title: "Settings",
+                "aria-label": "Settings",
+                onClick: (event) => {
+                  event.stopPropagation();
+                  onSettings();
+                },
+              },
+              h(Icon, { name: "gear", size: 18 })
+            ),
           h(
             "button",
             {
@@ -5140,18 +5167,6 @@ void main() {
               },
             },
             h(Icon, { name: "search", size: 18 })
-          ),
-          h(
-            "button",
-            {
-              className: "stk-top-btn",
-              title: muted ? "Unmute" : "Mute",
-              onClick: (event) => {
-                event.stopPropagation();
-                setMuted((value) => !value);
-              },
-            },
-            h(Icon, { name: muted ? "mute" : "volume", size: 18 })
           )
         ),
 
@@ -5330,6 +5345,7 @@ void main() {
             "button",
             {
               className: "stk-rail-tagbtn",
+              title: "Add tag",
               onClick: (event) => {
                 event.stopPropagation();
                 openTagSheet();
@@ -5340,19 +5356,35 @@ void main() {
               { className: "stk-rail-icoplus" },
               h(Icon, { name: "tag", size: 26 }),
               h("i", { className: "stk-rail-plus", "aria-hidden": "true" }, "+")
-            ),
-            h("span", null, "Tag")
+            )
           ),
+          /* more: a circle with three dots, the shape the user asked for, and no
+             caption — the rail is icons only */
           h(
             "button",
             {
+              className: "stk-rail-more",
+              title: "More",
               onClick: (event) => {
                 event.stopPropagation();
                 setSheet("actions");
               },
             },
-            h(Icon, { name: "sparkle", size: 26 }),
-            h("span", null, "More")
+            h("span", { className: "stk-rail-circle" }, h(Icon, { name: "more", size: 20 }))
+          ),
+          /* mute lives at the bottom of the rail: same size as the other icons,
+             no caption, and it replaced the top-right speaker */
+          h(
+            "button",
+            {
+              className: "stk-rail-mute",
+              title: muted ? "Unmute" : "Mute",
+              onClick: (event) => {
+                event.stopPropagation();
+                setMuted((value) => !value);
+              },
+            },
+            h(Icon, { name: muted ? "mute" : "volume", size: 26 })
           )
         ),
 
@@ -5395,10 +5427,8 @@ void main() {
             )
           ),
 
-        hud &&
-          !sfw &&
-          zoom > 1.02 &&
-          h("div", { className: "stk-time" }, `${zoom.toFixed(1)}x`),
+        /* the pinch-zoom readout ("1.5x" / "2x") used to sit here; the user read it
+           as a leftover speed control and asked for it to go */
 
         undo &&
           item &&
@@ -10853,6 +10883,8 @@ function TagsPage({ onPick, onMarkers, onBack }) {
       }
       if (section === "navigation") {
         return h(React.Fragment, null,
+          h(PrefRow, { title: "Settings button in the top bar", hint: "Shows the gear beside Search on the feed, so Settings is one tap away. Turn it off for a bare stage; Settings is always in the drawer." },
+            h(PrefToggle, { label: "Top bar settings", on: prefs.topSettings !== false, onChange: (value) => setPref("topSettings", value) })),
           h(PrefRow, { title: "Bottom bar", hint: "Long-press the last three buttons to change what they open" },
             h("button", { className: "stk-btn", onClick: () => setPref("navSlots", DEFAULT_NAV_SLOTS.slice()) }, "Reset")),
           h("p", { className: "stk-sub" }, "Settings lives in the drawer, not on the bar. Feed is fixed on the far left.")
