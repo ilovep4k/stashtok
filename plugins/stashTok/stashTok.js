@@ -421,6 +421,7 @@
   }
 
   function forgetResume(key) {
+    RESUME_VERSIONS.set(key, (RESUME_VERSIONS.get(key) || 0) + 1);
     try {
       const map = readResumeMap();
       if (map && Object.prototype.hasOwnProperty.call(map, key)) {
@@ -694,6 +695,7 @@
 
   function reshufflePools() {
     POOL_EPOCH += 1;
+    FEED_SHARED.clear();
     try {
       window.localStorage.setItem(POOL_EPOCH_KEY, String(POOL_EPOCH));
       /* the old draws are dead weight: a reshuffle means a whole new key */
@@ -1305,7 +1307,12 @@
   /* Leaving a feed (tap a performer, open search) must not cost the user their place:
      remember the clip and the playhead for an hour, and reopen there. */
   const RESUME_KEY = "stashTok.resume.v1";
+  const RESUME_VERSIONS = new Map();
   const RESUME_TTL_MS = 60 * 60 * 1000;
+
+  function feedResumeKey(spec) {
+    return String(spec.key || spec.id || (spec.type + ":" + (spec.name || spec.sort || "")));
+  }
 
   function readResumeMap() {
     try {
@@ -2321,14 +2328,6 @@ void main() {
     const [tagsOpen, setTagsOpen] = useState(false);
     const [tagsOverflow, setTagsOverflow] = useState(false);
     const tagsRef = useRef(null);
-    /* callback ref, not an effect: it measures once the node is in the DOM and
-       never re-renders the card a second time on its own */
-    const measureTags = (node) => {
-      tagsRef.current = node;
-      if (!node) return;
-      const over = node.scrollWidth - node.clientWidth > 4;
-      setTagsOverflow((cur) => (cur === over ? cur : over));
-    };
     const [heartBurst, setHeartBurst] = useState(0);
     /* long-press on the heart asks which kind of favourite, instead of guessing */
     const [railMenu, setRailMenu] = useState(null);
@@ -2399,6 +2398,23 @@ void main() {
     }, []);
 
     const item = items[index] || null;
+    const sceneTags = item && item.scene.tags;
+    useEffect(() => {
+      const node = tagsRef.current;
+      if (!node) {
+        setTagsOverflow(false);
+        return undefined;
+      }
+      const measure = () => setTagsOverflow(node.scrollWidth - node.clientWidth > 4);
+      measure();
+      if (typeof ResizeObserver === "undefined") {
+        window.addEventListener("resize", measure);
+        return () => window.removeEventListener("resize", measure);
+      }
+      const observer = new ResizeObserver(measure);
+      observer.observe(node);
+      return () => observer.disconnect();
+    }, [sceneTags]);
 
     useEffect(() => {
       if (!PENDING_CARD) return undefined;
@@ -2411,7 +2427,8 @@ void main() {
 
     const [, setRootsReady] = useState(0);
 
-    const feedKey = String(spec.key || spec.id || (spec.type + ":" + (spec.name || spec.sort || "")));
+    const feedKey = feedResumeKey(spec);
+    const resumeVersion = RESUME_VERSIONS.get(feedKey) || 0;
     const resumeRef = useRef(undefined);
     const positionedRef = useRef(null);
     if (resumeRef.current === undefined) {
@@ -2450,22 +2467,24 @@ void main() {
 
     /* remember the seat as we move, not only on the way out */
     useEffect(() => {
-      if (!hydratedRef.current) return;
+      if (!hydratedRef.current || resumeVersion !== (RESUME_VERSIONS.get(feedKey) || 0)) return;
       const cur = items[index];
       if (!cur || !cur.scene) return;
       const kept = readResume(feedKey);
       const same = kept && String(kept.sceneId) === String(cur.scene.id);
       writeResume(feedKey, cur.scene.id, same ? kept.time : 0);
-    }, [feedKey, index, items]);
+    }, [feedKey, index, items, resumeVersion]);
 
     /* walking away must not reset the feed: remember where we were */
     useEffect(
       () => () => {
         const cur = itemsRef.current[indexRef.current];
         // the element may already be detached by now; the state mirror is reliable
-        if (cur && cur.scene) writeResume(feedKey, cur.scene.id, timeRef.current);
+        if (cur && cur.scene && resumeVersion === (RESUME_VERSIONS.get(feedKey) || 0)) {
+          writeResume(feedKey, cur.scene.id, timeRef.current);
+        }
       },
-      [feedKey, activeVideo]
+      [feedKey, resumeVersion]
     );
 
     useEffect(() => {
@@ -2701,6 +2720,10 @@ void main() {
         video.removeEventListener("loadedmetadata", onLoaded);
         video.removeEventListener("canplay", onLoaded);
         video.pause();
+        if (!video.isConnected) {
+          video.removeAttribute("src");
+          video.load();
+        }
       };
     }, [item && item.key]);
 
@@ -4232,17 +4255,19 @@ void main() {
               transition: dragY || rotation ? "none" : undefined,
             },
           },
-          [index - 1, index, index + 1, index + 2]
+          (desktop && !sfw ? [index - 1, index, index + 1] : [index - 1, index, index + 1, index + 2])
             .filter((at) => at >= 0 && items[at])
             .map((at) => {
               const entry = items[at];
               const active = at === index;
-              if (sfw) {
-                // safe-for-work: no stream is ever requested, only the still frame
+              const screenshot = rel(entry.scene.paths && entry.scene.paths.screenshot);
+              if (sfw || (desktop && !active)) {
+                // Desktop neighbours use stills so they never load or seek a video.
                 return h("img", {
                   key: entry.key,
                   className: "stk-frame" + (active ? " stk-active" : ""),
-                  src: rel(entry.scene.paths && entry.scene.paths.screenshot),
+                  src: screenshot || undefined,
+                  alt: "",
                   draggable: false,
                   style: {
                     position: "absolute",
@@ -4267,11 +4292,8 @@ void main() {
                       if (el) prewarm(el, entry.startAt);
                     },
                 className: "stk-video" + (active ? " stk-active" : ""),
-                style: {
-                  objectFit: active ? fitMode : "cover",
-                  willChange: active ? "transform" : "auto",
-                },
                 src: active && streamFallback ? source.signed : source.plain,
+                poster: desktop && !spec.single ? screenshot || undefined : undefined,
                 playsInline: true,
                 autoPlay: active,
                 muted: active ? muted : true,
@@ -4307,7 +4329,7 @@ void main() {
                   top: (at - index) * 100 + "%",
                   width: "100%",
                   height: "100%",
-                  objectFit: "contain",
+                  objectFit: desktop && !spec.single ? fitMode : "contain",
                   opacity: 1,
                   pointerEvents: active ? "auto" : "none",
                   zIndex: active ? 2 : 1,
@@ -4714,7 +4736,7 @@ void main() {
               { className: "stk-hashtagwrap" },
               h(
                 "div",
-                { className: "stk-hashtags", ref: measureTags },
+                { className: "stk-hashtags", ref: tagsRef },
                 tags.map((tag) =>
                   h(
                     "button",
@@ -10920,6 +10942,14 @@ function TagsPage({ onPick, onMarkers, onBack }) {
       return /^(folder-|perf-|scene-|tag-)/.test(String(feed.id || ""));
     }
 
+    function shuffleActiveFeed() {
+      const feed = activeFeed || defaultFeed();
+      reshufflePools();
+      forgetResume(feedResumeKey(feed));
+      setActiveFeed(Object.assign({}, feed, { startSceneId: null, startAt: null }));
+      setRefreshKey((n) => n + 1);
+    }
+
     function goHome() {
       if (tab === "home" && !builder) {
         if (scopedFeed(activeFeed)) {
@@ -10929,12 +10959,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
           goTo("");
           return;
         }
-        // second press on Feed: new clips, so forget where we were
-        if (activeFeed) forgetResume(String(activeFeed.key || activeFeed.id || "foryou"));
-        setActiveFeed((cur) =>
-          cur ? Object.assign({}, cur, { startSceneId: null, startAt: null }) : defaultFeed()
-        );
-        setRefreshKey((n) => n + 1);
+        shuffleActiveFeed();
         return;
       }
       setFolderProfile(null);
@@ -11473,9 +11498,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
         label: "Re-shuffle",
         note: "same filters, new order",
         run: () => {
-          reshufflePools();
-          setActiveFeed((cur) => Object.assign({}, cur || defaultFeed(), { startSceneId: null, startAt: null }));
-          setRefreshKey((n) => n + 1);
+          shuffleActiveFeed();
           setTab("home");
           goTo("");
         },
