@@ -141,21 +141,39 @@
    * <img> falls back to the original URL, so nothing breaks.               */
 
   let THUMB_BASE = null;
+  /* QA hook: how the thumbnail path is behaving right now */
+  if (typeof window !== "undefined") {
+    window.__stkThumb = () => ({ base: THUMB_BASE });
+  }
+
+  /* The resizing sidecar sits beside each instance: 9997 -> 18997, 9998 -> 18996.
+     A viewport served from any other port (a QA proxy, a tunnel) has no known
+     sidecar, so it keeps Stash's own images. */
+  const THUMB_PORTS = { 9997: 18997, 9998: 18996, 18997: 18997, 18996: 18996 };
 
   function guessThumbBase() {
     try {
-      /* Stash already generates and caches every thumbnail we need, on the same
-         origin and behind the same session. A sidecar that re-renders those into
-         a second cache is duplicate data plus a second host:port that can be
-         firewalled off the LAN — which is exactly how every grid went blank.
-         Default: use Stash's own images. Opt in with ?thumbs= or the setting;
-         ?thumbs=off forces Stash even when a URL is configured. */
       const override = new URLSearchParams(window.location.search).get("thumbs");
       if (override) return override === "off" ? "" : override;
     } catch (e) {
       /* ignore */
     }
-    return "";
+    const loc = window.location;
+    const mapped = THUMB_PORTS[Number(loc.port)];
+    if (!mapped) return "";
+    return `${loc.protocol}//${loc.hostname || "127.0.0.1"}:${mapped}`;
+  }
+
+  function thumbWidth(width) {
+    /* `width` is the CSS box the image is drawn into, so retina gets the pixels
+       it actually needs. Grid tiles do not know their size at render time and
+       pass nothing: 320 device px covers a ~160 px tile at 2x, and asking for
+       more is what made every grid pad out half a gigabyte of bitmaps. Rounded
+       to 80 px steps so the sidecar cache stays small. */
+    if (!width) return 320;
+    const dpr = Math.min(2, (typeof window !== "undefined" && window.devicePixelRatio) || 1);
+    const want = Math.round((width * dpr) / 80) * 80;
+    return Math.max(80, Math.min(1280, want));
   }
 
   function thumbSrc(raw, width) {
@@ -163,7 +181,7 @@
     const match = /^(?:.*)?\/(scene|performer|image)\/([^/]+)\//.exec(raw);
     if (!match) return raw;
     const [, kind, id] = match;
-    return `${THUMB_BASE}/t/${kind}/${id}?w=${width || 320}`;
+    return `${THUMB_BASE}/t/${kind}/${id}?w=${thumbWidth(width)}`;
   }
 
   /* ---- discover dashboard ------------------------------------------- *
@@ -215,32 +233,97 @@
 
   /** lazy thumbnail: a CSS background-image is fetched immediately even when the card
       is far off screen; a real <img> with loading=lazy never even requests it. */
+  /* One shared observer, so a slow sidecar is only ever given a horizon for the
+     tiles that actually entered the viewport. `loading=lazy` holds far-off images
+     back, and a timeout set at mount would fire while they are still waiting
+     their turn — which used to mark a working service as dead. */
+  let THUMB_IO = null;
+  const THUMB_PENDING = new Map();
+
+  function whenOnScreen(el, fn) {
+    if (typeof IntersectionObserver === "undefined") {
+      fn();
+      return () => {};
+    }
+    if (!THUMB_IO) {
+      THUMB_IO = new IntersectionObserver(
+        (entries) => {
+          entries.forEach((entry) => {
+            if (!entry.isIntersecting) return;
+            const cb = THUMB_PENDING.get(entry.target);
+            if (!cb) return;
+            THUMB_PENDING.delete(entry.target);
+            THUMB_IO.unobserve(entry.target);
+            cb();
+          });
+        },
+        { rootMargin: "300px" }
+      );
+    }
+    THUMB_PENDING.set(el, fn);
+    THUMB_IO.observe(el);
+    return () => {
+      THUMB_PENDING.delete(el);
+      if (THUMB_IO) THUMB_IO.unobserve(el);
+    };
+  }
+
   function Thumb({ src, className, width }) {
+    const imgRef = useRef(null);
     const [fallback, setFallback] = useState(false);
     const fallbackTimer = useRef(0);
     const primary = src && !fallback ? thumbSrc(src, width) : src;
     /* The thumbnail service is a second origin (host:18996/18997). If that port
-       is firewalled or slow the request just hangs, which fires no onError and
-       leaves a blank tile forever — so a slow load also falls back to Stash's own
-       authenticated screenshot on this same origin. */
+       is firewalled the request hangs instead of failing, which fires no onError
+       and leaves a blank tile forever — so once the tile is on screen and its
+       image still has not arrived, fall back to Stash's own screenshot. */
     useEffect(() => {
       window.clearTimeout(fallbackTimer.current);
       setFallback(false);
       if (!src || !THUMB_BASE || thumbSrc(src, width) === src) return undefined;
-      fallbackTimer.current = window.setTimeout(() => setFallback(true), 2600);
-      return () => window.clearTimeout(fallbackTimer.current);
+      const el = imgRef.current;
+      let stop = () => {};
+      const arm = () => {
+        /* A cold cache renders on demand, so a tile deep in a fast scroll can
+           queue for a while. Swap this one to Stash's own image and leave the
+           service alone: a down sidecar costs every tile this wait, not the
+           session. */
+        window.clearTimeout(fallbackTimer.current);
+        fallbackTimer.current = window.setTimeout(() => setFallback(true), 6000);
+      };
+      /* the real clock starts when the request does, not when the tile scrolls
+         into view: `loading=lazy` may hold it back for a while yet */
+      if (el) {
+        el.__stkArm = arm;
+        stop = whenOnScreen(el, arm);
+      } else {
+        arm();
+      }
+      return () => {
+        stop();
+        window.clearTimeout(fallbackTimer.current);
+      };
     }, [src, width]);
     if (!src) return null;
     return h("img", {
+      ref: imgRef,
       className: "stk-thumb" + (className ? " " + className : ""),
       src: primary,
       alt: "",
       loading: "lazy",
       decoding: "async",
       draggable: false,
+      onLoadStart: () => {
+        /* restart the grace clock now that this tile's request is really out */
+        const el = imgRef.current;
+        if (el && el.__stkArm && !fallback) el.__stkArm();
+      },
       onLoad: () => window.clearTimeout(fallbackTimer.current),
       onError: () => {
         window.clearTimeout(fallbackTimer.current);
+        /* a 404 here is usually a performer with no image at all, which the
+           sidecar answers with the same 404 Stash would: fall back for this one
+           tile but keep the service (one bad id must not poison the session) */
         if (!fallback && primary !== src) setFallback(true);
       },
     });
@@ -421,6 +504,7 @@
   }
 
   function forgetResume(key) {
+    RESUME_VERSIONS.set(key, (RESUME_VERSIONS.get(key) || 0) + 1);
     try {
       const map = readResumeMap();
       if (map && Object.prototype.hasOwnProperty.call(map, key)) {
@@ -694,6 +778,7 @@
 
   function reshufflePools() {
     POOL_EPOCH += 1;
+    FEED_SHARED.clear();
     try {
       window.localStorage.setItem(POOL_EPOCH_KEY, String(POOL_EPOCH));
       /* the old draws are dead weight: a reshuffle means a whole new key */
@@ -1305,25 +1390,53 @@
   /* Leaving a feed (tap a performer, open search) must not cost the user their place:
      remember the clip and the playhead for an hour, and reopen there. */
   const RESUME_KEY = "stashTok.resume.v1";
+  const RESUME_VERSIONS = new Map();
   const RESUME_TTL_MS = 60 * 60 * 1000;
 
+  /* The resume map is read on every clip advance and written on every clip
+     advance. Both used to hit localStorage: two JSON parses plus a synchronous,
+     disk-backed setItem right when the next video element is being swapped in.
+     Keep the map in memory and flush it once the user settles. */
+  let RESUME_CACHE = null;
+  let RESUME_FLUSH = 0;
+
+  function feedResumeKey(spec) {
+    return String(spec.key || spec.id || (spec.type + ":" + (spec.name || spec.sort || "")));
+  }
+
   function readResumeMap() {
+    if (RESUME_CACHE) return RESUME_CACHE;
     try {
       const parsed = JSON.parse(window.localStorage.getItem(RESUME_KEY) || "{}");
-      return parsed && typeof parsed === "object" ? parsed : {};
+      RESUME_CACHE = parsed && typeof parsed === "object" ? parsed : {};
     } catch (e) {
-      return {};
+      RESUME_CACHE = {};
+    }
+    return RESUME_CACHE;
+  }
+
+  function flushResume() {
+    RESUME_FLUSH = 0;
+    if (!RESUME_CACHE) return;
+    try {
+      window.localStorage.setItem(RESUME_KEY, JSON.stringify(RESUME_CACHE));
+    } catch (e) {
+      /* ignore quota errors */
     }
   }
 
   function writeResume(key, sceneId, time) {
-    try {
-      const map = readResumeMap();
-      map[key] = { sceneId, time: Number(time) || 0, at: Date.now() };
-      window.localStorage.setItem(RESUME_KEY, JSON.stringify(map));
-    } catch (e) {
-      /* ignore quota errors */
-    }
+    const map = readResumeMap();
+    map[key] = { sceneId, time: Number(time) || 0, at: Date.now() };
+    if (!RESUME_FLUSH) RESUME_FLUSH = window.setTimeout(flushResume, 400);
+  }
+
+  if (typeof window !== "undefined" && window.addEventListener) {
+    /* a tab closed inside the debounce window must still remember its seat */
+    window.addEventListener("pagehide", flushResume);
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) flushResume();
+    });
   }
 
   function readResume(key) {
@@ -1436,7 +1549,7 @@
     folderView: "list",
     /* Feed is fixed on the far left, then four slots:
        Feed | Discover | Performers | Favorites | Settings */
-    navSlots: ["discover", "performers", "favorites", "tags"],
+    navSlots: ["discover", "performers", "favorites", "settings"],
   };
 
   /* one-time: earlier builds stored a sort per performer, which kept resurrecting
@@ -1476,6 +1589,14 @@
     if (merged.navDefaultsV !== 4) {
       merged.navSlots = DEFAULT_NAV_SLOTS.slice();
       merged.navDefaultsV = 4;
+      savePrefs(merged);
+    }
+    /* hover previews shipped on by default for one build; the preview stream
+       blanks the poster and returns nothing on libraries without generated
+       previews, so every device gets one forced reset to off. */
+    if (merged.hoverDefaultsV !== 1) {
+      merged.hoverPreview = false;
+      merged.hoverDefaultsV = 1;
       savePrefs(merged);
     }
     return merged;
@@ -2321,14 +2442,6 @@ void main() {
     const [tagsOpen, setTagsOpen] = useState(false);
     const [tagsOverflow, setTagsOverflow] = useState(false);
     const tagsRef = useRef(null);
-    /* callback ref, not an effect: it measures once the node is in the DOM and
-       never re-renders the card a second time on its own */
-    const measureTags = (node) => {
-      tagsRef.current = node;
-      if (!node) return;
-      const over = node.scrollWidth - node.clientWidth > 4;
-      setTagsOverflow((cur) => (cur === over ? cur : over));
-    };
     const [heartBurst, setHeartBurst] = useState(0);
     /* long-press on the heart asks which kind of favourite, instead of guessing */
     const [railMenu, setRailMenu] = useState(null);
@@ -2351,6 +2464,23 @@ void main() {
     const [cropBadge, setCropBadge] = useState("");
 
     const stageRef = useRef(null);
+    /* Stage size, kept current by a ResizeObserver instead of read back from the
+       DOM on every crop/fit decision. `stage.clientWidth` after a style write in
+       the same frame forces a synchronous layout, and the per-clip crop path
+       asked for it four times in a row. */
+    const stageBoxRef = useRef({ w: 0, h: 0 });
+    const stageBox = useCallback(() => {
+      const box = stageBoxRef.current;
+      if (box.w && box.h) return box;
+      const stage = stageRef.current;
+      const w = (stage && stage.clientWidth) || 0;
+      const h = (stage && stage.clientHeight) || 0;
+      if (w && h) {
+        box.w = w;
+        box.h = h;
+      }
+      return box;
+    }, []);
     const videoRef = useRef(null);
     const wrapRef = useRef(null);
     const pageRef = useRef(1);
@@ -2382,15 +2512,16 @@ void main() {
       if (!video || !stage) return "cover";
       const vw = video.videoWidth || 0;
       const vh = video.videoHeight || 0;
-      const sw = stage.clientWidth || 0;
-      const sh = stage.clientHeight || 0;
+      const box = stageBox();
+      const sw = box.w || 0;
+      const sh = box.h || 0;
       if (!vw || !vh || !sw || !sh) return "cover";
       const vr = vw / vh;
       const sr = sw / sh;
       // share of the frame that `cover` would crop away
       const lost = vr >= sr ? 1 - sr / vr : 1 - vr / sr;
       return lost <= 0.25 ? "cover" : "contain";
-    }, [prefs]);
+    }, [prefs, stageBox]);
 
     const activeVideo = useCallback(() => {
       const stage = stageRef.current;
@@ -2399,6 +2530,23 @@ void main() {
     }, []);
 
     const item = items[index] || null;
+    const sceneTags = item && item.scene.tags;
+    useEffect(() => {
+      const node = tagsRef.current;
+      if (!node) {
+        setTagsOverflow(false);
+        return undefined;
+      }
+      const measure = () => setTagsOverflow(node.scrollWidth - node.clientWidth > 4);
+      measure();
+      if (typeof ResizeObserver === "undefined") {
+        window.addEventListener("resize", measure);
+        return () => window.removeEventListener("resize", measure);
+      }
+      const observer = new ResizeObserver(measure);
+      observer.observe(node);
+      return () => observer.disconnect();
+    }, [sceneTags]);
 
     useEffect(() => {
       if (!PENDING_CARD) return undefined;
@@ -2411,7 +2559,8 @@ void main() {
 
     const [, setRootsReady] = useState(0);
 
-    const feedKey = String(spec.key || spec.id || (spec.type + ":" + (spec.name || spec.sort || "")));
+    const feedKey = feedResumeKey(spec);
+    const resumeVersion = RESUME_VERSIONS.get(feedKey) || 0;
     const resumeRef = useRef(undefined);
     const positionedRef = useRef(null);
     if (resumeRef.current === undefined) {
@@ -2432,6 +2581,19 @@ void main() {
     const seekedSceneRef = useRef(null);
 
     useEffect(() => {
+      const stage = stageRef.current;
+      if (!stage || typeof ResizeObserver === "undefined") return undefined;
+      const observer = new ResizeObserver((entries) => {
+        const box = entries[0] && entries[0].contentRect;
+        if (!box) return;
+        stageBoxRef.current.w = Math.round(box.width);
+        stageBoxRef.current.h = Math.round(box.height);
+      });
+      observer.observe(stage);
+      return () => observer.disconnect();
+    }, []);
+
+    useEffect(() => {
       const onResize = () => {
         const video = activeVideo();
         if (video) {
@@ -2450,22 +2612,24 @@ void main() {
 
     /* remember the seat as we move, not only on the way out */
     useEffect(() => {
-      if (!hydratedRef.current) return;
+      if (!hydratedRef.current || resumeVersion !== (RESUME_VERSIONS.get(feedKey) || 0)) return;
       const cur = items[index];
       if (!cur || !cur.scene) return;
       const kept = readResume(feedKey);
       const same = kept && String(kept.sceneId) === String(cur.scene.id);
       writeResume(feedKey, cur.scene.id, same ? kept.time : 0);
-    }, [feedKey, index, items]);
+    }, [feedKey, index, items, resumeVersion]);
 
     /* walking away must not reset the feed: remember where we were */
     useEffect(
       () => () => {
         const cur = itemsRef.current[indexRef.current];
         // the element may already be detached by now; the state mirror is reliable
-        if (cur && cur.scene) writeResume(feedKey, cur.scene.id, timeRef.current);
+        if (cur && cur.scene && resumeVersion === (RESUME_VERSIONS.get(feedKey) || 0)) {
+          writeResume(feedKey, cur.scene.id, timeRef.current);
+        }
       },
-      [feedKey, activeVideo]
+      [feedKey, resumeVersion]
     );
 
     useEffect(() => {
@@ -2701,6 +2865,10 @@ void main() {
         video.removeEventListener("loadedmetadata", onLoaded);
         video.removeEventListener("canplay", onLoaded);
         video.pause();
+        if (!video.isConnected) {
+          video.removeAttribute("src");
+          video.load();
+        }
       };
     }, [item && item.key]);
 
@@ -2754,12 +2922,12 @@ void main() {
     /** the scale at which the video covers the stage, i.e. a pinch-fill */
     function coverScale() {
       const video = activeVideo();
-      const stage = stageRef.current;
-      if (!video || !stage) return 1;
+      if (!video) return 1;
       const vw = video.videoWidth || 16;
       const vh = video.videoHeight || 9;
-      const ew = stage.clientWidth || 1;
-      const eh = stage.clientHeight || 1;
+      const box = stageBox();
+      const ew = box.w || 1;
+      const eh = box.h || 1;
       const videoAspect = vw / vh;
       const stageAspect = ew / eh;
       const contentW = stageAspect > videoAspect ? eh * videoAspect : ew;
@@ -2887,12 +3055,12 @@ void main() {
       /* Settings → Auto-crop to fill; on unless the user turned it off */
       if (prefs.autoCrop === false) return "";
       const video = activeVideo();
-      const stage = stageRef.current;
-      if (!video || !stage) return "";
+      if (!video) return "";
       const vw = video.videoWidth || 0;
       const vh = video.videoHeight || 0;
-      const sw = stage.clientWidth || 0;
-      const sh = stage.clientHeight || 0;
+      const box = stageBox();
+      const sw = box.w || 0;
+      const sh = box.h || 0;
       if (!vw || !vh || !sw || !sh) return "";
       /* only a tall screen is worth filling; a wide pane keeps its letterbox */
       if (sh <= sw) return "";
@@ -2901,7 +3069,7 @@ void main() {
       if (vr >= 1.5) return "wide";
       const lost = vr > sr ? 1 - sr / vr : 1 - vr / sr;
       return lost <= NEAR_RATIO ? "near" : "";
-    }, [activeVideo, prefs.autoCrop]);
+    }, [activeVideo, prefs.autoCrop, stageBox]);
 
     const cropEligible = useCallback(() => !!cropKind(), [cropKind]);
 
@@ -4232,17 +4400,19 @@ void main() {
               transition: dragY || rotation ? "none" : undefined,
             },
           },
-          [index - 1, index, index + 1, index + 2]
+          (desktop && !sfw ? [index - 1, index, index + 1] : [index - 1, index, index + 1, index + 2])
             .filter((at) => at >= 0 && items[at])
             .map((at) => {
               const entry = items[at];
               const active = at === index;
-              if (sfw) {
-                // safe-for-work: no stream is ever requested, only the still frame
+              const screenshot = rel(entry.scene.paths && entry.scene.paths.screenshot);
+              if (sfw || (desktop && !active)) {
+                // Desktop neighbours use stills so they never load or seek a video.
                 return h("img", {
                   key: entry.key,
                   className: "stk-frame" + (active ? " stk-active" : ""),
-                  src: rel(entry.scene.paths && entry.scene.paths.screenshot),
+                  src: screenshot || undefined,
+                  alt: "",
                   draggable: false,
                   style: {
                     position: "absolute",
@@ -4267,11 +4437,8 @@ void main() {
                       if (el) prewarm(el, entry.startAt);
                     },
                 className: "stk-video" + (active ? " stk-active" : ""),
-                style: {
-                  objectFit: active ? fitMode : "cover",
-                  willChange: active ? "transform" : "auto",
-                },
                 src: active && streamFallback ? source.signed : source.plain,
+                poster: desktop && !spec.single ? screenshot || undefined : undefined,
                 playsInline: true,
                 autoPlay: active,
                 muted: active ? muted : true,
@@ -4307,7 +4474,7 @@ void main() {
                   top: (at - index) * 100 + "%",
                   width: "100%",
                   height: "100%",
-                  objectFit: "contain",
+                  objectFit: desktop && !spec.single ? fitMode : "contain",
                   opacity: 1,
                   pointerEvents: active ? "auto" : "none",
                   zIndex: active ? 2 : 1,
@@ -4714,7 +4881,7 @@ void main() {
               { className: "stk-hashtagwrap" },
               h(
                 "div",
-                { className: "stk-hashtags", ref: measureTags },
+                { className: "stk-hashtags", ref: tagsRef },
                 tags.map((tag) =>
                   h(
                     "button",
@@ -9996,7 +10163,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
         PrefRow,
         {
           title: "Hover previews",
-          hint: "Playing the clip when the pointer rests on a tile. Off by default: it streams the real file and skips ahead every second, which is heavy for a decoration.",
+          hint: "Plays the clip's own file when the pointer rests on a tile, skipping ahead every second. Off by default — it streams the real file and is heavy for a decoration.",
         },
         h(PrefToggle, {
           label: "Hover previews",
@@ -10006,12 +10173,12 @@ function TagsPage({ onPick, onMarkers, onBack }) {
       ),
       h(
         PrefRow,
-        { title: "Show Images tab", hint: "" },
+        { title: "Show Images tab", hint: "Adds an Images tab next to Scenes on every performer page" },
         h(PrefToggle, { label: "Images tab", on: prefs.performerImages, onChange: (value) => setPref("performerImages", value) })
       ),
       h(
         PrefRow,
-        { title: "Show Markers tab", hint: "" },
+        { title: "Show Markers tab", hint: "Adds a Markers tab next to Scenes on every performer page" },
         h(PrefToggle, { label: "Markers tab", on: prefs.performerMarkers, onChange: (value) => setPref("performerMarkers", value) })
       ),
       h("h4", { style: { marginTop: "18px" } }, "Favorites"),
@@ -10023,12 +10190,6 @@ function TagsPage({ onPick, onMarkers, onBack }) {
           options: [["updated_at", "Recent"], ["filesize", "Size"], ["duration", "Length"], ["resolution", "Res"], ["title", "A–Z"], ["random", "Random"]],
           onChange: (value) => setPref("favoritesSort", value),
         })
-      ),
-      h("h4", { style: { marginTop: "18px" } }, "Folder view"),
-      h(
-        PrefRow,
-        { title: "Folders on top in any sort", hint: "Subfolders always lead, whatever the sort" },
-        h(PrefToggle, { label: "Folders first", on: prefs.foldersOnTop, onChange: (value) => setPref("foldersOnTop", value) })
       ),
       h("h4", { style: { marginTop: "18px" } }, "Navigation"),
       h(
@@ -10920,6 +11081,14 @@ function TagsPage({ onPick, onMarkers, onBack }) {
       return /^(folder-|perf-|scene-|tag-)/.test(String(feed.id || ""));
     }
 
+    function shuffleActiveFeed() {
+      const feed = activeFeed || defaultFeed();
+      reshufflePools();
+      forgetResume(feedResumeKey(feed));
+      setActiveFeed(Object.assign({}, feed, { startSceneId: null, startAt: null }));
+      setRefreshKey((n) => n + 1);
+    }
+
     function goHome() {
       if (tab === "home" && !builder) {
         if (scopedFeed(activeFeed)) {
@@ -10929,12 +11098,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
           goTo("");
           return;
         }
-        // second press on Feed: new clips, so forget where we were
-        if (activeFeed) forgetResume(String(activeFeed.key || activeFeed.id || "foryou"));
-        setActiveFeed((cur) =>
-          cur ? Object.assign({}, cur, { startSceneId: null, startAt: null }) : defaultFeed()
-        );
-        setRefreshKey((n) => n + 1);
+        shuffleActiveFeed();
         return;
       }
       setFolderProfile(null);
@@ -11473,9 +11637,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
         label: "Re-shuffle",
         note: "same filters, new order",
         run: () => {
-          reshufflePools();
-          setActiveFeed((cur) => Object.assign({}, cur || defaultFeed(), { startSceneId: null, startAt: null }));
-          setRefreshKey((n) => n + 1);
+          shuffleActiveFeed();
           setTab("home");
           goTo("");
         },
@@ -11648,7 +11810,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
                         className: "stk-drawer",
                         onClick: (event) => event.stopPropagation(),
                       },
-                      h("div", { className: "stk-drawer-title" }, "Scruffy's World"),
+                      h("div", { className: "stk-drawer-title" }, "StashTok"),
                       [
                         ["home", "Feed", "play"],
                         ["discover", "Discover", "sparkle"],
