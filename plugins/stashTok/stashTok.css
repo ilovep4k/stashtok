@@ -4482,6 +4482,12 @@ html.stk-mono { filter: grayscale(1) contrast(1.06); }
   animation: stk-drawer-in 200ms ease;
 }
 @keyframes stk-drawer-in { from { transform: translateX(-14px); opacity: .4; } to { transform: none; opacity: 1; } }
+.stk-drawer-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 4px;
+}
 .stk-drawer-title {
   padding: 6px 12px 14px;
   font-size: 13px;
@@ -4490,6 +4496,21 @@ html.stk-mono { filter: grayscale(1) contrast(1.06); }
   text-transform: uppercase;
   color: rgba(255, 255, 255, .45);
 }
+.stk-drawer-close {
+  flex: 0 0 auto;
+  margin-left: auto;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, .1);
+  color: #fff;
+  cursor: pointer;
+}
+.stk-drawer-close:hover { background: rgba(255, 255, 255, .16); }
+.stk-drawer-close:active { background: rgba(255, 255, 255, .2); }
 .stk-drawer-row {
   display: flex;
   align-items: center;
@@ -4782,3 +4803,168 @@ body.stk-fullscreen-mode .stash-tok.stk-feed-fullscreen {
 .stk-set-page .stk-sub { font-size: 12.5px; line-height: 1.45; }
 .stk-desktop .stk-set-index,
 .stk-desktop .stk-set-page { max-width: 620px; }
+
+
+/* ---------- settings: section header, value rows, picker sheets ---------- */
+.stk-page-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stk-page-back {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  cursor: pointer;
+  margin-right: 2px;
+}
+.stk-page-back:active { background: rgba(255, 255, 255, 0.2); }
+
+/* a row whose tap opens a picker: label left, current value right */
+.stk-set-choice .stk-set-value {
+  flex: 0 0 auto;
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.stk-set-block { display: flex; flex-direction: column; margin-bottom: 16px; }
+.stk-set-block-head {
+  font-size: 17px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.92);
+  margin: 0 2px 4px;
+}
+.stk-set-block-sub {
+  margin: 0 2px 8px;
+  font-size: 12.5px;
+  color: rgba(255, 255, 255, 0.45);
+}
+.stk-set-empty {
+  margin: 2px 2px 10px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.45);
+}
+.stk-set-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 48px;
+  margin: 2px 0 0;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #fff;
+  font-size: 15px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.stk-set-add:active { background: rgba(255, 255, 255, 0.1); }
+
+/* picker sheet: darkened backdrop, no blur */
+.stk-pick-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.62);
+  z-index: 9600;
+}
+.stk-pick {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(92vw, 380px);
+  max-height: 76vh;
+  overflow-y: auto;
+  background: #1c1c1c;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 18px;
+  padding: 16px;
+  z-index: 9601;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+.stk-pick-title { margin: 0 0 10px; font-size: 15px; font-weight: 600; color: #fff; }
+.stk-pick-hint { margin: -4px 0 10px; font-size: 12px; color: rgba(255, 255, 255, 0.45); }
+.stk-pick-list { display: flex; flex-direction: column; }
+.stk-pick-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 48px;
+  padding: 0 4px;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  background: none;
+  color: #fff;
+  font-size: 15px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.stk-pick-row:last-child { border-bottom: 0; }
+/* the dialog focuses its first row on open; the theme's yellow focus ring made
+   the current option look like an error */
+.stk-pick-row:focus { outline: none; }
+.stk-pick-row:focus-visible { outline: 2px solid rgba(255, 255, 255, 0.35); outline-offset: -2px; }
+.stk-pick-row:active { background: rgba(255, 255, 255, 0.06); }
+.stk-pick-row.stk-on svg { color: #ff2d55; }
+.stk-pick-done {
+  width: 100%;
+  min-height: 44px;
+  margin-top: 12px;
+  border: 0;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+}
+.stk-pick-done:active { background: rgba(255, 255, 255, 0.18); }
+/* the tag field's autocomplete hangs below the input: let it flow in the sheet
+   instead of clipping on the panel's own scroll box */
+.stk-pick-tags .stk-tagac-menu {
+  position: static;
+  margin-top: 6px;
+  max-height: 38vh;
+  overflow-y: auto;
+}
+
+/* custom feed editor page */
+.stk-feed-edit-name {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 2px 18px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.45);
+}
+.stk-feed-edit-name input {
+  padding: 11px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: #1b1b1b;
+  color: #fff;
+  font-size: 15px;
+  font-family: inherit;
+  letter-spacing: normal;
+  text-transform: none;
+}
+.stk-feed-edit-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 2px 0; }

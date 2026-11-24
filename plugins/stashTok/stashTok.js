@@ -134,6 +134,8 @@
     /* two squares: find duplicate images */
     dupe: "M9 9h11v11H9zM5 15V4h11",
     link: "M10 14l4-4M9.2 11.4 7 13.6a3.6 3.6 0 1 0 5.1 5.1L14.3 16.5M14.8 12.6 17 10.4a3.6 3.6 0 1 0-5.1-5.1L9.7 7.5",
+    /* tick: the chosen option in a settings picker */
+    check: "M4.5 12.5l5 5 10-11",
     /* padlock: the privacy lock section */
     lock: "M6.5 10.5h11a1.5 1.5 0 0 1 1.5 1.5v7a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 19v-7a1.5 1.5 0 0 1 1.5-1.5zM8.2 10.5V7.8a3.8 3.8 0 0 1 7.6 0v2.7",
   };
@@ -707,6 +709,30 @@
     scene_markers { id title seconds end_seconds primary_tag { id name } }
   `;
 
+  /** A feed's own tags win. For You and Favorites fall back to the narrowing set
+   *  in Settings → Your Feeds, so the filter survives a spec that was rebuilt
+   *  from a route (the root feed is re-made on every navigation). */
+  function effectiveTags(spec, cfg) {
+    if (spec.tags && spec.tags.length) return { tags: spec.tags, mode: spec.tagMode || "OR" };
+    const type = spec.type || "foryou";
+    if (cfg && type === "foryou" && cfg.foryouTags && cfg.foryouTags.length) {
+      return { tags: cfg.foryouTags, mode: cfg.foryouTagMode || "OR" };
+    }
+    if (cfg && type === "favorites" && cfg.favoriteTags && cfg.favoriteTags.length) {
+      return { tags: cfg.favoriteTags, mode: "OR" };
+    }
+    return { tags: [], mode: "OR" };
+  }
+
+  /** Which algorithm axes bias this feed. A custom feed carries its own; the
+   *  root For You feed reads the ones set in Settings. */
+  function effectiveAlgo(spec, cfg) {
+    const own = spec && spec.algo;
+    if (own && (own.performers || own.favorites || own.recent)) return own;
+    if ((spec.type || "foryou") === "foryou" && cfg && cfg.foryouAlgo) return cfg.foryouAlgo;
+    return {};
+  }
+
   function sceneFilterBody(spec, cfg) {
     const parts = [];
     const type = spec.type || "foryou";
@@ -741,10 +767,11 @@
     if (spec.pathIncludes) {
       parts.push(`path: { value: ${JSON.stringify(spec.pathIncludes)}, modifier: INCLUDES }`);
     }
-    if (spec.tags && spec.tags.length) {
-      const modifier = spec.tagMode === "OR" ? "INCLUDES" : "INCLUDES_ALL";
+    const tagSel = effectiveTags(spec, cfg);
+    if (tagSel.tags.length) {
+      const modifier = tagSel.mode === "AND" ? "INCLUDES_ALL" : "INCLUDES";
       parts.push(
-        `tags: { value: [${spec.tags.map((id) => `"${id}"`).join(",")}], modifier: ${modifier} }`
+        `tags: { value: [${tagSel.tags.map((id) => `"${id}"`).join(",")}], modifier: ${modifier} }`
       );
     }
     return parts.join(", ");
@@ -783,6 +810,7 @@
   function reshufflePools() {
     POOL_EPOCH += 1;
     FEED_SHARED.clear();
+    FAV_PERFORMER_IDS = null;
     try {
       window.localStorage.setItem(POOL_EPOCH_KEY, String(POOL_EPOCH));
       /* the old draws are dead weight: a reshuffle means a whole new key */
@@ -807,7 +835,8 @@
     const text = [
       POOL_EPOCH, spec.type || "foryou", spec.direction || "",
       Number(minDur) || 0, Number(windowDays) || 0, spec.performerId || "",
-      spec.pathIncludes || "", (spec.tags || []).join(","), spec.tagMode || "",
+      spec.pathIncludes || "", effectiveTags(spec, cfg).tags.join(","), spec.tagMode || "",
+      (() => { const algo = effectiveAlgo(spec, cfg); return ["performers", "favorites", "recent"].filter((k) => algo[k]).join("+"); })(),
     ].join("|");
     let hash = 0x811c9dc5;
     for (let i = 0; i < text.length; i += 1) {
@@ -842,19 +871,89 @@
     }
   }
 
+  /* performers the user favourites are the only "taste" signal a scene filter
+     cannot express directly, so they are resolved once into ids */
+  let FAV_PERFORMER_IDS = null;
+  async function favouritePerformerIds() {
+    if (FAV_PERFORMER_IDS) return FAV_PERFORMER_IDS;
+    const data = await gql(
+      `query StashTokAlgoPerformers {
+        findPerformers(performer_filter: { rating100: { value: 80, modifier: GREATER_THAN } },
+                       filter: { per_page: 40, sort: "rating", direction: DESC }) { performers { id } }
+      }`
+    ).catch(() => null);
+    FAV_PERFORMER_IDS = ((data && data.findPerformers && data.findPerformers.performers) || []).map((p) => String(p.id));
+    return FAV_PERFORMER_IDS;
+  }
+
+  /** How a random feed is weighted. Each selected axis gets a slice of the pool
+   *  and the rest stays a plain random draw, so the feed still feels shuffled
+   *  rather than sorted. */
+  async function algoRuns(spec, cfg, body) {
+    const algo = effectiveAlgo(spec, cfg);
+    const wanted = ["favorites", "performers", "recent"].filter((k) => algo[k]);
+    if (!wanted.length) return null;
+    const slices = [];
+    if (wanted.indexOf("favorites") >= 0) {
+      slices.push({ extra: "rating100: { value: 0, modifier: GREATER_THAN }", sort: "random" });
+    }
+    if (wanted.indexOf("performers") >= 0) {
+      const ids = await favouritePerformerIds();
+      if (ids.length) {
+        slices.push({
+          extra: `performers: { value: [${ids.map((id) => `"${id}"`).join(",")}], modifier: INCLUDES }`,
+          sort: "random",
+        });
+      }
+    }
+    if (wanted.indexOf("recent") >= 0) {
+      const since = new Date(Date.now() - 30 * 86400000).toISOString();
+      slices.push({ extra: `created_at: { value: "${since}", modifier: GREATER_THAN }`, sort: "created_at" });
+    }
+    if (!slices.length) return null;
+    const share = Math.round(POOL_SIZE * (slices.length === 1 ? 0.5 : slices.length === 2 ? 0.4 : 0.3));
+    const runs = slices.map((slice) => ({
+      n: share,
+      sort: slice.sort,
+      body: [body, slice.extra].filter(Boolean).join(", "),
+    }));
+    runs.push({ n: Math.max(40, POOL_SIZE - share * slices.length), sort: "random", body });
+    return runs;
+  }
+
   async function drawPool(spec, cfg, key, box) {
     const body = sceneFilterBody(spec, cfg);
-    const filterArg = body ? `, scene_filter: { ${body} }` : "";
-    const data = await gql(
-      `query StashTokPool($n: Int!) {
-        findScenes(filter: { per_page: $n, sort: "random" }${filterArg}) {
-          count
-          scenes { id }
-        }
-      }`,
-      { n: POOL_SIZE }
+    const plan = await algoRuns(spec, cfg, body).catch(() => null);
+    const runs = plan || [{ n: POOL_SIZE, sort: "random", body }];
+    const results = await Promise.all(
+      runs.map((run) =>
+        gql(
+          `query StashTokPool($n: Int!) {
+            findScenes(filter: { per_page: $n, sort: "${run.sort}" }${run.body ? `, scene_filter: { ${run.body} }` : ""}) {
+              count
+              scenes { id }
+            }
+          }`,
+          { n: run.n }
+        )
+      )
     );
-    const found = (data.findScenes && data.findScenes.scenes) || [];
+    /* interleave the slices so a weighted feed still alternates instead of
+       running its hearted half then its recent half */
+    const lists = results.map((data) => (((data || {}).findScenes || {}).scenes || []).slice());
+    const found = [];
+    let more = true;
+    while (more) {
+      more = false;
+      lists.forEach((list) => {
+        const next = list.shift();
+        if (next) {
+          found.push(next);
+          more = true;
+        }
+      });
+    }
+    const count = results.reduce((max, data) => Math.max(max, (((data || {}).findScenes || {}).count || 0)), 0);
     const ids = box && box.ids ? box.ids.slice() : [];
     const seen = new Set(ids);
     found.forEach((scene) => {
@@ -864,7 +963,7 @@
         ids.push(id);
       }
     });
-    const next = { at: Date.now(), count: (data.findScenes && data.findScenes.count) || 0, ids };
+    const next = { at: Date.now(), count, ids };
     writePool(key, next);
     return next;
   }
@@ -1593,6 +1692,12 @@
     favoritesSort: "updated_at",
     favoritesOpen: "gallery",
     feedWindow: "all",
+    /* Your Feeds → For You: tag narrowing plus the algorithm axes that bias a
+       random feed towards what this library already knows about the user */
+    foryouTags: [],
+    foryouTagMode: "OR",
+    favoriteTags: [],
+    favoritesAlgo: {},
     folderView: "list",
     /* Feed is fixed on the far left, then four slots:
        Feed | Discover | Performers | Favorites | Settings */
@@ -10376,15 +10481,65 @@ function TagsPage({ onPick, onMarkers, onBack }) {
     );
   }
 
-  /* Settings, TikTok shape: a short grouped index — one line per subject, no
-     sub labels — where each line opens its own page. Two rows are live controls
-     (blur, privacy lock) so the things a person actually flips in public are a
-     single tap from the top. */
+  /* Settings, TikTok shape: a short grouped index — one line per subject — where
+     each line is a route (`#/settings/<section>`), not local state, so the
+     browser's back gesture, a deep link and the in-app chevron all agree. */
 
   const SETTINGS_GROUPS = [
     { id: "Preferences", rank: 1, rows: ["feeds", "performer", "blur", "lock"] },
     { id: "App Settings", rank: 2, rows: ["appearance", "navigation", "about"] },
   ];
+
+  /* titles double as the shell's page header, so keep them here */
+  const SETTINGS_SECTION_TITLES = {
+    feeds: "Your Feeds",
+    "feeds/new-feed": "Create Feed",
+    performer: "Performer Page",
+    appearance: "Appearance",
+    navigation: "Navigation",
+    about: "About",
+  };
+
+  const WINDOW_OPTIONS = [
+    { value: "all", label: "All" },
+    { value: "7", label: "Added this week" },
+    { value: "30", label: "Added within 30 Days" },
+    { value: "90", label: "Added within 90 Days" },
+  ];
+  const FAV_SORT_OPTIONS = [
+    { value: "updated_at", label: "Recent" },
+    { value: "random", label: "Random" },
+    { value: "filesize", label: "Size" },
+    { value: "duration", label: "Duration" },
+    { value: "resolution", label: "Resolution" },
+    { value: "title", label: "Alphabetical" },
+  ];
+  const ALGO_OPTIONS = [
+    { value: "performers", label: "Performers" },
+    { value: "favorites", label: "Favorites" },
+    { value: "recent", label: "Recently Added" },
+  ];
+
+  const labelOf = (options, value, fallback) => {
+    const hit = options.find((option) => option.value === String(value));
+    return hit ? hit.label : fallback;
+  };
+  const tagCountLabel = (list) => {
+    const n = (list || []).length;
+    return n ? n + " tag" + (n === 1 ? "" : "s") : "All Tags";
+  };
+  const algoKeys = (algo) => ALGO_OPTIONS.filter((option) => algo && algo[option.value]).map((option) => option.value);
+  const algoLabel = (algo) => {
+    const on = algoKeys(algo);
+    return on.length ? on.map((key) => labelOf(ALGO_OPTIONS, key, key)).join(", ") : "No Preferences";
+  };
+  const nextAlgo = (current, pick) => {
+    if (pick === "none") return {};
+    const next = Object.assign({}, current || {});
+    if (next[pick]) delete next[pick];
+    else next[pick] = true;
+    return next;
+  };
 
   function SettingsRow({ icon, title, onClick }) {
     return h(
@@ -10406,29 +10561,172 @@ function TagsPage({ onPick, onMarkers, onBack }) {
     );
   }
 
-  function SettingsPanel({ cfg = {}, feeds = [], onEdit = () => {}, pin, onSetPin = () => {},
-    onClearPin = () => {}, sfw, onToggleSfw = () => {},
+  /* label on the left, the current value on the right, chevron last: the row a
+     tap opens a picker from. TikTok's own settings rows are exactly this. */
+  function SettingsChoiceRow({ icon, title, value, onClick, last }) {
+    return h(
+      "button",
+      { type: "button", className: "stk-set-row stk-set-choice" + (last ? " stk-set-last" : ""), onClick },
+      icon ? h("span", { className: "stk-set-icon" }, h(Icon, { name: icon, size: 19 })) : null,
+      h("span", { className: "stk-set-copy" }, h("span", null, title)),
+      h("span", { className: "stk-set-value" }, value || ""),
+      h("span", { className: "stk-set-chev" }, h(Icon, { name: "chevron", size: 15 }))
+    );
+  }
+
+  /* The picker is a centred sheet, not a bottom drawer, and its backdrop only
+     darkens — a blur over the library was noise on a page that has no video. */
+  function SettingsPicker({ title, options, value, multi, onPick, onClose }) {
+    const ref = useDialog(true, onClose);
+    return h(
+      Portal,
+      null,
+      h("div", { className: "stk-pick-backdrop", onClick: onClose }),
+      h(
+        "div",
+        { className: "stk-pick", ref },
+        h("h3", { className: "stk-pick-title" }, title),
+        h(
+          "div",
+          { className: "stk-pick-list" },
+          options.map((option) => {
+            const on = option.selected !== undefined ? option.selected : option.value === value;
+            return h(
+              "button",
+              {
+                key: option.value,
+                type: "button",
+                className: "stk-pick-row" + (on ? " stk-on" : ""),
+                "aria-pressed": !!on,
+                onClick: () => {
+                  if (option.disabled) return;
+                  onPick(option.value);
+                  if (!multi) onClose();
+                },
+              },
+              h("span", null, option.label),
+              on ? h(Icon, { name: "check", size: 16 }) : null
+            );
+          })
+        ),
+        h("button", { type: "button", className: "stk-pick-done", onClick: onClose }, "Done")
+      )
+    );
+  }
+
+  function TagSheet({ title, selected, onToggle, onClose }) {
+    const ref = useDialog(true, onClose);
+    return h(
+      Portal,
+      null,
+      h("div", { className: "stk-pick-backdrop", onClick: onClose }),
+      h(
+        "div",
+        { className: "stk-pick stk-pick-tags", ref },
+        h("h3", { className: "stk-pick-title" }, title),
+        h("p", { className: "stk-pick-hint" }, "Leave every tag off to mean All Tags."),
+        h(TagPicker, { selected, onToggle }),
+        h("button", { type: "button", className: "stk-pick-done", onClick: onClose },
+          selected.length ? `Done — ${selected.length} tag${selected.length === 1 ? "" : "s"}` : "Done — all tags")
+      )
+    );
+  }
+
+  /* A custom feed and the For You algorithm are the same question: what does
+     this feed draw from. The editor reuses the same rows as Settings. */
+  function FeedEditorPage({ initial, onSave, onDelete, onDone }) {
+    const [draft, setDraft] = useState(() =>
+      Object.assign({ name: "", type: "foryou", sort: "random", tags: [], tagMode: "OR", algo: {} }, initial || {})
+    );
+    const [picker, setPicker] = useState("");
+    const [tagOpen, setTagOpen] = useState(false);
+    const tags = draft.tags || [];
+    const windowValue = draft.windowDays === undefined ? "all" : String(draft.windowDays);
+
+    function toggleTag(id) {
+      setDraft(Object.assign({}, draft, {
+        tags: tags.indexOf(id) >= 0 ? tags.filter((tag) => tag !== id) : tags.concat([id]),
+      }));
+    }
+
+    return h(
+      "div",
+      { className: "stk-feed-edit" },
+      h("label", { className: "stk-feed-edit-name" }, "Feed name",
+        h("input", {
+          type: "text",
+          value: draft.name,
+          placeholder: "e.g. Late night",
+          maxLength: 40,
+          onChange: (event) => setDraft(Object.assign({}, draft, { name: event.currentTarget.value })),
+        })
+      ),
+      h("section", { className: "stk-set-block" },
+        h("h4", { className: "stk-set-block-head" }, "Algorithm"),
+        h("p", { className: "stk-set-block-sub" }, "What this feed draws from. Same weighting the For You feed uses."),
+        h(SettingsChoiceRow, {
+          title: "Algorithm Preferences", value: algoLabel(draft.algo),
+          onClick: () => setPicker("algo"),
+        }),
+        h(SettingsChoiceRow, {
+          title: "Content Time Range", value: labelOf(WINDOW_OPTIONS, windowValue, "All"),
+          onClick: () => setPicker("window"),
+        }),
+        h(SettingsChoiceRow, {
+          title: "Filter by Tag", value: tagCountLabel(tags),
+          onClick: () => setPicker("tags"), last: true,
+        })
+      ),
+      h("div", { className: "stk-feed-edit-actions" },
+        h("button", {
+          type: "button",
+          className: "stk-btn stk-primary",
+          onClick: () => onSave(Object.assign({}, draft, { name: draft.name.trim() || "New feed" })),
+        }, initial ? "Save feed" : "Create feed"),
+        initial && onDelete
+          ? h("button", { type: "button", className: "stk-btn stk-btn-danger", onClick: () => onDelete(initial.id) }, "Delete")
+          : null,
+        h("button", { type: "button", className: "stk-btn", onClick: onDone }, "Cancel")
+      ),
+
+      picker === "algo" && h(SettingsPicker, {
+        title: "Algorithm Preferences", multi: true,
+        options: [{ value: "none", label: "No Preferences", selected: !algoKeys(draft.algo).length }].concat(
+          ALGO_OPTIONS.map((option) => ({ value: option.value, label: option.label, selected: !!draft.algo[option.value] }))
+        ),
+        onPick: (value) => setDraft(Object.assign({}, draft, { algo: nextAlgo(draft.algo, value) })),
+        onClose: () => setPicker(""),
+      }),
+      picker === "window" && h(SettingsPicker, {
+        title: "Content Time Range", value: windowValue, options: WINDOW_OPTIONS,
+        onPick: (value) => setDraft(Object.assign({}, draft, { windowDays: value === "all" ? 0 : Number(value) })),
+        onClose: () => setPicker(""),
+      }),
+      picker === "tags" && h(SettingsPicker, {
+        title: "Filter by Tag", value: tags.length ? "select" : "all",
+        options: [{ value: "all", label: "All Tags" }, { value: "select", label: "Select Tags" }],
+        onPick: (value) => {
+          if (value === "all") setDraft(Object.assign({}, draft, { tags: [] }));
+          else setTagOpen(true);
+        },
+        onClose: () => setPicker(""),
+      }),
+      tagOpen && h(TagSheet, {
+        title: "Select Tags", selected: tags, onToggle: toggleTag, onClose: () => setTagOpen(false),
+      })
+    );
+  }
+
+  function SettingsPanel({ cfg = {}, feeds = [], onEditFeed = () => {}, onSaveFeed = () => {},
+    onDeleteFeed = () => {}, feedDraft = null, section = "", onSection = () => {},
+    pin, onSetPin = () => {}, onClearPin = () => {}, sfw, onToggleSfw = () => {},
     prefs = {}, setPref = () => {}, onOpenHistory }) {
-    const [section, setSection] = useState("");
     const [draft, setDraft] = useState("");
     const [saved, setSaved] = useState(false);
     const [pinEntry, setPinEntry] = useState(false);
     const [confirmOff, setConfirmOff] = useState(false);
-
-    /* back out of a section with the same keys the rest of the app uses */
-    useEffect(() => {
-      if (!section) return undefined;
-      function onKey(event) {
-        const node = event.target;
-        if (node && (node.tagName === "INPUT" || node.tagName === "TEXTAREA" || node.isContentEditable)) return;
-        if (event.key === "Escape" || event.key === "Backspace") {
-          event.preventDefault();
-          setSection("");
-        }
-      }
-      window.addEventListener("keydown", onKey);
-      return () => window.removeEventListener("keydown", onKey);
-    }, [section]);
+    const [picker, setPicker] = useState("");
+    const [tagSheet, setTagSheet] = useState("");
 
     /* Turning the lock off always erases the PIN: there is no way to keep a
        secret the user has just said they no longer want guarded, and a PIN left
@@ -10455,35 +10753,73 @@ function TagsPage({ onPick, onMarkers, onBack }) {
       about: { icon: "info", title: "About" },
     };
 
+    const customFeeds = (feeds || []).filter((feed) => feed.type !== "foryou" && feed.type !== "favorites");
+
+    function feedsPage() {
+      const favTags = prefs.favoriteTags || [];
+      return h(React.Fragment, null,
+        h("section", { className: "stk-set-block" },
+          h("h4", { className: "stk-set-block-head" }, "For You"),
+          h("p", { className: "stk-set-block-sub" }, "Filters for the For You feed"),
+          h(SettingsChoiceRow, {
+            title: "Content Time Range",
+            value: labelOf(WINDOW_OPTIONS, prefs.feedWindow || "all", "All"),
+            onClick: () => setPicker("window"),
+          }),
+          h(SettingsChoiceRow, {
+            title: "Filter by Tag",
+            value: tagCountLabel(prefs.foryouTags),
+            onClick: () => setPicker("foryouTags"), last: true,
+          })
+        ),
+
+        h("section", { className: "stk-set-block" },
+          h("h4", { className: "stk-set-block-head" }, "Favorites"),
+          h("p", { className: "stk-set-block-sub" }, "How Favorites are sorted"),
+          h(SettingsChoiceRow, {
+            title: "Sort Order",
+            value: labelOf(FAV_SORT_OPTIONS, prefs.favoritesSort || "updated_at", "Recent"),
+            onClick: () => setPicker("favSort"),
+          }),
+          h(SettingsChoiceRow, {
+            title: "Filter by Tag",
+            value: tagCountLabel(favTags),
+            onClick: () => setPicker("favTags"),
+          }),
+          h(SettingsChoiceRow, {
+            title: "Algorithm Preferences",
+            value: algoLabel(prefs.favoritesAlgo),
+            onClick: () => setPicker("algo"), last: true,
+          })
+        ),
+
+        h("section", { className: "stk-set-block" },
+          h("h4", { className: "stk-set-block-head" }, "Custom Feeds"),
+          customFeeds.length
+            ? customFeeds.map((feed) =>
+                h("button", { key: feed.id, type: "button", className: "stk-set-row", onClick: () => onEditFeed(feed) },
+                  h("span", { className: "stk-set-icon" }, h(Icon, { name: "sparkle", size: 18 })),
+                  h("span", { className: "stk-set-copy" }, h("span", null, feed.name)),
+                  h("span", { className: "stk-set-chev" }, h(Icon, { name: "chevron", size: 15 }))
+                )
+              )
+            : h("p", { className: "stk-set-empty" }, "No custom feeds yet"),
+          h("button", { type: "button", className: "stk-set-add", onClick: () => onEditFeed(null) },
+            h(Icon, { name: "plus", size: 16 }), "Create New Feed")
+        )
+      );
+    }
+
     function SectionBody() {
-      if (section === "feeds") {
-        return h(React.Fragment, null,
-          h("h4", { className: "stk-set-sub-head" }, "Saved feeds"),
-          (feeds || []).map((feed) =>
-            h("button", { key: feed.id, className: "stk-set-row", onClick: () => onEdit(feed) },
-              h("span", { className: "stk-set-icon" }, h(Icon, { name: "sparkle", size: 18 })),
-              h("span", { className: "stk-set-copy" }, h("span", null, feed.name), h("small", null, feed.type)),
-              h("span", { className: "stk-set-chev" }, h(Icon, { name: "chevron", size: 15 }))
-            )
-          ),
-          !(feeds || []).length && h("p", { className: "stk-sub" }, "No saved feeds yet."),
-          h("button", { className: "stk-btn", onClick: () => onEdit(null), style: { marginTop: "12px" } },
-            h(Icon, { name: "plus", size: 14 }), "New feed"),
-          h("h4", { className: "stk-set-sub-head" }, "What lands in the feed"),
-          h(PrefRow, { title: "Window", hint: "For You draws from this window", stack: true },
-            h(PrefPills, {
-              value: prefs.feedWindow,
-              options: [["all", "Everything"], ["30", "30 days"], ["90", "90 days"], ["365", "1 year"]],
-              onChange: (value) => setPref("feedWindow", value),
-            })),
-          h("h4", { className: "stk-set-sub-head" }, "Favorites"),
-          h(PrefRow, { title: "Sort order", hint: "How your hearted scenes are ordered", stack: true },
-            h(PrefPills, {
-              value: prefs.favoritesSort,
-              options: [["updated_at", "Recent"], ["filesize", "Size"], ["duration", "Length"], ["resolution", "Res"], ["title", "A–Z"], ["random", "Random"]],
-              onChange: (value) => setPref("favoritesSort", value),
-            }))
-        );
+      if (section === "feeds") return feedsPage();
+      if (section === "feeds/new-feed") {
+        return h(FeedEditorPage, {
+          key: (feedDraft && feedDraft.id) || "new",
+          initial: feedDraft,
+          onSave: onSaveFeed,
+          onDelete: onDeleteFeed,
+          onDone: () => onSection("feeds"),
+        });
       }
       if (section === "performer") {
         return h(React.Fragment, null,
@@ -10591,23 +10927,69 @@ function TagsPage({ onPick, onMarkers, onBack }) {
       }
       return h(SettingsRow, {
         key: id, icon: meta.icon, title: meta.title,
-        onClick: () => setSection(id),
+        onClick: () => onSection(id),
+      });
+    }
+
+    function renderPicker() {
+      if (!picker) return null;
+      const close = () => setPicker("");
+      if (picker === "window") {
+        return h(SettingsPicker, {
+          title: "Content Time Range", value: prefs.feedWindow || "all", options: WINDOW_OPTIONS,
+          onPick: (value) => setPref("feedWindow", value), onClose: close,
+        });
+      }
+      if (picker === "favSort") {
+        return h(SettingsPicker, {
+          title: "Sort Order", value: prefs.favoritesSort || "updated_at", options: FAV_SORT_OPTIONS,
+          onPick: (value) => setPref("favoritesSort", value), onClose: close,
+        });
+      }
+      if (picker === "foryouTags" || picker === "favTags") {
+        const key = picker === "foryouTags" ? "foryouTags" : "favoriteTags";
+        const current = prefs[key] || [];
+        return h(SettingsPicker, {
+          title: "Filter by Tag", value: current.length ? "select" : "all",
+          options: [{ value: "all", label: "All Tags" }, { value: "select", label: "Select Tags" }],
+          onPick: (value) => {
+            close();
+            if (value === "select") setTagSheet(key);
+            else setPref(key, []);
+          },
+          onClose: close,
+        });
+      }
+      return h(SettingsPicker, {
+        title: "Algorithm Preferences", multi: true,
+        options: [{ value: "none", label: "No Preferences", selected: !algoKeys(prefs.favoritesAlgo).length }].concat(
+          ALGO_OPTIONS.map((option) => ({ value: option.value, label: option.label, selected: !!(prefs.favoritesAlgo || {})[option.value] }))
+        ),
+        onPick: (value) => setPref("favoritesAlgo", nextAlgo(prefs.favoritesAlgo, value)),
+        onClose: close,
+      });
+    }
+
+    function renderTagSheet() {
+      if (!tagSheet) return null;
+      const selected = prefs[tagSheet] || [];
+      return h(TagSheet, {
+        title: "Select Tags",
+        selected,
+        onToggle: (id) => setPref(tagSheet, selected.indexOf(id) >= 0 ? selected.filter((tag) => tag !== id) : selected.concat([id])),
+        onClose: () => setTagSheet(""),
       });
     }
 
     if (section) {
-      const current = rowById[section];
       return h(
         "div",
         { className: "stk-settings stk-set-page" },
-        h("div", { className: "stk-set-subhead" },
-          h("button", { type: "button", className: "stk-set-back", title: "Back to settings", onClick: () => setSection("") },
-            h(Icon, { name: "back", size: 20 })),
-          h("span", null, current ? current.title : "Settings")
-        ),
         /* called, not mounted: a fresh component type each render would remount
            the PIN input on every keystroke and drop the keyboard focus */
-        SectionBody()
+        SectionBody(),
+        renderPicker(),
+        renderTagSheet()
       );
     }
 
@@ -10619,9 +11001,12 @@ function TagsPage({ onPick, onMarkers, onBack }) {
           h("h1", { className: "stk-set-group-head" + (group.rank === 1 ? " stk-set-h1" : "") }, group.id),
           group.rows.map((id) => renderRow(id))
         )
-      )
+      ),
+      renderPicker(),
+      renderTagSheet()
     );
   }
+
   /* ------------------------------------------------------------------ */
   /* root                                                               */
   /* ------------------------------------------------------------------ */
@@ -10992,6 +11377,8 @@ function TagsPage({ onPick, onMarkers, onBack }) {
     const historyClipRef = useRef(null);
     const [feeds, setFeeds] = useState(() => loadFeeds());
     const [activeFeed, setActiveFeed] = useState(defaultFeed());
+    /* which settings page is open: "" is the index, "feeds" the feeds page, ... */
+    const [settingsRoute, setSettingsRoute] = useState("");
     const [duo, setDuo] = useState(false);
 
     const [refreshKey, setRefreshKey] = useState(0);
@@ -11062,6 +11449,8 @@ function TagsPage({ onPick, onMarkers, onBack }) {
     const selfSceneRef = useRef(null);
     /* exact route we just wrote, so the router can skip re-applying it */
     const routeClaimRef = useRef(null);
+    /* the feed the settings editor was opened with (null = a new one) */
+    const feedDraftRef = useRef(null);
 
     const applyRoute = useCallback((rest) => {
       if (routeClaimRef.current && routeClaimRef.current === rest) {
@@ -11144,8 +11533,12 @@ function TagsPage({ onPick, onMarkers, onBack }) {
         setTab("home");
         return;
       }
-      if (rest === "settings") {
+      /* /settings/<section> is a real route: the chevron, browser back and a
+         cold deep link all land on the same page, and back has something to
+         return to. */
+      if (rest === "settings" || rest.indexOf("settings/") === 0) {
         setTab("settings");
+        setSettingsRoute(rest === "settings" ? "" : rest.slice("settings/".length));
         return;
       }
       if (rest === "ops") {
@@ -11854,13 +12247,39 @@ function TagsPage({ onPick, onMarkers, onBack }) {
         h(OperationsPanel, null)
       );
     } else if (tab === "settings") {
+      /* a section page keeps the top bar's left slot as its own back button, so
+         the header names where you are instead of repeating "Settings" */
+      const openSection = (path) => {
+        if (path) goTo("settings/" + path);
+        else goTo("settings");
+      };
+      /* back replaces the current entry instead of pushing another one: pushing
+         left the section in front of the index in history, so one chevron tap
+         needed two browser backs to leave settings */
+      const backSection = () => {
+        const parent = settingsRoute.indexOf("/") > 0
+          ? settingsRoute.slice(0, settingsRoute.lastIndexOf("/"))
+          : "";
+        /* we pushed the section, so one browser-back is the parent. replaceState
+           would be tidier but it fires no hashchange and is refused outright on
+           file:// origins, which is where this gets tested. */
+        if (NAV_DEPTH > 0 && window.history.length > 1) {
+          window.history.back();
+          return;
+        }
+        goTo(parent ? "settings/" + parent : "settings");
+      };
       body = h(
         "div",
         { className: "stk-page" },
         h(
           "h2",
-          { className: "stk-page-head" },
-          "Settings",
+          { className: "stk-page-head" + (settingsRoute ? " stk-page-head-sub" : "") },
+          settingsRoute
+            ? h("button", { className: "stk-page-back", title: "Back", onClick: backSection },
+                h(Icon, { name: "back", size: 19 }))
+            : null,
+          h("span", { className: "stk-page-title" }, settingsRoute ? (SETTINGS_SECTION_TITLES[settingsRoute] || "Settings") : "Settings"),
           h(
             "button",
             { className: "stk-page-x", title: "Close settings", onClick: () => { setTab("home"); goTo(""); } },
@@ -11872,7 +12291,15 @@ function TagsPage({ onPick, onMarkers, onBack }) {
           prefs,
           setPref,
           feeds,
-          onEdit: (spec) => { setBuilder({ spec }); setTab("home"); goTo(""); },
+          section: settingsRoute,
+          onSection: openSection,
+          feedDraft: feedDraftRef.current,
+          onEditFeed: (spec) => {
+            feedDraftRef.current = spec || null;
+            openSection("feeds/new-feed");
+          },
+          onSaveFeed: (spec) => { feedDraftRef.current = null; saveFeed(spec); },
+          onDeleteFeed: (id) => { feedDraftRef.current = null; deleteFeed(id); openSection("feeds"); },
           onOpenHistory: (row) => {
             if (!/^\d+$/.test(row.id)) return;
             historyClipRef.current = row;
@@ -11922,7 +12349,13 @@ function TagsPage({ onPick, onMarkers, onBack }) {
         desktop,
         prefs,
         spec: activeFeed,
-        cfg: Object.assign({}, cfg, { windowDays: prefs.feedWindow === "all" ? 0 : Number(prefs.feedWindow) || 0 }),
+        cfg: Object.assign({}, cfg, {
+          windowDays: prefs.feedWindow === "all" ? 0 : Number(prefs.feedWindow) || 0,
+          foryouTags: prefs.foryouTags || [],
+          foryouTagMode: prefs.foryouTagMode || "OR",
+          favoriteTags: prefs.favoriteTags || [],
+          foryouAlgo: prefs.favoritesAlgo || {},
+        }),
         refreshKey,
         onMenu: () => setNavOpen(true),
         onSearch: () => {
@@ -12194,7 +12627,21 @@ function TagsPage({ onPick, onMarkers, onBack }) {
                         className: "stk-drawer",
                         onClick: (event) => event.stopPropagation(),
                       },
-                      h("div", { className: "stk-drawer-title" }, "StashTok"),
+                      h(
+                        "div",
+                        { className: "stk-drawer-head" },
+                        h("div", { className: "stk-drawer-title" }, "StashTok"),
+                        h(
+                          "button",
+                          {
+                            className: "stk-drawer-close",
+                            title: "Close menu",
+                            "aria-label": "Close menu",
+                            onClick: () => setNavOpen(false),
+                          },
+                          h(Icon, { name: "x", size: 18 })
+                        )
+                      ),
                       [
                         ["home", "Feed", "play"],
                         ["discover", "Discover", "sparkle"],
