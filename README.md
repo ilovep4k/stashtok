@@ -65,21 +65,13 @@ into one MP4, cached per performer. It opens in its own tab because Stash's CSP
 | Start muted | on | Autoplay-friendly default |
 | Double-tap to heart | on | Double-tap hearts the scene |
 
-## Faster grids (optional)
-
-Stash cannot resize a scene screenshot or a performer image on the fly, so a 200 px card
-downloads the full picture. `tools/thumbs-service/` is a small sidecar that renders and
-caches 320 px JPEGs; the plugin points at it when it is running and silently falls back
-to Stash's originals when it is not. Point it out in `Settings -> thumbBase`, or leave
-the setting empty and the app guesses from the port it is served on (9997 -> :18997,
-9998 -> :18996). See [tools/thumbs-service/README.md](tools/thumbs-service/README.md).
-
 ## Notes and limits
 
 - Feed definitions live in `localStorage` of the browser that created them; there is no server component and no database. Clear site data and they are gone.
 - Scene video streams from `/scene/<id>/stream`, i.e. the original file. Stash decides whether it serves the original or a transcode based on your own settings.
 - Marker items play the *scene*, positioned at the marker, so the whole-timeline scrub works. `SceneMarker.stream` previews are deliberately not used — they are short, low-resolution clips.
-- iOS Safari has no Fullscreen API for arbitrary elements, so "fullscreen" is a fixed 100dvh overlay with the safe-area insets honoured. Using the native video fullscreen would break the gestures.
+- Full screen keeps StashTok's feed controls available. When the browser can't fullscreen the app, StashTok fills the available viewport and respects the safe areas.
+- Settings → Watch history lists up to 100 recent scenes on this browser. Settings → Playback diagnostics can download a JSON report or send it to a configured endpoint.
 - Two fingers are required to zoom, which is why a single-finger vertical swipe is unambiguous.
 
 ## Troubleshooting
