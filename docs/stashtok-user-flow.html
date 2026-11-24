@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>StashTok — User Flows &amp; UI Consistency (v0.2.7)</title>
+<style>
+  :root{
+    --bg:#0b0b0d; --panel:#141417; --panel2:#1b1b20; --line:#2a2a31;
+    --txt:#ececf1; --dim:#9a9aa6; --accent:#ff2d55; --ok:#3ddc84; --warn:#ffb020;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;}
+  .wrap{max-width:1080px;margin:0 auto;padding:48px 28px 80px}
+  header{border-bottom:1px solid var(--line);padding-bottom:24px;margin-bottom:36px}
+  .kicker{font:600 11px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--accent)}
+  h1{font-size:34px;line-height:1.15;margin:12px 0 8px;letter-spacing:-.02em}
+  .sub{color:var(--dim);margin:0}
+  .meta{display:flex;gap:22px;flex-wrap:wrap;margin-top:18px;font:12px var(--mono);color:var(--dim)}
+  .meta b{color:var(--txt);font-weight:600}
+  h2{font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);
+    margin:44px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+  h3{font-size:16px;margin:0 0 4px}
+  p{margin:0 0 12px;color:#cfcfd8}
+  code{font:12.5px var(--mono);background:#202027;border:1px solid var(--line);
+    border-radius:5px;padding:1px 5px;color:#e8e8ef}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+  .card p{margin:4px 0 0;font-size:13.5px;color:var(--dim)}
+  .flow{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:18px;margin-bottom:14px;overflow-x:auto}
+  .steps{display:flex;align-items:stretch;gap:0;min-width:max-content}
+  .step{background:var(--panel2);border:1px solid var(--line);border-radius:9px;
+    padding:10px 14px;min-width:120px;max-width:210px}
+  .step b{display:block;font-size:13px;font-weight:600;margin-bottom:2px}
+  .step span{font-size:11.5px;color:var(--dim);line-height:1.35;display:block}
+  .arrow{align-self:center;color:#5b5b66;padding:0 10px;font-size:16px}
+  .step.entry{border-color:#3a3a45;border-left:3px solid var(--accent)}
+  .step.decision{border-style:dashed;border-color:#44444f}
+  .branch{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:12px}
+  .tag{display:inline-block;font:600 10px/1 var(--mono);letter-spacing:.08em;
+    text-transform:uppercase;padding:4px 7px;border-radius:4px;vertical-align:2px}
+  .t-ok{background:rgba(61,220,132,.12);color:var(--ok);border:1px solid rgba(61,220,132,.3)}
+  .t-warn{background:rgba(255,176,32,.12);color:var(--warn);border:1px solid rgba(255,176,32,.3)}
+  .t-fix{background:rgba(255,45,85,.12);color:var(--accent);border:1px solid rgba(255,45,85,.32)}
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  th{text-align:left;font:600 11px var(--mono);letter-spacing:.08em;text-transform:uppercase;
+    color:var(--dim);padding:10px 12px;border-bottom:1px solid var(--line)}
+  td{padding:11px 12px;border-bottom:1px solid #1f1f25;vertical-align:top;color:#d4d4dd}
+  td:first-child{color:var(--txt);font-weight:500}
+  .sitemap{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+  .node{background:var(--panel2);border:1px solid var(--line);border-radius:10px;
+    padding:12px 14px;font-size:13px}
+  .node b{display:block;font-size:13.5px}
+  .node span{color:var(--dim);font-size:11.5px;display:block;margin-top:2px}
+  .node.core{border-color:#3d3d49;box-shadow:inset 3px 0 0 var(--accent)}
+  .note{border-left:3px solid var(--warn);background:rgba(255,176,32,.06);
+    padding:12px 16px;border-radius:0 8px 8px 0;font-size:13.5px;color:#d9d9e2}
+  .note b{color:var(--warn)}
+  footer{margin-top:56px;padding-top:18px;border-top:1px solid var(--line);
+    color:var(--dim);font-size:12px}
+  @media (max-width:760px){
+    .grid2,.branch,.sitemap{grid-template-columns:1fr}
+    .wrap{padding:32px 18px 60px}
+    h1{font-size:26px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="kicker">StashTok · Product design artifact</div>
+  <h1>User flows &amp; UI consistency audit</h1>
+  <p class="sub">How a session actually moves through StashTok, where the seams are, and what changed in 0.2.7 to close them.</p>
+  <div class="meta">
+    <span><b>Plugin</b> stashTok 0.2.7</span>
+    <span><b>Instances</b> stash-of :9997 · stash-wario :9998</span>
+    <span><b>Surface</b> desktop + mobile web, inside Stash</span>
+    <span><b>Scope</b> navigation, feed, profile, settings</span>
+  </div>
+</header>
+
+<h2>1 · Shell and navigation model</h2>
+<p>StashTok is mounted as a page inside Stash (<code>/stash-tok</code>). It replaces Stash's page body but not its chrome, so there are two navigation layers to keep straight: Stash's own sidebar on the left, and StashTok's own bottom bar / drawer.</p>
+
+<div class="sitemap">
+  <div class="node core"><b>Feed</b><span>Default landing. Vertical player, endless pool.</span></div>
+  <div class="node"><b>Discover</b><span>Performer cards, random/trending entry points.</span></div>
+  <div class="node"><b>Performers</b><span>Searchable index of every performer.</span></div>
+  <div class="node"><b>Favorites</b><span>Everything rated ≥ heart threshold.</span></div>
+  <div class="node"><b>Tags</b><span>Tag grid, counts, tap → tag feed.</span></div>
+  <div class="node"><b>Markers</b><span>Marker feed grouped by tag.</span></div>
+  <div class="node"><b>Search</b><span>Type-ahead over scenes and performers.</span></div>
+  <div class="node"><b>Settings</b><span>Preferences, feeds, privacy lock, ops.</span></div>
+</div>
+
+<div class="grid2" style="margin-top:14px">
+  <div class="card">
+    <h3>Bottom bar (primary)</h3>
+    <p>Fixed <code>Feed</code> button plus four configurable slots. Defaults: Discover · Performers · Favorites · Settings. Long-press the last three to repoint them. Hidden on drill-downs (performer page, folder page, feed opened from a profile) so it never sits on top of the content you came for.</p>
+  </div>
+  <div class="card">
+    <h3>Drawer (secondary)</h3>
+    <p>The top-left menu button opens every destination, including Markers and Search, which have no bottom slot by default. It is the stable map; the bottom bar is the shortcut layer. Title reads <b>StashTok</b> so the drawer matches the product, not the host instance.</p>
+  </div>
+</div>
+
+<h2>2 · Core flows</h2>
+
+<div class="flow">
+  <div class="steps">
+    <div class="step entry"><b>Open StashTok</b><span>/stash-tok from Stash's sidebar</span></div>
+    <div class="arrow">→</div>
+    <div class="step"><b>Feed builds</b><span>pool query, window from Settings</span></div>
+    <div class="arrow">→</div>
+    <div class="step"><b>Play</b><span>autoplay muted, loop</span></div>
+    <div class="arrow">→</div>
+    <div class="step decision"><b>Navigate</b><span>swipe · wheel · ↑ ↓ · hold to FF</span></div>
+    <div class="arrow">→</div>
+    <div class="step"><b>React</b><span>heart · tag · more</span></div>
+    <div class="arrow">→</div>
+    <div class="step"><b>Drill down</b><span>tap handle → performer</span></div>
+  </div>
+  <div class="branch">
+    <div class="card"><h3>Back</h3><p>Browser/back chevron pops the nav stack (<code>NAV_DEPTH</code>), restores the previous feed position and the bottom bar.</p></div>
+    <div class="card"><h3>Interruptions</h3><p>Tab blur with a PIN set black-screens the app and asks for the PIN on return. Without a PIN, playback pauses and resumes where it stopped.</p></div>
+  </div>
+</div>
+
+<div class="flow">
+  <div class="steps">
+    <div class="step entry"><b>Discover</b><span>performer cards</span></div>
+    <div class="arrow">→</div>
+    <div class="step"><b>Performer page</b><span>identity strip, tabs, grid</span></div>
+    <div class="arrow">→</div>
+    <div class="step decision"><b>Pick a tab</b><span>Scenes · Images · Markers</span></div>
+    <div class="arrow">→</div>
+    <div class="step"><b>Sort / filter</b><span>Size · Recent · Length · Res · A–Z · Random</span></div>
+    <div class="arrow">→</div>
+    <div class="step"><b>Open tile</b><span>player opens that exact scene</span></div>
+  </div>
+</div>
+
+<div class="flow">
+  <div class="steps">
+    <div class="step entry"><b>Performer grid</b><span>focus lands on the grid</span></div>
+    <div class="arrow">→</div>
+    <div class="step"><b>Arrow keys</b><span>← → ↑ ↓ move the selection ring</span></div>
+    <div class="arrow">→</div>
+    <div class="step decision"><b>Pointer rests?</b><span>hover is inert by default</span></div>
+    <div class="arrow">→</div>
+    <div class="step"><b>Enter / click</b><span>opens the highlighted scene</span></div>
+    <div class="arrow">→</div>
+    <div class="step"><b>Player</b><span>back returns to the same grid position</span></div>
+  </div>
+  <div class="note" style="margin-top:12px">
+    <b>This is the path that was breaking.</b> With hover previews on, every tile that landed under a resting pointer mounted a stream that painted a blank first frame over the still. Arrowing right therefore looked like each newly selected tile going invisible. 0.2.7 forces the preference off once per browser, so the selection ring moves over a still that never blanks.
+  </div>
+</div>
+
+<div class="grid2">
+  <div class="flow" style="margin:0">
+    <h3>Search</h3>
+    <div class="steps">
+      <div class="step entry"><b>Search</b><span>drawer or bottom slot</span></div>
+      <div class="arrow">→</div>
+      <div class="step"><b>Type ≥ 2</b><span>debounced query</span></div>
+      <div class="arrow">→</div>
+      <div class="step"><b>Results</b><span>scenes + performers</span></div>
+    </div>
+  </div>
+  <div class="flow" style="margin:0">
+    <h3>Favorites</h3>
+    <div class="steps">
+      <div class="step entry"><b>Heart anywhere</b><span>writes rating100</span></div>
+      <div class="arrow">→</div>
+      <div class="step"><b>Favorites</b><span>gallery or feed view</span></div>
+      <div class="arrow">→</div>
+      <div class="step"><b>Sort</b><span>Recent · Size · Length …</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="flow" style="margin-top:14px">
+  <div class="steps">
+    <div class="step entry"><b>Settings</b><span>bottom slot or drawer</span></div>
+    <div class="arrow">→</div>
+    <div class="step"><b>Playback</b><span>SFW blur, crop, path, drag-scrub</span></div>
+    <div class="arrow">→</div>
+    <div class="step"><b>Performer page</b><span>sort · folders · hover · tabs</span></div>
+    <div class="arrow">→</div>
+    <div class="step"><b>Favorites</b><span>sort order</span></div>
+    <div class="arrow">→</div>
+    <div class="step"><b>Navigation</b><span>reset bottom bar</span></div>
+    <div class="arrow">→</div>
+    <div class="step"><b>Privacy lock</b><span>4-digit PIN</span></div>
+    <div class="arrow">→</div>
+    <div class="step"><b>Feeds</b><span>saved feed definitions</span></div>
+  </div>
+</div>
+
+<h2>3 · States and edge cases</h2>
+<table>
+  <tr><th>State</th><th>What the user sees</th><th>Rule</th></tr>
+  <tr><td>Empty grid</td><td>“No favorited scenes for this performer yet.” / empty spacer</td><td>Never show a broken grid frame; keep the tab bar reachable.</td></tr>
+  <tr><td>Missing thumbnail</td><td>Dark tile, duration pill still present</td><td>Tile keeps its aspect ratio so the grid never reflows.</td></tr>
+  <tr><td>No generated previews</td><td>Still only</td><td>Hover previews off by default; the still is always the floor.</td></tr>
+  <tr><td>Non-9:16 clip</td><td>Letterbox by default, auto-crop optional</td><td>One preference, applied to every feed and profile tile.</td></tr>
+  <tr><td>Deep link</td><td>Direct route to performer/tag/search</td><td>Hash routes are the source of truth; back stack survives a reload.</td></tr>
+  <tr><td>Stash offline / plugin error</td><td>Inline error, retry</td><td>Never leave a blank black page with no affordance.</td></tr>
+</table>
+
+<h2>4 · UI consistency audit</h2>
+<p>Fixed in this pass, all verified against the live app at 1440×900 and 430×932:</p>
+<table>
+  <tr><th>Finding</th><th>Before</th><th>Now</th><th>Status</th></tr>
+  <tr>
+    <td>Hover preview blanks tiles</td>
+    <td>Pointer resting on a tile mounted a stream that replaced the still with a blank frame; arrow-key traversal looked like tiles vanishing.</td>
+    <td>Preference forced off once per browser; hover is inert until explicitly enabled.</td>
+    <td><span class="tag t-fix">Fixed</span></td>
+  </tr>
+  <tr>
+    <td>Duplicate “Folders on top”</td>
+    <td>Same preference rendered twice — once under Performer page, once under a “Folder view” heading that no longer described it.</td>
+    <td>One row, under Performer page, where the grouping actually happens.</td>
+    <td><span class="tag t-fix">Fixed</span></td>
+  </tr>
+  <tr>
+    <td>Empty setting hints</td>
+    <td>“Show Images tab” and “Show Markers tab” had no explanation while every neighbour did.</td>
+    <td>Both state what the tab adds and where.</td>
+    <td><span class="tag t-fix">Fixed</span></td>
+  </tr>
+  <tr>
+    <td>Hover hint copy</td>
+    <td>“Playing the clip when the pointer rests on a tile…” — fragment, and it promised behaviour the file cannot deliver on libraries without previews.</td>
+    <td>“Plays the clip's own file… Off by default — it streams the real file and is heavy for a decoration.”</td>
+    <td><span class="tag t-fix">Fixed</span></td>
+  </tr>
+  <tr>
+    <td>Two default nav configurations</td>
+    <td>Base defaults ended in <code>Tags</code>; the migration reset ended in <code>Settings</code>. Which one you got depended on when you first loaded the plugin.</td>
+    <td>Single default: Discover · Performers · Favorites · Settings.</td>
+    <td><span class="tag t-fix">Fixed</span></td>
+  </tr>
+  <tr>
+    <td>Drawer branding</td>
+    <td>Hardcoded personal instance name in a plugin drawer.</td>
+    <td>Product name, consistent with the plugin manifest.</td>
+    <td><span class="tag t-fix">Fixed</span></td>
+  </tr>
+</table>
+
+<p style="margin-top:22px">Open recommendations, not applied:</p>
+<table>
+  <tr><th>Area</th><th>Observation</th><th>Recommendation</th></tr>
+  <tr>
+    <td>Hover previews, when re-enabled</td>
+    <td>The reveal gate is <code>loadeddata</code> + <code>videoWidth &gt; 0</code>. A decodable but black first frame still counts as ready.</td>
+    <td>Reveal only after <code>timeupdate</code> shows playback has advanced, or sample the frame and skip all-black. Otherwise leave the feature off.</td>
+  </tr>
+  <tr>
+    <td>Case conventions</td>
+    <td>Section headers are Title Case; row labels are sentence case. Consistent within each layer, but undocumented.</td>
+    <td>Write the rule at the top of the settings component so new rows don't drift.</td>
+  </tr>
+  <tr>
+    <td>Destructive controls</td>
+    <td>“Remove” (PIN) is the only red button; “Reset” (bottom bar) is neutral though it discards layout choices.</td>
+    <td>Treat both as destructive: outline-danger, or confirm-on-tap.</td>
+  </tr>
+  <tr>
+    <td>Keyboard discovery</td>
+    <td>Arrow keys, Enter, and hold-to-FF exist but are not surfaced anywhere.</td>
+    <td>A small “Keyboard” block in Settings, or a <code>?</code> overlay on the grid.</td>
+  </tr>
+  <tr>
+    <td>Selection ring on bright stills</td>
+    <td>White 3px ring can disappear on a white thumbnail.</td>
+    <td>Add a dark inner ring (already present) and confirm contrast in both themes.</td>
+  </tr>
+  <tr>
+    <td>Settings discoverability</td>
+    <td>Reachable from the bottom bar by default, but the label is icon-only at narrow widths.</td>
+    <td>Keep the gear in slot 4; the drawer row remains the labelled path.</td>
+  </tr>
+</table>
+
+<h2>5 · Keyboard map</h2>
+<div class="grid2">
+  <div class="card"><h3>Feed</h3><p><code>↑ ↓</code> · <code>Tab</code> next/previous · <code>← →</code> seek 5 s (<code>Shift</code> = 10%) · <code>Space</code>/<code>K</code> pause · <code>0–9</code> jump to tenth · <code>,</code> <code>.</code> frame step · <code>L</code> heart · <code>F</code> flag · <code>M</code> mute · <code>I</code> details · <code>O</code> open in Stash · <code>V</code> VR · <code>R</code> refresh · <code>Enter</code> open performer</p></div>
+  <div class="card"><h3>Grids</h3><p><code>← → ↑ ↓</code> move selection · <code>Enter</code>/<code>Space</code> open · <code>Esc</code> close sheet, then leave the drill-down · <code>Backspace</code> same as Esc</p></div>
+</div>
+
+<footer>
+  Generated 19 Nov 2026 · stashTok 0.2.7 · Verified on stash-of (:9997) and stash-wario (:9998) at 1440×900 and 430×932. Screenshots omitted deliberately; every claim above is measured from the live DOM, not from a mock.
+</footer>
+
+</div>
+</body>
+</html>

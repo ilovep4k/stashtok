@@ -2,13 +2,17 @@
 
 A full-screen, TikTok-style vertical feed for [Stash](https://github.com/stashapp/stash). Swipe through your library one scene at a time, with the HUD out of the way until you touch the screen.
 
-![status](https://img.shields.io/badge/version-0.1.0-informational)
+![status](https://img.shields.io/badge/version-0.3.0-informational)
+
+New here? **[docs/user-guide.md](docs/user-guide.md)** walks through the app as it
+works today. This README is the technical overview.
 
 ## What it does
 
 - **Vertical feed** — one scene per screen, 9:16 framing. On a portrait phone a 16:9 clip is auto-cropped to its middle half (a quarter off each side); on a wide screen it is letterboxed and centred instead, with a blurred backdrop behind it.
-- **Bottom bar** — Feed (fixed, first), then Discover, Performers, Favorites, Settings; long-press any slot to change it.
-- **Feeds** — For You (random), Favorites, one or many tags, a performer's scenes in date order, markers, never-played, shorts, portrait-only, or any saved Stash filter. Build and save your own feeds in the app.
+- **Navigation** — Feed is fixed in the bottom bar; the other four slots are assignable (Discover, Performers, Favorites, Tags, Folders, Markers, Random, Settings, Ops) by long-pressing them. A drawer lists every section, and a gear opens settings from most pages.
+- **Favorites page** — your hearted performers (ten, reshuffled each visit, with an *All Favorites* tile that opens the hearted-performer gallery) over four rows of hearted scenes: recently favorited, random favorites, largest, most viewed. *View all* opens a row as a grid with a **Play Feed** button; tiles carry the performer's name and the duration.
+- **Feeds** — For You (random), Favorites, one or many tags, a performer's scenes in date order, markers, never-played, shorts, portrait-only, or any saved Stash filter. Build, clone and save your own feeds in the app (see *Feeds* below).
 - **Gestures**
   - swipe up / down — next / previous
   - tap — pause or resume (a 300 ms wait lets a double tap win)
@@ -23,6 +27,27 @@ A full-screen, TikTok-style vertical feed for [Stash](https://github.com/stashap
 - **Scrub bar** with a tick per marker, and the marker title as you pass it.
 - **Details sheet** — file path, size, duration, resolution, codecs, bitrate, play counts, plus every performer and tag as a tappable chip.
 - **Hearts are ratings.** Stash has no scene favourite, so a heart writes `rating100` through `sceneUpdate`. Hearts therefore show up in Stash's own rating filters, and in other clients.
+
+## Feeds are saved filters
+
+A feed is a **saved filter that also knows how to play**. The filter half is
+Stash's own scene-filter vocabulary; the playback half is the draw order and where
+each clip starts.
+
+- Feeds are declared as a small JSON spec — `type`, `sort` + `direction`, `tags` +
+  `tagMode`, `windowDays`, `performerScope`, `excludePaths` — and compiled to a
+  GraphQL `findScenes(scene_filter: …)` query at read time.
+- The plugin talks **GraphQL, not Stash's page URLs**. `/scenes?…&c=…` carries an
+  opaque, undocumented, version-unstable encoding of Stash's page state, and it
+  describes a page rather than a feed. `SceneFilterType` is the same vocabulary
+  with named fields, `INCLUDES_ALL`, `EXCLUDES`, and `AND`/`OR`/`NOT` nesting —
+  which is what "the same exclusion rules as Stash" actually needs.
+- A feed can also run a filter you already built in Stash (`type: "saved"`,
+  resolved through `findSavedFilters`). That is the supported way to bring your
+  existing Stash filters into StashTok.
+- The built-ins are presets of the same spec: *Settings → Your Feeds → Built-in
+  Feeds* opens the editor pre-filled with For You or Favorites as you have them
+  configured, so the built-in feed can be cloned and changed field by field.
 
 ## Install from a source (updates)
 
@@ -74,9 +99,18 @@ to Stash's originals when it is not. Point it out in `Settings -> thumbBase`, or
 the setting empty and the app guesses from the port it is served on (9997 -> :18997,
 9998 -> :18996). See [tools/thumbs-service/README.md](tools/thumbs-service/README.md).
 
+## Guides
+
+- **[docs/user-guide.md](docs/user-guide.md)** — using the app: gestures, favorites, feeds, settings, troubleshooting.
+- [docs/community-plugin-collisions.md](docs/community-plugin-collisions.md) — when *Settings → Plugins* goes blank.
+- [docs/stashtok-user-flow.html](docs/stashtok-user-flow.html) — screen-by-screen flow reference.
+
 ## Notes and limits
 
 - Feed definitions live in `localStorage` of the browser that created them; there is no server component and no database. Clear site data and they are gone.
+- **Bottom-bar slots hold sections, not feeds.** Assigning a custom feed to a nav slot is not implemented yet; today the built-in Feed slot is the only feed in the bar.
+- **Playback character is global, not per feed.** Random in-points, the long-scene threshold and "start at a marker" are settings, so two feeds do not yet differ in how they scrub. A per-feed `startMode` is the next planned spec field.
+- The Favorites page rows are still hardcoded specs rather than feeds you can edit in *Your Feeds*.
 - Scene video streams from `/scene/<id>/stream`, i.e. the original file. Stash decides whether it serves the original or a transcode based on your own settings.
 - Marker items play the *scene*, positioned at the marker, so the whole-timeline scrub works. `SceneMarker.stream` previews are deliberately not used — they are short, low-resolution clips.
 - Full screen keeps StashTok's feed controls available. When the browser can't fullscreen the app, StashTok fills the available viewport and respects the safe areas. Using the native video fullscreen would break the gestures.
