@@ -2150,35 +2150,21 @@ void main() {
       gl.vertexAttribPointer(pos, 2, gl.FLOAT, false, 0, 0);
       const tex = gl.createTexture();
       gl.bindTexture(gl.TEXTURE_2D, tex);
-      /* Mipmaps, not plain LINEAR: the shader reads a 3840-wide fisheye eye into a
-         ~400pt view, so most of the frame is minified 4-10x and bilinear sampling
-         alone aliases into the crawling jaggies. webgl1 cannot mipmap a
-         non-power-of-two texture, and the frame is uploaded at its native size, so
-         webgl1 gets plain LINEAR instead. */
-      const isGL2 = typeof gl.texStorage2D === "function";
-      /* webgl1 has no mipmaps for a non-power-of-two texture, and the frame is now
-         uploaded at its native size: asking for mips there would leave the texture
-         incomplete, which renders black */
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, isGL2 ? gl.LINEAR_MIPMAP_LINEAR : gl.LINEAR);
+      /* Plain LINEAR, deliberately. With the frame uploaded at its native size the
+         view samples roughly one texel per canvas pixel — the visible window of a
+         4320-wide fisheye eye is about as wide as the screen's backing store — so
+         there is almost nothing left to alias. Mipmaps here meant rebuilding a 9 MP
+         mip chain every single frame, which is what made the player crawl. */
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
       /* the driver's real limit: a 4320-wide VR frame must not be shrunk by an
          arbitrary cap, only by what the GPU cannot hold */
       const maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE) || 4096;
-      /* if the driver refuses mipmaps (incomplete texture = a black canvas) fall
-         back to plain bilinear rather than losing the picture entirely */
-      let mipOk = true;
-      function mip() {
-        if (!mipOk) return;
-        try {
-          gl.generateMipmap(gl.TEXTURE_2D);
-          if (gl.getError() !== gl.NO_ERROR) throw new Error("mipmap");
-        } catch (err) {
-          mipOk = false;
-          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-        }
-      }
+      /* a copy of the frame, still at full resolution: the 2D canvas is only a
+         transfer vehicle for devices that cannot texture a video directly */
+      let direct = true;
       const scratch = document.createElement("canvas");
       scratch.width = 1024;
       scratch.height = 512;
@@ -2240,7 +2226,9 @@ void main() {
         let dpr = Math.min(3, window.devicePixelRatio || 1);
         const cssW = canvas.clientWidth || 640;
         const cssH = canvas.clientHeight || 360;
-        const BUDGET = 4200000; /* ~4.2 MP */
+        /* 8 MP: covers a tablet at dpr 2 (5.6 MP) without letting a huge desktop
+           pane allocate an absurd buffer */
+        const BUDGET = 8000000;
         if (cssW * cssH * dpr * dpr > BUDGET) dpr = Math.sqrt(BUDGET / (cssW * cssH));
         const w = Math.max(320, Math.round(cssW * dpr));
         const h = Math.max(180, Math.round(cssH * dpr));
@@ -2289,13 +2277,20 @@ void main() {
           gl.uniform1i(u.kind, layout === "equirect" ? 1 : 0);
           gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
         };
-        if (fits) {
+        if (fits && direct) {
           /* straight from the video element: one GPU-to-GPU copy, no canvas, no
-             bitmap, no scale step */
-          gl.bindTexture(gl.TEXTURE_2D, tex);
-          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
-          if (isGL2) mip();
-          paint();
+             bitmap, no scale step. Some devices refuse a video as a texture
+             source, so a throw demotes this canvas to the canvas-copy path for
+             the rest of its life instead of dying frame after frame. */
+          try {
+            gl.bindTexture(gl.TEXTURE_2D, tex);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+            paint();
+          } catch (err) {
+            direct = false;
+            legacyUpload(texW, texH);
+            paint();
+          }
         } else {
           legacyUpload(texW, texH);
           paint();
@@ -2313,7 +2308,6 @@ void main() {
           }
           gl.bindTexture(gl.TEXTURE_2D, tex);
           gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, scratch);
-          if (isGL2) mip();
         }
       };
       raf = requestAnimationFrame(draw);
