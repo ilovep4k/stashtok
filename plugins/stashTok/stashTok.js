@@ -11012,6 +11012,19 @@ function TagsPage({ onPick, onMarkers, onBack }) {
     }, [favOnlyProfile]);
     /* the left drawer: settings, tags, performers and the rest live behind it */
     const [navOpen, setNavOpen] = useState(false);
+    /* Esc closes the drawer like every other layer; without this the only way
+       out on a phone was the scrim, which a keyboard user cannot reach */
+    useEffect(() => {
+      if (!navOpen) return;
+      const onKey = (event) => {
+        if (event.key === "Escape" || event.keyCode === 27) {
+          event.preventDefault();
+          setNavOpen(false);
+        }
+      };
+      window.addEventListener("keydown", onKey, true);
+      return () => window.removeEventListener("keydown", onKey, true);
+    }, [navOpen]);
     const [tagFilter, setTagFilter] = useState(null);
     const [folderView, setFolderView] = useState(null);
     const [folderProfile, setFolderProfile] = useState(null);

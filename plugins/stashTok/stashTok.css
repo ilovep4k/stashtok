@@ -4452,11 +4452,18 @@ html.stk-mono { filter: grayscale(1) contrast(1.06); }
 }
 .stk-chan-menu { z-index: 62; position: relative; }
 
-/* ---- left drawer ----------------------------------------------------- */
+/* ---- left drawer -----------------------------------------------------
+   The drawer must sit above the feed's own layers, not at "normal dialog" 80.
+   The embedded app (`.stash-tok.stk-embedded`) is a stacking context at
+   z-index 9000 while the scrim at 80 painted *under* it: the drawer mounted,
+   measured 268x844 and was completely covered by the video stage, which reads
+   as "the menu button dims the screen and the bottom bar disappears". The
+   highest in-app layer is the reel overlay at 9700, so the drawer belongs above
+   every app layer. */
 .stk-drawer-scrim {
   position: fixed;
   inset: 0;
-  z-index: 80;
+  z-index: 9800;
   background: rgba(0, 0, 0, .55);
   backdrop-filter: blur(2px);
   display: flex;
@@ -4471,6 +4478,7 @@ html.stk-mono { filter: grayscale(1) contrast(1.06); }
   display: flex;
   flex-direction: column;
   gap: 2px;
+  overflow-y: auto;
   animation: stk-drawer-in 200ms ease;
 }
 @keyframes stk-drawer-in { from { transform: translateX(-14px); opacity: .4; } to { transform: none; opacity: 1; } }
