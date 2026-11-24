@@ -693,6 +693,27 @@
     return Math.sign(distance) * Math.min(RUBBER_MAX, Math.abs(distance) * RUBBER_RATIO);
   }
 
+  /* the part of the stage the picture actually covers: the element is the whole
+     box even when object-fit leaves black bars, and a grab on the bars must not
+     pan. Returns the painted rect in viewport pixels, transform included. */
+  function paintedRect(video) {
+    const rect = video.getBoundingClientRect();
+    const vw = video.videoWidth || 0;
+    const vh = video.videoHeight || 0;
+    if (!vw || !vh) return rect;
+    const ar = vw / vh;
+    let w = rect.width;
+    let h = rect.height;
+    if (w / h > ar) w = h * ar;
+    else h = w / ar;
+    return {
+      left: rect.left + (rect.width - w) / 2,
+      top: rect.top + (rect.height - h) / 2,
+      right: rect.left + (rect.width + w) / 2,
+      bottom: rect.top + (rect.height + h) / 2,
+    };
+  }
+
   function buzz(ms) {
     try {
       if (navigator.vibrate) navigator.vibrate(ms);
@@ -801,6 +822,10 @@
     if (spec.pathIncludes) {
       parts.push(`path: { value: ${JSON.stringify(spec.pathIncludes)}, modifier: INCLUDES }`);
     }
+    /* Stash's own path exclusions: one criterion per fragment, chained through
+       AND because a filter input can name `path` only once per object. */
+    const excl = exclusionClause(spec.excludePaths);
+    if (excl) parts.push(excl);
     const scope = effectivePerformers(spec, cfg);
     if (type !== "performer" && scope.mode !== "all") {
       const ids = scope.mode === "favorites" ? (FAV_PERFORMER_IDS || []) : (scope.ids || []);
@@ -818,6 +843,19 @@
       );
     }
     return parts.join(", ");
+  }
+
+  /* "exclude these paths", the way Stash's own filter does it: every fragment
+     becomes a path NOT_INCLUDES, and the extras nest through AND */
+  function exclusionClause(list) {
+    const frags = (list || []).map((item) => String(item || "").trim()).filter(Boolean);
+    if (!frags.length) return "";
+    const one = (frag) => `path: { value: ${JSON.stringify(frag)}, modifier: NOT_INCLUDES }`;
+    let acc = "";
+    for (let i = frags.length - 1; i >= 1; i -= 1) {
+      acc = acc ? `AND: { ${one(frags[i])}, ${acc} }` : `AND: { ${one(frags[i])} }`;
+    }
+    return [one(frags[0]), acc].filter(Boolean).join(", ");
   }
 
   function sortClause(spec) {
@@ -3534,6 +3572,10 @@ void main() {
     const applyCrop = useCallback(
       (mode, animate, reset) => {
         if (!activeVideo()) return;
+        /* the user's pinch owns the transform: a media event (canplay re-fires on
+           every re-buffer) must not pull a zoomed frame back to the crop scale
+           mid-grab, which is what made a zoomed pan snap to 1x a beat later */
+        if (!reset && userZoomed()) return;
         const kind = cropKind();
         const s = kind ? cropScaleFor(mode, kind) : 1;
         /* canplay fires again on every re-buffer, and this runs from it: without
@@ -4246,9 +4288,19 @@ void main() {
       const rect = stage.getBoundingClientRect();
       const relX = (event.clientX - rect.left) / rect.width;
       const side = relX < 0.32 ? "left" : relX > 0.68 ? "right" : "center";
+      /* a grip on the black bars is not a grip on the picture */
+      let onPicture = false;
+      const pressedVideo = activeVideo();
+      if (pressedVideo) {
+        const p = paintedRect(pressedVideo);
+        onPicture =
+          event.clientX >= p.left - 6 && event.clientX <= p.right + 6 &&
+          event.clientY >= p.top - 6 && event.clientY <= p.bottom + 6;
+      }
       gesture.current = {
         mode: "press",
         side,
+        onPicture,
         /* capture retargets pointerup to the stage, so remember what the press
            actually landed on: a tap on the caption has to be recognisable */
         target: event.target,
@@ -4326,17 +4378,22 @@ void main() {
         g.moved = true;
         window.clearTimeout(holdTimer.current);
         if (g.mode === "press" || g.mode === "menu") {
-          /* Every drag is a grab: the picture follows the finger (mouse or
-             thumb) at once, with no zoom and no hold required. When the frame
-             has nothing left to give, the overscroll is what a release reads as
-             a swipe, so paging the feed never needs a second gesture. Seeking by
-             drag is the one thing that would eat the grab, so it only wins when
-             it was turned on in Settings. */
           clearPress();
           setQuick(null);
-          if (prefs && prefs.dragScrub === true && !userZoomed()) {
-            g.mode = "seek";
-          } else {
+          /* Swipe beats pan. A vertical drag is how you reach the next clip and
+             it must never be eaten by a grab, so a pan only starts when all of
+             these hold: the press landed on the picture (not the black bars),
+             the picture really overflows its box (a clip that already fills the
+             frame has nothing to move), and either the user pinched — any
+             direction pans then — or the drag is sideways, which is the axis a
+             cropped 16:9 frame actually has to give. */
+          const box = stage.getBoundingClientRect();
+          const slackX = (box.width * (tf.current.s - 1)) / 2;
+          const slackY = (box.height * (tf.current.s - 1)) / 2;
+          const hasSlack = slackX > 8 || slackY > 8;
+          const sideways = Math.abs(dx) >= Math.abs(dy);
+          const wantsSeek = prefs && prefs.dragScrub === true && !userZoomed();
+          if (!wantsSeek && g.onPicture && hasSlack && (userZoomed() || sideways)) {
             g.mode = "pan";
             g.panX = tf.current.x;
             g.panY = tf.current.y;
@@ -4348,6 +4405,9 @@ void main() {
             buzz(6);
             return;
           }
+          /* not a grab: vertical is the feed swipe, sideways is scrub/channel */
+          g.mode = sideways ? "seek" : "swipe";
+          if (g.mode === "swipe") setDragY(dy);
         }
       }
       if (!g.moved) return;
@@ -4367,6 +4427,8 @@ void main() {
         tf.current.x = clamp(wantX, -maxX, maxX) + rubber(overX);
         tf.current.y = clamp(wantY, -maxY, maxY) + rubber(overY);
         applyTransform();
+      } else if (g.mode === "swipe") {
+        setDragY(dy);
       } else if (g.mode === "seek") {
         /* only a leftward drag leaves scrubbing; rightward keeps seeking */
         if (dx < -CHANNEL_PX) {
@@ -10209,6 +10271,17 @@ function TagsPage({ onPick, onMarkers, onBack }) {
   /* feed builder                                                       */
   /* ------------------------------------------------------------------ */
 
+  /* [value, direction, label] — the same sort vocabulary the Favorites rows use */
+  const FEED_SORT_UI = [
+    ["random", "DESC", "Shuffle"],
+    ["created_at", "DESC", "Newest"],
+    ["rating", "DESC", "Top rated"],
+    ["play_count", "DESC", "Most viewed"],
+    ["filesize", "DESC", "Size"],
+    ["duration", "DESC", "Longest"],
+    ["title", "ASC", "A–Z"],
+  ];
+
   const FEED_TYPES = [
     { type: "foryou", label: "For You", hint: "Random scenes from the whole library" },
     { type: "favorites", label: "Favorites", hint: "Every scene you have rated or hearted" },
@@ -10492,6 +10565,57 @@ function TagsPage({ onPick, onMarkers, onBack }) {
             )
           )
         ),
+
+        h("h4", null, "Sort"),
+        h(
+          "div",
+          { style: { display: "flex", flexWrap: "wrap", gap: "8px" } },
+          FEED_SORT_UI.map((entry) =>
+            h(
+              "button",
+              {
+                key: entry[0],
+                className: "stk-tagpill",
+                style: (draft.sort || "random") === entry[0] ? { background: "#ff2d55", borderColor: "#ff2d55" } : undefined,
+                onClick: () => setDraft(Object.assign({}, draft, { sort: entry[0], direction: entry[1] })),
+              },
+              entry[2]
+            )
+          )
+        ),
+
+        h("h4", null, "Performers"),
+        h(
+          "div",
+          { style: { display: "flex", flexWrap: "wrap", gap: "8px" } },
+          [["all", "Anyone"], ["favorites", "My favorites"]].map(([mode, label]) =>
+            h(
+              "button",
+              {
+                key: mode,
+                className: "stk-tagpill",
+                style: ((draft.performerScope || {}).mode || "all") === mode ? { background: "#ff2d55", borderColor: "#ff2d55" } : undefined,
+                onClick: () => setDraft(Object.assign({}, draft, { performerScope: { mode, ids: [] } })),
+              },
+              label
+            )
+          )
+        ),
+
+        h("h4", null, "Exclude paths"),
+        h("p", { className: "stk-hint" }, "One path fragment per line — anything containing it is kept out of this feed."),
+        h("textarea", {
+          value: (draft.excludePaths || []).join("\n"),
+          rows: 3,
+          placeholder: "/mnt/Vault/trailers",
+          onChange: (event) =>
+            setDraft(
+              Object.assign({}, draft, {
+                excludePaths: event.currentTarget.value.split("\n").map((line) => line.trim()).filter(Boolean),
+              })
+            ),
+          style: { width: "100%", padding: "9px 11px", borderRadius: "10px", background: "#1b1b1b", border: "1px solid #333", color: "#fff", fontSize: "12px", resize: "vertical" },
+        }),
 
         /* tags narrow every feed type, not only the "Tags" one, so the field is
            always on screen instead of hiding behind a type choice */
@@ -11312,6 +11436,47 @@ function TagsPage({ onPick, onMarkers, onBack }) {
             value: algoLabel(prefs.favoritesAlgo),
             onClick: () => setPicker("algo"), last: true,
           })
+        ),
+
+        h("section", { className: "stk-set-block" },
+          h("h4", { className: "stk-set-block-head" }, "Built-in Feeds"),
+          h("p", { className: "stk-set-block-sub" }, "Start from one and change anything: filters, sort, exclusions."),
+          [
+            {
+              key: "tpl-foryou",
+              name: "For You",
+              note: "Shuffle · your settings",
+              spec: {
+                type: "foryou",
+                name: "For You (mine)",
+                sort: "random",
+                direction: "DESC",
+                tags: prefs.foryouTags || [],
+                tagMode: prefs.foryouTagMode || "OR",
+                windowDays: prefs.feedWindow === "all" ? 0 : Number(prefs.feedWindow) || 0,
+                performerScope: prefs.foryouPerformers || { mode: "all", ids: [] },
+              },
+            },
+            {
+              key: "tpl-favorites",
+              name: "Favorites",
+              note: "Everything you rated or hearted",
+              spec: {
+                type: "favorites",
+                name: "Favorites (mine)",
+                sort: prefs.favoritesSort || "updated_at",
+                direction: (prefs.favoritesSort || "updated_at") === "title" ? "ASC" : "DESC",
+                tags: prefs.favoriteTags || [],
+                tagMode: "OR",
+              },
+            },
+          ].map((tpl) =>
+            h("button", { key: tpl.key, type: "button", className: "stk-set-row", onClick: () => onEditFeed(tpl.spec) },
+              h("span", { className: "stk-set-icon" }, h(Icon, { name: tpl.spec.type === "favorites" ? "heart" : "sparkle", size: 18 })),
+              h("span", { className: "stk-set-copy" }, h("span", null, tpl.name), h("small", { className: "stk-set-note" }, tpl.note)),
+              h("span", { className: "stk-set-chev" }, h(Icon, { name: "chevron", size: 15 }))
+            )
+          )
         ),
 
         h("section", { className: "stk-set-block" },
@@ -12448,7 +12613,9 @@ function TagsPage({ onPick, onMarkers, onBack }) {
 
     /** the profile page: /performers/<name> */
     function openFavoritePerformer(performer) {
-      openProfile(performer, undefined, true);
+      /* a circle in the favourites row is a shortcut to the performer, not a
+         scoped view: it opens their whole page, favourites chip and all off */
+      openProfile(performer);
     }
 
     function openProfile(performer, push, favoriteOnly) {
