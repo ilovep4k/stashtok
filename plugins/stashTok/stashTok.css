@@ -4645,7 +4645,9 @@ body.stk-fullscreen-mode .stash-tok.stk-feed-fullscreen {
 .stk-set-index {
   display: flex;
   flex-direction: column;
-  gap: 22px;
+  gap: 20px;
+  /* cancel the page padding so a row can sit ~10px off the screen edge */
+  margin: 0 -12px;
 }
 .stk-set-group { display: flex; flex-direction: column; }
 .stk-set-group-head {
@@ -4653,7 +4655,7 @@ body.stk-fullscreen-mode .stash-tok.stk-feed-fullscreen {
   font-weight: 600;
   letter-spacing: -0.01em;
   color: rgba(255, 255, 255, 0.92);
-  margin: 0 2px 6px;
+  margin: 0 24px 8px;
 }
 .stk-set-group-head.stk-set-h1 {
   font-size: 24px;
@@ -4664,22 +4666,32 @@ body.stk-fullscreen-mode .stash-tok.stk-feed-fullscreen {
   display: flex;
   align-items: center;
   gap: 14px;
-  width: 100%;
+  width: auto;
   min-height: 56px;
-  padding: 12px 4px;
+  margin: 0 10px 8px;
+  padding: 12px 14px;
   border: 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  background: none;
+  border-radius: 14px;
+  background: #232323;
   color: #fff;
   text-align: left;
   cursor: pointer;
-  border-radius: 0;
 }
-.stk-set-group .stk-set-row:last-child { border-bottom: 0; }
-.stk-set-row:active { background: rgba(255, 255, 255, 0.05); }
+.stk-set-row:active { background: #2e2e2e; }
 .stk-set-row:focus-visible { outline: 2px solid rgba(255, 255, 255, 0.4); outline-offset: -2px; }
 .stk-set-row.stk-set-toggle { cursor: default; }
-.stk-set-row.stk-set-toggle:active { background: none; }
+.stk-set-row.stk-set-toggle:active { background: #232323; }
+/* the switch is pinned to the row's right edge: as a 100%-wide flex item it
+   stretched and left the track floating mid-row, which read as a stray dot */
+.stk-set-toggle .stk-switch-inline {
+  width: auto;
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+.stk-set-toggle .stk-switch { margin-left: auto; }
 .stk-set-icon {
   flex: 0 0 auto;
   width: 26px;
@@ -4716,7 +4728,7 @@ body.stk-fullscreen-mode .stash-tok.stk-feed-fullscreen {
 
 /* the lock's on/off confirmation and PIN entry sit inline under its row */
 .stk-set-notice {
-  margin: 6px 0 10px;
+  margin: 0 10px 8px;
   padding: 12px;
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.06);
@@ -4735,6 +4747,8 @@ body.stk-fullscreen-mode .stash-tok.stk-feed-fullscreen {
 }
 
 .stk-set-page { display: flex; flex-direction: column; }
+.stk-set-page .stk-set-row { margin: 0 0 8px; }
+.stk-set-page .stk-set-notice { margin: 0 0 10px; }
 .stk-set-subhead {
   position: sticky;
   top: 0;
