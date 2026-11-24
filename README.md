@@ -79,7 +79,8 @@ the setting empty and the app guesses from the port it is served on (9997 -> :18
 - Feed definitions live in `localStorage` of the browser that created them; there is no server component and no database. Clear site data and they are gone.
 - Scene video streams from `/scene/<id>/stream`, i.e. the original file. Stash decides whether it serves the original or a transcode based on your own settings.
 - Marker items play the *scene*, positioned at the marker, so the whole-timeline scrub works. `SceneMarker.stream` previews are deliberately not used — they are short, low-resolution clips.
-- iOS Safari has no Fullscreen API for arbitrary elements, so "fullscreen" is a fixed 100dvh overlay with the safe-area insets honoured. Using the native video fullscreen would break the gestures.
+- Full screen keeps StashTok's feed controls available. When the browser can't fullscreen the app, StashTok fills the available viewport and respects the safe areas. Using the native video fullscreen would break the gestures.
+- Settings → Watch history lists up to 100 recent scenes on this browser. Settings → Playback diagnostics can download a JSON report or send it to a configured endpoint.
 - Two fingers are required to zoom, which is why a single-finger vertical swipe is unambiguous.
 
 ## Troubleshooting
