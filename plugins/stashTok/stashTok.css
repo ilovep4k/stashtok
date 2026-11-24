@@ -1412,6 +1412,13 @@ body.stk-anim .stk-grid-5 .stk-tile {
   background: #000;
   -webkit-user-drag: none;
 }
+.stk-video.stk-frame-ready + .stk-handoff-still {
+  opacity: 0;
+  transition: opacity 120ms linear;
+}
+@media (prefers-reduced-motion: reduce) {
+  .stk-video.stk-frame-ready + .stk-handoff-still { transition: none; }
+}
 .stk-sfw .stk-frame {
   filter: blur(24px) saturate(0.9);
   transform: scale(1.1);

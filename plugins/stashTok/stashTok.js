@@ -1630,6 +1630,13 @@
     else video.addEventListener("loadedmetadata", doSeek, { once: true });
   }
 
+  function feedFrameFit(width, height, stageAspect) {
+    const aspect = width / height;
+    if (!width || !height || !stageAspect) return "contain";
+    const retained = Math.min(aspect / stageAspect, stageAspect / aspect);
+    return retained >= 0.75 ? "cover" : "contain";
+  }
+
   /** Play, but never start before a pending seek has landed: that race is the black flash. */
   function seekThenPlay(video, startAt, playVideo) {
     const start = Number(startAt) || 0;
@@ -2266,7 +2273,6 @@ void main() {
       awakeRef.current.set(playing);
     }, [playing]);
     useEffect(() => () => awakeRef.current.dispose(), []);
-    const [revealed, setRevealed] = useState(false);
     const [rotation, setRotation] = useState(0);
     const [speed, setSpeed] = useState(() => Number(window.localStorage.getItem("stashTok.speed")) || 1);
     const [muted, setMuted] = useState(cfg.autoplayMuted);
@@ -2334,8 +2340,9 @@ void main() {
     const railPress = useRef(0);
     /* the press that opened the menu must not also count as a tap */
     const railHeld = useRef(false);
-    /* fill the screen unless that would throw away a big slice of the frame */
-    const [fitMode, setFitMode] = useState("cover");
+    const frameHandoff = desktop && !spec.single && !sfw;
+    const [stageAspect, setStageAspect] = useState(0);
+    const [decodedSize, setDecodedSize] = useState(null);
     /* portrait framing of a landscape clip: auto (middle half) → full → height */
     const [cropMode, setCropMode] = useState(() => {
       /* only the un-zoomed step comes back after a reload. "fill height" is ~3.6x
@@ -2352,6 +2359,7 @@ void main() {
     const stageRef = useRef(null);
     const videoRef = useRef(null);
     const wrapRef = useRef(null);
+    const slideRef = useRef(null);
     const pageRef = useRef(1);
     const busyRef = useRef(false);
     const exhaustedRef = useRef(false);
@@ -2376,21 +2384,6 @@ void main() {
 
     /* React can leave videoRef pointing at the clip we just swiped away from, so
        always resolve the element that is actually marked active on screen. */
-    const fitFor = useCallback((video) => {
-      const stage = stageRef.current;
-      if (!video || !stage) return "cover";
-      const vw = video.videoWidth || 0;
-      const vh = video.videoHeight || 0;
-      const sw = stage.clientWidth || 0;
-      const sh = stage.clientHeight || 0;
-      if (!vw || !vh || !sw || !sh) return "cover";
-      const vr = vw / vh;
-      const sr = sw / sh;
-      // share of the frame that `cover` would crop away
-      const lost = vr >= sr ? 1 - sr / vr : 1 - vr / sr;
-      return lost <= 0.25 ? "cover" : "contain";
-    }, [prefs]);
-
     const activeVideo = useCallback(() => {
       const stage = stageRef.current;
       const live = stage && stage.querySelector(".stk-video.stk-active");
@@ -2398,6 +2391,22 @@ void main() {
     }, []);
 
     const item = items[index] || null;
+    const hasItem = !!item;
+    useLayoutEffect(() => {
+      const stage = stageRef.current;
+      if (!frameHandoff || !stage) return undefined;
+      const measure = () => {
+        setStageAspect(stage.clientHeight ? stage.clientWidth / stage.clientHeight : 0);
+      };
+      measure();
+      if (typeof ResizeObserver === "undefined") {
+        window.addEventListener("resize", measure);
+        return () => window.removeEventListener("resize", measure);
+      }
+      const observer = new ResizeObserver(measure);
+      observer.observe(stage);
+      return () => observer.disconnect();
+    }, [frameHandoff, hasItem]);
     const sceneTags = item && item.scene.tags;
     useEffect(() => {
       const node = tagsRef.current;
@@ -2452,7 +2461,6 @@ void main() {
       const onResize = () => {
         const video = activeVideo();
         if (video) {
-          setFitMode(fitFor(video));
           /* turning the phone re-decides auto-crop (and re-scales "fill height") */
           if (cropRefreshRef.current) cropRefreshRef.current();
         }
@@ -2463,7 +2471,7 @@ void main() {
         window.removeEventListener("resize", onResize);
         window.removeEventListener("orientationchange", onResize);
       };
-    }, [activeVideo, fitFor]);
+    }, [activeVideo]);
 
     /* remember the seat as we move, not only on the way out */
     useEffect(() => {
@@ -2566,6 +2574,7 @@ void main() {
       if (stage) {
         Array.from(stage.querySelectorAll("video")).forEach((video) => {
           if (video.classList.contains("stk-active")) {
+            if (frameHandoff) return;
             const start = Number(item && item.startAt) || 0;
             const activeKey = item ? item.key : null;
             if (video.paused && seekedSceneRef.current !== activeKey) {
@@ -2662,7 +2671,6 @@ void main() {
       setStreamFallback(false);
       setDuration(0);
       setTime((item && Number(item.startAt)) || 0);
-      setRevealed(false);
       /* reset the user's pinch AND put the clip's framing back: a prewarmed clip
          fires canplay before it becomes active, so waiting for that event here
          left every second clip uncropped */
@@ -2697,8 +2705,17 @@ void main() {
       const video = activeVideo();
       if (!video || !item) return;
       const start = Number(item.startAt) || 0;
+      let cancelReveal = () => {};
       const onLoaded = () => {
-        setFitMode(fitFor(video));
+        const file = item.scene.files && item.scene.files[0];
+        const width = video.videoWidth;
+        const height = video.videoHeight;
+        if (frameHandoff && width && height && (!file || !file.width || !file.height ||
+            Math.abs(width / height - file.width / file.height) > 0.01)) {
+          setDecodedSize((size) => size && size.key === item.key && size.width === width && size.height === height
+            ? size
+            : { key: item.key, width, height });
+        }
         /* the frame size is only known once metadata lands, so the crop lands here */
         applyCrop(cropModeRef.current, false);
         const total = video.duration || 0;
@@ -2706,17 +2723,45 @@ void main() {
         /* canplay fires again every time the browser re-buffers, so seek to the start
            frame ONCE per clip: otherwise scrubbing back lands in an unbuffered gap,
            triggers a refill, and this yanks the playhead forward again */
-        if (positionedRef.current === item.key) return;
-        positionedRef.current = item.key;
+        const source = video.getAttribute("src");
+        const positioned = positionedRef.current;
+        if (positioned && positioned.video === video && positioned.key === item.key && positioned.source === source) return;
+        positionedRef.current = { video, key: item.key, source };
         /* autoscroll picks its own way into the clip; otherwise the feed's start */
         const wanted = autoScrollRef.current ? autoScrollStart(total) : start;
         // a remembered playhead can outlive the file it came from: never seek past the end
         const seekTo = total > 0 ? Math.min(wanted, Math.max(0, total - 3)) : wanted;
-        seekThenPlay(video, seekTo, playGuarded);
+        seekThenPlay(video, seekTo, (element) => {
+          const stillCurrent = () => element.isConnected && element === activeVideo() &&
+            element.getAttribute("src") === source;
+          if (!stillCurrent()) return;
+          if (frameHandoff) {
+            cancelReveal();
+            const reveal = () => {
+              if (stillCurrent()) element.classList.add("stk-frame-ready");
+            };
+            if (typeof element.requestVideoFrameCallback === "function") {
+              const frame = element.requestVideoFrameCallback(reveal);
+              cancelReveal = () => element.cancelVideoFrameCallback(frame);
+            } else {
+              let frame = 0;
+              const afterPlaying = () => { frame = requestAnimationFrame(reveal); };
+              if (element.paused) element.addEventListener("playing", afterPlaying, { once: true });
+              else afterPlaying();
+              cancelReveal = () => {
+                element.removeEventListener("playing", afterPlaying);
+                cancelAnimationFrame(frame);
+              };
+            }
+          }
+          playGuarded(element);
+        });
       };
       video.addEventListener("loadedmetadata", onLoaded);
       video.addEventListener("canplay", onLoaded);
+      if (video.readyState >= 1) onLoaded();
       return () => {
+        cancelReveal();
         video.removeEventListener("loadedmetadata", onLoaded);
         video.removeEventListener("canplay", onLoaded);
         video.pause();
@@ -2725,7 +2770,7 @@ void main() {
           video.load();
         }
       };
-    }, [item && item.key]);
+    }, [item && item.key, frameHandoff]);
 
     /* play/pause is driven directly on the active element: a state-driven pause
        races the layer swap and kills the incoming video */
@@ -2734,6 +2779,7 @@ void main() {
       const video = activeVideo();
       if (!video) return;
       video.muted = muted;
+      if (frameHandoff && !video.classList.contains("stk-frame-ready")) return undefined;
       // some browsers pause an autoplaying video the moment it becomes audible,
       // and a muted autoplay that is unmuted by a tap must keep running
       const resume = () => {
@@ -3049,33 +3095,38 @@ void main() {
       setIndex((i) => Math.max(0, i - 1));
     }, [resetZoom, spec.single]);
 
-    /* slide the strip out, swap the clip underneath it, slide back in: the same
-       motion a swipe makes, so a wheel step does not look like a hard cut */
+    /* Keep the strip at the end of the slide until React commits the new index. */
+    useLayoutEffect(() => () => {
+      if (slideRef.current) slideRef.current.cancel();
+      slideRef.current = null;
+    }, [index]);
+
     const slideStep = useCallback(
       (direction) => {
+        if (spec.single || slideRef.current) return;
+        const advance = direction > 0 ? goNext : goPrev;
         const wrap = wrapRef.current;
-        const stageEl = stageRef.current;
-        const height = stageEl ? stageEl.getBoundingClientRect().height : 0;
-        if (!wrap || !height) {
+        const stage = stageRef.current;
+        const height = stage && stage.clientHeight;
+        const target = index + direction;
+        if (target < 0 || items.length < 2) {
           setDragY(0);
           return;
         }
-        const duration = 190;
-        wrap.style.transition = `transform ${duration}ms cubic-bezier(.22,.61,.36,1)`;
-        setDragY(direction > 0 ? -height : height);
-        window.setTimeout(() => {
-          wrap.style.transition = "none";
-          wrap.style.transform = "translateY(0px) rotate(0deg)";
-          if (direction > 0) goNext();
-          else goPrev();
-          setDragY(0);
-          // give React a frame to commit the swap before transitions come back
-          window.setTimeout(() => {
-            wrap.style.transition = "";
-          }, 80);
-        }, duration);
+        if (!wrap || !height || !wrap.animate || target >= items.length ||
+            window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+          advance();
+          return;
+        }
+        const y = direction > 0 ? -height : height;
+        const slide = wrap.animate(
+          [{ transform: getComputedStyle(wrap).transform }, { transform: `translateY(${y}px) rotate(${rotation}deg)` }],
+          { duration: 190, easing: "cubic-bezier(.22,.61,.36,1)", fill: "forwards" }
+        );
+        slideRef.current = slide;
+        slide.onfinish = advance;
       },
-      [goNext, goPrev]
+      [goNext, goPrev, index, items.length, rotation, spec.single]
     );
 
     /* ---- desktop wheel -------------------------------------------------
@@ -4032,8 +4083,6 @@ void main() {
       lastTimePush.current = now;
       setTime(video.currentTime);
       if (!duration && video.duration) setDuration(video.duration);
-      // real frames only: timeupdate never fires before the clip is rolling
-      if (!revealed && video.currentTime > 0.05 && video.readyState >= 2) setRevealed(true);
     };
 
     /* ---- render ---------------------------------------------------- */
@@ -4257,34 +4306,34 @@ void main() {
           },
           (desktop && !sfw ? [index - 1, index, index + 1] : [index - 1, index, index + 1, index + 2])
             .filter((at) => at >= 0 && items[at])
-            .map((at) => {
+            .flatMap((at) => {
               const entry = items[at];
               const active = at === index;
               const screenshot = rel(entry.scene.paths && entry.scene.paths.screenshot);
-              if (sfw || (desktop && !active)) {
-                // Desktop neighbours use stills so they never load or seek a video.
-                return h("img", {
-                  key: entry.key,
-                  className: "stk-frame" + (active ? " stk-active" : ""),
-                  src: screenshot || undefined,
-                  alt: "",
-                  draggable: false,
-                  style: {
-                    position: "absolute",
-                    left: 0,
-                    right: 0,
-                    top: (at - index) * 100 + "%",
-                    width: "100%",
-                    height: "100%",
-                    objectFit: "contain",
-                    opacity: 1,
-                    pointerEvents: active ? "auto" : "none",
-                    zIndex: active ? 2 : 1,
-                  },
-                });
-              }
+              const file = entry.scene.files && entry.scene.files[0];
+              const dimensions = decodedSize && decodedSize.key === entry.key ? decodedSize : file;
+              const fit = frameHandoff ? feedFrameFit(dimensions?.width, dimensions?.height, stageAspect) : "contain";
+              const still = (sfw || (frameHandoff && screenshot)) && h("img", {
+                key: entry.key + ":still",
+                className: "stk-frame" + (frameHandoff ? " stk-handoff-still" : active ? " stk-active" : ""),
+                src: screenshot || undefined,
+                alt: "",
+                draggable: false,
+                style: {
+                  position: "absolute",
+                  left: 0,
+                  right: 0,
+                  top: (at - index) * 100 + "%",
+                  width: "100%",
+                  height: "100%",
+                  objectFit: fit,
+                  pointerEvents: "none",
+                  zIndex: active ? 3 : 1,
+                },
+              });
+              if (sfw || (frameHandoff && !active)) return still ? [still] : [];
               const source = streamSource(entry.scene);
-              return h("video", {
+              const video = h("video", {
                 key: entry.key,
                 ref: active
                   ? videoRef
@@ -4293,9 +4342,8 @@ void main() {
                     },
                 className: "stk-video" + (active ? " stk-active" : ""),
                 src: active && streamFallback ? source.signed : source.plain,
-                poster: desktop && !spec.single ? screenshot || undefined : undefined,
                 playsInline: true,
-                autoPlay: active,
+                autoPlay: active && !frameHandoff,
                 muted: active ? muted : true,
                 /* four simultaneous streams is what makes a big desktop pane stutter:
                    neighbours only need a header to prewarm their ref */
@@ -4311,7 +4359,8 @@ void main() {
                 onPause: active ? () => setPlaying(false) : undefined,
                 onEnded: active ? (autoScroll ? goNext : loopCurrent) : undefined,
                 onError: active
-                  ? () => {
+                  ? (event) => {
+                      event.currentTarget.classList.remove("stk-frame-ready");
                       setPlaying(false);
                       if (!streamFallback) {
                         setStreamFallback(true);
@@ -4329,12 +4378,13 @@ void main() {
                   top: (at - index) * 100 + "%",
                   width: "100%",
                   height: "100%",
-                  objectFit: desktop && !spec.single ? fitMode : "contain",
+                  objectFit: fit,
                   opacity: 1,
                   pointerEvents: active ? "auto" : "none",
                   zIndex: active ? 2 : 1,
                 },
               });
+              return still ? [video, still] : [video];
             }),
         ),
 
