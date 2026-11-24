@@ -149,14 +149,18 @@
 .stk-rail .stk-on { color: #ff2d55; }
 /* the "more" quick action: a thin white circle with three dots inside, so it
    reads as a button next to the bare glyphs around it */
+/* no outline: a darkened disc under the three dots, the way the platform apps
+   draw it. The blur keeps the dots legible over a bright frame. */
 .stk-rail-circle {
   width: 34px;
   height: 34px;
   display: grid;
   place-items: center;
-  border: 1.5px solid rgba(255, 255, 255, .85);
+  border: 0;
   border-radius: 50%;
-  background: rgba(0, 0, 0, .18);
+  background: rgba(0, 0, 0, .42);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
 }
 .stk-rail .stk-rail-circle svg { width: 20px; height: 20px; }
 .stk-heart-pop { animation: stk-pop 420ms ease-out; }
@@ -4471,6 +4475,125 @@ html.stk-mono { filter: grayscale(1) contrast(1.06); }
    embedded shell paint at 9000+, so a local z-index put the list behind the
    video and the tap read as "nothing happens" */
 .stk-chan-menu { z-index: 9800; }
+
+/* ---- the clip panel (the rail's "more") ----------------------------- *
+ * Sections with a small caps head, one row per setting: rounded-square icon on
+ * the left, label, then the control pinned right. Performers are circles with
+ * the name underneath — the bare <img> they used to be rendered at natural size
+ * and read as "massive". */
+.stk-clip-panel { max-height: 88vh; }
+.stk-sheet-name {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-right: 8px;
+}
+.stk-sheet-meta {
+  margin: -2px 0 8px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, .5);
+}
+.stk-panel-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 46px;
+  padding: 5px 2px;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, .07);
+  background: none;
+  color: #fff;
+  text-align: left;
+  font: inherit;
+  cursor: default;
+}
+button.stk-panel-row, .stk-panel-fav { cursor: pointer; }
+.stk-panel-fav.stk-on .stk-panel-value { color: #ff2d55; }
+.stk-panel-ic {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, .09);
+  color: rgba(255, 255, 255, .92);
+}
+.stk-panel-label { flex: 1 1 auto; font-size: 14.5px; }
+.stk-panel-value { flex: 0 0 auto; font-size: 13px; color: rgba(255, 255, 255, .5); }
+.stk-panel-sec { margin-top: 14px; }
+.stk-panel-head {
+  margin: 0 0 4px;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, .48);
+}
+.stk-panel-chip {
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 10px;
+  padding: 7px 11px;
+  background: rgba(255, 255, 255, .13);
+  color: #fff;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.stk-panel-chip:active { background: rgba(255, 255, 255, .22); }
+.stk-panel-link {
+  margin: 6px 0 0 38px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: rgba(255, 255, 255, .55);
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.stk-perfcircles {
+  display: flex;
+  gap: 14px;
+  overflow-x: auto;
+  padding: 6px 2px 4px;
+  scrollbar-width: none;
+}
+.stk-perfcircles::-webkit-scrollbar { display: none; }
+.stk-perfcircle {
+  flex: 0 0 auto;
+  width: 74px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #fff;
+  cursor: pointer;
+}
+.stk-perfcircle-img {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: #242424;
+  display: grid;
+  place-items: center;
+}
+.stk-perfcircle-initials { font-size: 18px; font-weight: 600; color: rgba(255, 255, 255, .8); }
+.stk-perfcircle-name {
+  font-size: 11.5px;
+  line-height: 1.25;
+  text-align: center;
+  color: rgba(255, 255, 255, .82);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
 
 /* ---- left drawer -----------------------------------------------------
    The drawer must sit above the feed's own layers, not at "normal dialog" 80.

@@ -3283,13 +3283,12 @@ void main() {
       buzz(6);
     }
 
-    function flagCurrent() {
+    /* take the clip out of the feed: the next one slides into its slot, so there
+       is nothing to "scroll" and nothing to come back to when swiping up */
+    function dropCurrent() {
       if (!item) return;
       const key = item.key;
       setSheet(null);
-      buzz(40);
-      /* flagged clips leave the feed immediately: the next one slides into this slot,
-         so there is nothing to "scroll" and nothing to come back to when swiping up */
       setItems((prev) => {
         const at = prev.findIndex((entry) => entry.key === key);
         if (at < 0) return prev;
@@ -3297,7 +3296,77 @@ void main() {
       });
       /* the next clip slides into this slot; only clamp when we flagged the last one */
       setIndex((cur) => Math.max(0, Math.min(cur, items.length - 2)));
+    }
+
+    function flagCurrent() {
+      if (!item) return;
+      dropCurrent();
+      buzz(40);
       flagScene(item.scene, cfg).catch(() => {});
+    }
+
+    /* ---- the clip panel's two flags ---------------------------------- */
+
+    /* a duplicate flag can be any of the library's "_Duplicate*" tags, so the
+       state is matched by name, exactly like duplicateTagIds() filters */
+    function sceneDupeTagged(scene) {
+      return !!scene && (scene.tags || []).some((tag) => {
+        const name = String(tag.name || "").replace(/^_+/, "");
+        if (/whitelist|exclude/i.test(name)) return false;
+        return /^duplicate/i.test(name) || /^dupe$/i.test(name);
+      });
+    }
+
+    /* one write, then mirror it into the feed item so reopening the panel reads
+       the new state without a refetch */
+    function commitSceneTag(tagId, name, add) {
+      if (!item || !tagId) return;
+      const sceneId = item.scene.id;
+      (add ? addSceneTags(sceneId, [String(tagId)]) : removeSceneTags(sceneId, [String(tagId)])).catch(() => {});
+      setItems((prev) =>
+        prev.map((entry) => {
+          if (String(entry.scene.id) !== String(sceneId)) return entry;
+          const kept = (entry.scene.tags || []).filter((tag) => String(tag.id) !== String(tagId));
+          return Object.assign({}, entry, {
+            scene: Object.assign({}, entry.scene, {
+              tags: add ? kept.concat([{ id: String(tagId), name }]) : kept,
+            }),
+          });
+        })
+      );
+    }
+
+    async function toggleFlagTag(on) {
+      const name = cfg.flagTag || FLAG_TAG_FALLBACK;
+      const id = await ensureFlagTag(name).catch(() => null);
+      if (id) commitSceneTag(id, name, on);
+    }
+
+    async function toggleDupeTag(on) {
+      const found = await gql(
+        `query StashTokDupePick { findTags(filter: { per_page: 200, q: "duplicate" }) { tags { id name } } }`
+      )
+        .then((data) =>
+          ((data.findTags && data.findTags.tags) || []).filter((tag) => {
+            const name = String(tag.name || "").replace(/^_+/, "");
+            if (/whitelist|exclude/i.test(name)) return false;
+            return /^duplicate/i.test(name) || /^dupe$/i.test(name);
+          })[0]
+        )
+        .catch(() => null);
+      let id = found && found.id;
+      let name = (found && found.name) || "_DuplicateMarkForDeletion";
+      if (!id) {
+        const made = await gql(
+          `mutation StashTokMakeDupeTag($name: String!) { tagCreate(input: { name: $name }) { id name } }`,
+          { name }
+        ).catch(() => null);
+        if (!made || !made.tagCreate) return;
+        id = made.tagCreate.id;
+        name = made.tagCreate.name;
+        DUPE_TAG_IDS = null;
+      }
+      commitSceneTag(id, name, on);
     }
 
     function rotate(delta) {
@@ -5662,6 +5731,12 @@ void main() {
             onSpeed: setSpeed,
             onRotate: rotate,
             onFlag: flagCurrent,
+            /* the panel's flags are state, not one-shot actions: the delete flag
+               also removes the clip from the feed, the duplicate flag only tags */
+            flagged: item ? isFlagged(item.scene, cfg) : false,
+            dupeFlagged: item ? sceneDupeTagged(item.scene) : false,
+            onFlagToggle: (on) => { toggleFlagTag(on); if (on) { dropCurrent(); buzz(40); } },
+            onDupeToggle: toggleDupeTag,
             onClose: () => setSheet(null),
             onOpenPerformer,
             onOpenTag,
@@ -5865,19 +5940,137 @@ void main() {
     );
   }
 
-  function Sheet({ mode, item, cfg, rating, onRate, onHeart, speed, onSpeed, onRotate, onFlag, onClose, onOpenPerformer, onOpenTag, onDeriveFeed, onJump, onNext }) {
+  /* The clip panel behind the rail's "more" button.
+
+     `actions` is the shape the user specified: file name + one meta line, the
+     performers as circles you can tap, Playback (speed, rotate) and Stash
+     Management (the two flags) as rows with rounded-square icons and the control
+     on the right. `details` keeps the full file table for the same scene.
+     Rating is deliberately gone: the only thing worth showing is whether the
+     scene is one of your favourites. */
+  function Sheet({ mode, item, cfg, rating, onRate, onHeart, speed, onSpeed, onRotate, onFlag,
+    onFlagToggle, onDupeToggle, flagged, dupeFlagged, onClose, onOpenPerformer, onOpenTag,
+    onDeriveFeed, onJump, onNext }) {
     const dialogRef = useDialog(true, onClose);
     const scene = item.scene;
     const file = (scene.files && scene.files[0]) || {};
     const markers = scene.scene_markers || [];
     const performers = scene.performers || [];
     const tags = scene.tags || [];
-    const handle = resolveHandle(scene, file);
-    const [draft, setDraft] = useState(rating == null ? 0 : rating);
+    const [flagOn, setFlagOn] = useState(!!flagged);
+    const [dupeOn, setDupeOn] = useState(!!dupeFlagged);
 
-    useEffect(() => {
-      setDraft(rating == null ? 0 : rating);
-    }, [rating]);
+    useEffect(() => { setFlagOn(!!flagged); }, [flagged]);
+    useEffect(() => { setDupeOn(!!dupeFlagged); }, [dupeFlagged]);
+
+    const fileName = (file.path || "").split("/").pop() || scene.title || "Scene";
+    const meta = [
+      shortDate(scene.date || scene.created_at),
+      file.size ? fmtBytes(file.size) : "",
+      file.width && file.height ? `${file.width}x${file.height}` : "",
+      file.duration ? fmtTime(file.duration) : "",
+    ].filter(Boolean).join(" · ");
+    const hearted = rating != null && rating >= cfg.heartRating;
+
+    const head = [
+      h("h3", null,
+        h("span", { className: "stk-sheet-name" }, fileName),
+        h("button", { className: "stk-btn", onClick: onClose }, h(Icon, { name: "x", size: 16 }))
+      ),
+      h("div", { className: "stk-sheet-meta" }, meta),
+    ];
+
+    if (mode !== "details") {
+      const panelRow = (icon, label, control) =>
+        h("div", { className: "stk-panel-row", key: label },
+          h("span", { className: "stk-panel-ic" }, h(Icon, { name: icon, size: 15 })),
+          h("span", { className: "stk-panel-label" }, label),
+          control
+        );
+      return h(
+        React.Fragment,
+        null,
+        h("div", { className: "stk-sheet-backdrop", onClick: onClose }),
+        h(
+          "div",
+          { className: "stk-sheet stk-clip-panel", ref: dialogRef, onClick: (event) => event.stopPropagation() },
+          head,
+
+          h("button", { type: "button", className: "stk-panel-row stk-panel-fav" + (hearted ? " stk-on" : ""), onClick: onHeart },
+            h("span", { className: "stk-panel-ic" }, h(Icon, { name: "heart", size: 15, filled: hearted })),
+            h("span", { className: "stk-panel-label" }, "Favorite"),
+            h("span", { className: "stk-panel-value" }, hearted ? "On" : "Off")
+          ),
+
+          performers.length > 0 &&
+            h("div", { className: "stk-panel-sec" },
+              h("h4", { className: "stk-panel-head" }, performers.length > 1 ? "Performers" : "Performer"),
+              h("div", { className: "stk-perfcircles" },
+                performers.map((performer) =>
+                  h("button",
+                    {
+                      key: performer.id,
+                      type: "button",
+                      className: "stk-perfcircle",
+                      onClick: () => { onClose(); onOpenPerformer(performer); },
+                    },
+                    performer.image_path
+                      ? h("img", { className: "stk-perfcircle-img", src: rel(performer.image_path), alt: "" })
+                      : h("span", { className: "stk-perfcircle-img stk-perfcircle-initials" }, initials(performer.name)),
+                    h("span", { className: "stk-perfcircle-name" }, performer.name)
+                  )
+                )
+              ),
+              performers.length > 1 &&
+                h("button", {
+                  type: "button",
+                  className: "stk-panel-link",
+                  onClick: () => { onClose(); onOpenPerformer(performers[0]); },
+                }, "Show all performers")
+            ),
+
+          h("div", { className: "stk-panel-sec" },
+            h("h4", { className: "stk-panel-head" }, "Playback"),
+            panelRow("play", "Speed",
+              h("div", { className: "stk-qm-seg" },
+                [0.5, 1, 2].map((value) =>
+                  h("button",
+                    {
+                      key: value,
+                      type: "button",
+                      className: "stk-qm-seg-btn" + (speed === value ? " stk-on" : ""),
+                      onClick: () => onSpeed(value),
+                    },
+                    `${value}x`
+                  )
+                )
+              )
+            ),
+            panelRow("rotate", "Rotate Video",
+              h("button", { type: "button", className: "stk-panel-chip", onClick: () => onRotate(90) }, "Rotate Right 90°")
+            )
+          ),
+
+          h("div", { className: "stk-panel-sec" },
+            h("h4", { className: "stk-panel-head" }, "Stash Management"),
+            panelRow("flag", "Flag for Deletion",
+              h(PrefToggle, {
+                label: "Flag for Deletion",
+                on: flagOn,
+                onChange: (value) => { setFlagOn(value); if (onFlagToggle) onFlagToggle(value); },
+              })
+            ),
+            panelRow("dupe", "Flag as Duplicate",
+              h(PrefToggle, {
+                label: "Flag as Duplicate",
+                on: dupeOn,
+                onChange: (value) => { setDupeOn(value); if (onDupeToggle) onDupeToggle(value); },
+              })
+            )
+          )
+        )
+      );
+    }
 
     return h(
       React.Fragment,
@@ -5886,150 +6079,36 @@ void main() {
       h(
         "div",
         { className: "stk-sheet", ref: dialogRef, onClick: (event) => event.stopPropagation() },
+        head,
+        h("h4", null, "File"),
         h(
-          "h3",
-          null,
-          h("span", null, scene.title || (file.path || "").split("/").pop() || "Scene"),
-          h("button", { className: "stk-btn", onClick: onClose }, h(Icon, { name: "x", size: 16 }))
-        ),
-        h(
-          "div",
-          { style: { color: "rgba(255,255,255,.5)", fontSize: "11px" } },
-          [scene.date, scene.studio && scene.studio.name, file.width && `${file.width}x${file.height}`, fmtTime(file.duration)]
-            .filter(Boolean)
-            .join(" · ")
-        ),
-
-        h(
-          "h4",
-          null,
-          "Rating"
-        ),
-        h(
-          "div",
-          { className: "stk-row", style: { display: "flex", alignItems: "center", gap: "10px" } },
-          h(
-            "button",
-            { className: "stk-btn" + (rating != null && rating >= cfg.heartRating ? " stk-primary" : ""), onClick: onHeart },
-            h(Icon, { name: "heart", size: 16 }),
-            rating != null && rating >= cfg.heartRating ? "Hearted" : "Heart"
-          ),
-          h("input", {
-            type: "range",
-            min: 0,
-            max: 100,
-            step: 1,
-            value: draft,
-            style: { flex: "1 1 auto" },
-            onChange: (event) => setDraft(Number(event.currentTarget.value)),
-            onPointerUp: () => onRate(draft === 0 ? null : draft),
-            onKeyUp: () => onRate(draft === 0 ? null : draft),
-          }),
-          h("b", { style: { fontVariantNumeric: "tabular-nums", fontSize: "12px" } }, draft || "—")
-        ),
-
-        h("h4", null, "Playback speed"),
-        h(
-          "div",
-          { className: "stk-speed-row" },
-          [0.5, 0.75, 1, 1.25, 1.5, 2].map((rate) =>
-            h(
-              "button",
-              {
-                key: rate,
-                className: "stk-tagpill" + (speed === rate ? " stk-speed-on" : ""),
-                onClick: () => onSpeed(rate),
-              },
-              rate + "x"
-            )
-          )
-        ),
-
-        performers.length > 0 &&
-          h(
-            React.Fragment,
-            null,
-            h("h4", null, performers.length > 1 ? "Performers" : "Performer"),
-            h(
-              "div",
-              { className: "stk-perf-row" },
-              performers.map((performer) =>
-                h(
-                  "button",
-                  { key: performer.id, className: "stk-disc-chip", onClick: () => onOpenPerformer(performer) },
-                  h("img", { src: rel(performer.image_path), alt: "" }),
-                  h("span", null, performer.name)
-                )
-              )
-            )
-          ),
-
-        tags.length > 0 &&
-          h(
-            React.Fragment,
-            null,
-            h("h4", null, "Tags"),
-            h(
-              "div",
-              null,
-              tags.map((tag) =>
-                h(
-                  "button",
-                  { key: tag.id, className: "stk-tagpill", onClick: () => onOpenTag(tag) },
-                  h(Icon, { name: "tag", size: 13 }),
-                  tag.name
-                )
-              )
-            )
-          ),
-
-        h(
-          "div",
-          { className: "stk-sheet-actions" },
-          h(
-            "a",
-            { className: "stk-btn", href: `/scenes/${scene.id}`, target: "_blank", rel: "noopener noreferrer" },
-            h(Icon, { name: "play", size: 16 }),
-            "Whole scene"
-          ),
-          h(
-            "button",
-            { className: "stk-btn", onClick: () => onRotate(90) },
-            h(Icon, { name: "rotate", size: 16 }),
-            "Rotate"
-          ),
-          h(
-            "button",
-            { className: "stk-btn stk-btn-danger", onClick: onFlag },
-            h(Icon, { name: "flag", size: 16 }),
-            "Flag for deletion"
-          ),
-          h(
-            "button",
-            {
-              className: "stk-btn",
-              onClick: () =>
-                onDeriveFeed({
-                  type: "tags",
-                  name: "More like this",
-                  tags: tags.slice(0, 4).map((tag) => tag.id),
-                  tagMode: "OR",
-                }),
-            },
-            h(Icon, { name: "sparkle", size: 16 }),
-            "More like this"
-          ),
-          h("button", { className: "stk-btn", onClick: onNext }, h(Icon, { name: "chevron", size: 16 }), "Next")
+          "dl",
+          { className: "stk-kv" },
+          h("dt", null, "Path"),
+          h("dd", null, file.path || "—"),
+          h("dt", null, "Size"),
+          h("dd", null, fmtBytes(file.size)),
+          h("dt", null, "Duration"),
+          h("dd", null, fmtTime(file.duration)),
+          h("dt", null, "Resolution"),
+          h("dd", null, file.width ? `${file.width}x${file.height}${file.frame_rate ? ` @ ${Math.round(file.frame_rate)}fps` : ""}` : "—"),
+          h("dt", null, "Codec"),
+          h("dd", null, [file.video_codec, file.audio_codec].filter(Boolean).join(" / ") || "—"),
+          h("dt", null, "Bitrate"),
+          h("dd", null, file.bit_rate ? `${Math.round(file.bit_rate / 1000)} kbps` : "—"),
+          h("dt", null, "Plays"),
+          h("dd", null, String(scene.play_count || 0)),
+          h("dt", null, "O counter"),
+          h("dd", null, String(scene.o_counter || 0)),
+          h("dt", null, "Rating"),
+          h("dd", null, rating == null ? "unrated" : String(rating))
         ),
 
         markers.length > 0 &&
-          h(
-            React.Fragment,
-            null,
+          h(React.Fragment, null,
             h("h4", null, `Markers (${markers.length})`),
             markers.map((marker) =>
-              h(
-                "button",
+              h("button",
                 { key: marker.id, className: "stk-marker-row", onClick: () => onJump(Number(marker.seconds)) },
                 h("b", null, fmtTime(marker.seconds)),
                 h("div", null, marker.primary_tag ? marker.primary_tag.name : "Marker", h("br"), h("span", null, marker.title || "")),
@@ -6038,32 +6117,14 @@ void main() {
             )
           ),
 
-        mode === "details" &&
-          h(
-            React.Fragment,
-            null,
-            h("h4", null, "File"),
-            h(
-              "dl",
-              { className: "stk-kv" },
-              h("dt", null, "Path"),
-              h("dd", null, file.path || "—"),
-              h("dt", null, "Size"),
-              h("dd", null, fmtBytes(file.size)),
-              h("dt", null, "Duration"),
-              h("dd", null, fmtTime(file.duration)),
-              h("dt", null, "Resolution"),
-              h("dd", null, file.width ? `${file.width}x${file.height}${file.frame_rate ? ` @ ${Math.round(file.frame_rate)}fps` : ""}` : "—"),
-              h("dt", null, "Codec"),
-              h("dd", null, [file.video_codec, file.audio_codec].filter(Boolean).join(" / ") || "—"),
-              h("dt", null, "Bitrate"),
-              h("dd", null, file.bit_rate ? `${Math.round(file.bit_rate / 1000)} kbps` : "—"),
-              h("dt", null, "Plays"),
-              h("dd", null, String(scene.play_count || 0)),
-              h("dt", null, "O counter"),
-              h("dd", null, String(scene.o_counter || 0)),
-              h("dt", null, "Rating"),
-              h("dd", null, rating == null ? "unrated" : String(rating))
+        tags.length > 0 &&
+          h(React.Fragment, null,
+            h("h4", null, "Tags"),
+            h("div", null,
+              tags.map((tag) =>
+                h("button", { key: tag.id, className: "stk-tagpill", onClick: () => onOpenTag(tag) },
+                  h(Icon, { name: "tag", size: 13 }), tag.name)
+              )
             )
           )
       )
