@@ -1489,7 +1489,8 @@ body.stk-anim .stk-grid-5 .stk-tile {
   flex: 0 0 auto;
   transition: background 140ms linear;
 }
-.stk-switch-row.stk-on .stk-switch { background: #4cd964; }
+/* the switch uses the accent, not iOS green: one palette across the app */
+.stk-switch-row.stk-on .stk-switch { background: var(--stk-accent); }
 .stk-knob {
   position: absolute;
   top: 3px;

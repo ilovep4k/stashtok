@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>StashTok — design reference</title>
+<link rel="stylesheet" href="stashTok.css" />
+<style>
+  html, body { margin: 0; background: #0a0a0a; color: #fff;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  /* .stash-tok is the app's own root (position:fixed, 100dvh) — this page only
+     borrows its class for the scoped component styles, so un-clip it */
+  .ref.stash-tok { position: static; inset: auto; height: auto; display: block;
+    overflow: visible; z-index: auto; }
+  .ref { max-width: 980px; margin: 0 auto; padding: 24px 18px 80px; }
+  .ref h1 { font-size: 26px; font-weight: 800; letter-spacing: -0.02em; margin: 0 0 6px; }
+  .ref > p.lede { color: rgba(255,255,255,.55); font-size: 13.5px; margin: 0 0 26px; line-height: 1.5; }
+  .ref section { margin: 34px 0 0; }
+  .ref h2 { font-size: 15px; font-weight: 700; letter-spacing: .02em; text-transform: uppercase;
+    color: rgba(255,255,255,.45); margin: 0 0 14px; border-top: 1px solid rgba(255,255,255,.1); padding-top: 14px; }
+  .ref .note { font-size: 12.5px; color: rgba(255,255,255,.45); margin: 6px 0 16px; line-height: 1.5; }
+  .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .stack { display: flex; flex-direction: column; gap: 10px; max-width: 420px; }
+  .swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+  .sw { border: 1px solid rgba(255,255,255,.12); border-radius: 12px; overflow: hidden; background: #111; }
+  .sw i { display: block; height: 54px; }
+  .sw b { display: block; font-size: 12px; padding: 8px 10px 2px; }
+  .sw code { display: block; font-size: 11px; padding: 0 10px 9px; color: rgba(255,255,255,.45); }
+  .specs { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
+  .spec { border: 1px solid rgba(255,255,255,.1); border-radius: 10px; padding: 10px 12px; font-size: 12px; background: #101010; }
+  .spec code { color: #ff8fa5; font-size: 11.5px; }
+  .spec span { display: block; color: rgba(255,255,255,.45); margin-top: 3px; }
+  .tag { display: inline-block; font-size: 11px; letter-spacing: .04em; text-transform: uppercase;
+    color: rgba(255,255,255,.35); margin: 0 0 8px; }
+  .card { background: #111; border: 1px solid rgba(255,255,255,.1); border-radius: 14px; padding: 14px; }
+  .ph { background: linear-gradient(135deg, #2a2a2a, #171717); }
+</style>
+</head>
+<body>
+<div class="ref stash-tok">
+  <h1>StashTok design reference</h1>
+  <p class="lede">Every token and control the plugin draws from. This page loads the real
+    <code>stashTok.css</code> — nothing here is a mock-up, so if a control looks wrong
+    here it looks wrong in the app.</p>
+
+  <section>
+    <h2>Colour tokens</h2>
+    <div class="swatches">
+      <div class="sw"><i style="background:var(--stk-bg)"></i><b>Background</b><code>--stk-bg #000</code></div>
+      <div class="sw"><i style="background:var(--stk-surface)"></i><b>Surface</b><code>--stk-surface #1b1b1b</code></div>
+      <div class="sw"><i style="background:var(--stk-surface-2)"></i><b>Surface 2</b><code>--stk-surface-2 #232323</code></div>
+      <div class="sw"><i style="background:var(--stk-surface-3)"></i><b>Surface 3 (pressed)</b><code>--stk-surface-3 #2c2c2c</code></div>
+      <div class="sw"><i style="background:var(--stk-accent)"></i><b>Accent</b><code>--stk-accent #ff2d55</code></div>
+      <div class="sw"><i style="background:var(--stk-ink)"></i><b>Ink</b><code>--stk-ink #fff</code></div>
+      <div class="sw"><i style="background:var(--stk-ink-dim)"></i><b>Ink dim</b><code>--stk-ink-dim 55%</code></div>
+      <div class="sw"><i style="background:var(--stk-ink-faint)"></i><b>Ink faint</b><code>--stk-ink-faint 35%</code></div>
+      <div class="sw"><i style="background:var(--stk-line)"></i><b>Line</b><code>--stk-line 14%</code></div>
+      <div class="sw"><i style="background:var(--stk-line-strong)"></i><b>Line strong</b><code>--stk-line-strong 30%</code></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Shape &amp; space</h2>
+    <div class="specs">
+      <div class="spec"><code>--stk-radius-sm</code><span>8px · chips, small controls</span></div>
+      <div class="spec"><code>--stk-radius</code><span>12px · buttons, fields, rows</span></div>
+      <div class="spec"><code>--stk-radius-lg</code><span>16px · cards, sheets</span></div>
+      <div class="spec"><code>--stk-radius-pill</code><span>999px · pills, switches</span></div>
+      <div class="spec"><code>--stk-space-sm / --stk-space / --stk-space-lg</code><span>8 / 12 / 16px</span></div>
+      <div class="spec"><code>--stk-control</code><span>36px · every button and field</span></div>
+      <div class="spec"><code>--stk-fs-title</code><span>20px · page headings</span></div>
+      <div class="spec"><code>--stk-fs-body / --stk-fs-small</code><span>15 / 12.5px</span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Buttons — <code>.stk-btn</code></h2>
+    <p class="note">One base control. Intents and sizes are modifiers, never new classes.</p>
+    <div class="row">
+      <button class="stk-btn">Default</button>
+      <button class="stk-btn stk-btn-primary">Primary</button>
+      <button class="stk-btn stk-btn-danger">Danger</button>
+      <button class="stk-btn stk-btn-ghost">Ghost</button>
+      <button class="stk-btn stk-btn-sm">Small</button>
+      <button class="stk-btn stk-btn-lg">Large</button>
+      <button class="stk-btn" disabled>Disabled</button>
+      <button class="stk-btn stk-btn-icon" aria-label="Play">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5.5v13l11-6.5-11-6.5z"/></svg>
+      </button>
+    </div>
+    <p class="note" style="margin-top:14px">Full width: <code>.stk-btn.stk-btn-wide</code></p>
+    <div style="max-width:420px"><button class="stk-btn stk-btn-primary stk-btn-wide">Wide primary</button></div>
+
+    <p class="note" style="margin-top:18px">Legacy names that now inherit the same base —
+      <code>.stk-sort-btn</code>, <code>.stk-seeall</code>, <code>.stk-ops-btn</code>, <code>.stk-more-btn</code>:</p>
+    <div class="row">
+      <button class="stk-sort-btn">Recently added ▾</button>
+      <button class="stk-btn stk-seeall">See all performers →</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Fields — <code>.stk-field</code></h2>
+    <div class="stack">
+      <input class="stk-field" placeholder="Search creators" />
+      <input class="stk-field" value="With a value" />
+    </div>
+    <p class="note" style="margin-top:14px">Search + sort on one line: <code>.stk-perf-tools</code></p>
+    <div class="stk-perf-tools" style="max-width:480px">
+      <input class="stk-field" placeholder="Search creators" />
+      <button class="stk-sort-btn">Favorites first
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Page header — <code>.stk-page-head</code></h2>
+    <p class="note">Back chevron always points left. The back button is a 34px circle, identical to Settings.</p>
+    <div class="stk-page-head">
+      <button class="stk-page-back" title="Back">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4.5 7.5 12 15 19.5"/></svg>
+      </button>
+      <span class="stk-page-title stk-page-title-lg">Your Feeds</span>
+      <button class="stk-btn stk-btn-icon" aria-label="Add">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+    </div>
+    <div class="stk-page-head" style="margin-top:18px">
+      <span class="stk-page-title stk-page-title-lg">Performers</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>Settings rows</h2>
+    <p class="note">Choice row (<code>.stk-set-row.stk-set-choice</code>) opens a picker; toggle row
+      (<code>.stk-set-row.stk-set-toggle</code>) flips in place.</p>
+    <div class="stack" style="max-width:520px">
+      <button class="stk-set-row stk-set-choice">
+        <span class="stk-set-copy"><span>Content Time Range</span></span>
+        <span class="stk-set-value">All</span>
+        <span class="stk-set-chev"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></span>
+      </button>
+      <button class="stk-set-row stk-set-choice">
+        <span class="stk-set-copy"><span>Show performers</span></span>
+        <span class="stk-set-value">All except Male</span>
+        <span class="stk-set-chev"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></span>
+      </button>
+      <div class="stk-set-row stk-set-toggle">
+        <span class="stk-set-copy"><span>Blur Content Thumbnails</span></span>
+        <button class="stk-switch-row stk-switch-inline stk-on" role="switch" aria-checked="true" aria-label="Blur">
+          <span class="stk-switch"><span class="stk-knob"></span></span>
+        </button>
+      </div>
+      <div class="stk-set-row stk-set-toggle">
+        <span class="stk-set-copy"><span>Privacy Lock</span></span>
+        <button class="stk-switch-row stk-switch-inline" role="switch" aria-checked="false" aria-label="Lock">
+          <span class="stk-switch"><span class="stk-knob"></span></span>
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Picker rows &amp; sort menu</h2>
+    <p class="note">Picker rows stack in a sheet; the tick appears on the selected row.</p>
+    <div class="stack" style="max-width:420px">
+      <button class="stk-pick-row stk-on"><span>Female</span>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 6 9 17l-5-5"/></svg>
+      </button>
+      <button class="stk-pick-row"><span>Male</span></button>
+      <button class="stk-pick-row"><span>Non-binary</span></button>
+    </div>
+    <p class="note" style="margin-top:14px">Sort menu (<code>.stk-sort-menu</code>) with the active entry marked:</p>
+    <div class="stk-sort-menu" style="max-width:420px">
+      <button class="stk-sort-btn">Favorites first</button>
+      <button class="stk-sort-btn">Recently added</button>
+      <button class="stk-sort-btn stk-on">A–Z</button>
+      <button class="stk-sort-btn">Most scenes</button>
+      <button class="stk-sort-btn">Random</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Pills &amp; chips</h2>
+    <p class="note"><code>.stk-pill</code> for filters and scopes, <code>.stk-chip</code> for tags.</p>
+    <div class="row">
+      <button class="stk-pill stk-active">All</button>
+      <button class="stk-pill">Favorites</button>
+      <button class="stk-pill">Filter</button>
+      <span class="stk-chip">#Cleavage <small>169</small></span>
+      <span class="stk-chip">#Midriff <small>126</small></span>
+    </div>
+  </section>
+
+  <section>
+    <h2>Cards</h2>
+    <p class="note">Performer card (<code>.stk-account</code>) and scene tile (<code>.stk-tile</code>).</p>
+    <div class="row" style="align-items:flex-start">
+      <button class="stk-account" style="width:150px">
+        <div class="stk-account-photo ph"></div>
+        <div class="stk-account-body">
+          <div class="stk-account-name">nataliamann</div>
+          <div class="stk-account-meta">535 scenes · ♥</div>
+        </div>
+      </button>
+      <div class="stk-tile" style="width:150px">
+        <div class="stk-tile-photo ph"></div>
+        <span class="stk-fav-dur">4:38</span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Block header</h2>
+    <p class="note">Section heading inside a settings page.</p>
+    <div class="card" style="max-width:480px">
+      <div class="stk-set-block-head">For You</div>
+      <div class="stk-set-block-sub">Filters for the For You feed</div>
+    </div>
+  </section>
+</div>
+</body>
+</html>
