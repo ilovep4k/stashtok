@@ -724,6 +724,27 @@
     return { tags: [], mode: "OR" };
   }
 
+  const DEFAULT_PERFORMER_SCOPE = { mode: "all", ids: [] };
+
+  /** Who a feed is restricted to. A feed's own scope always wins; only the root
+   *  For You feed falls back to the one set in Settings. */
+  function effectivePerformers(spec, cfg) {
+    const own = spec && spec.performerScope;
+    const rootForyou = (spec.type || "foryou") === "foryou" && (!spec.id || spec.id === "foryou");
+    const scope = own && own.mode ? own : rootForyou && cfg ? cfg.foryouPerformers : null;
+    if (!scope || !scope.mode || scope.mode === "all") return DEFAULT_PERFORMER_SCOPE;
+    /* "filter" with nothing ticked means no restriction, not an empty feed */
+    if (scope.mode === "filter" && !(scope.ids || []).length) return DEFAULT_PERFORMER_SCOPE;
+    return scope;
+  }
+
+  /** the favourites scope needs performer ids, which only arrive by query */
+  async function ensurePerformerScope(spec, cfg) {
+    if (effectivePerformers(spec, cfg).mode === "favorites") {
+      await favouritePerformerIds().catch(() => []);
+    }
+  }
+
   /** Which algorithm axes bias this feed. A custom feed carries its own; the
    *  root For You feed reads the ones set in Settings. */
   function effectiveAlgo(spec, cfg) {
@@ -766,6 +787,15 @@
     }
     if (spec.pathIncludes) {
       parts.push(`path: { value: ${JSON.stringify(spec.pathIncludes)}, modifier: INCLUDES }`);
+    }
+    const scope = effectivePerformers(spec, cfg);
+    if (type !== "performer" && scope.mode !== "all") {
+      const ids = scope.mode === "favorites" ? (FAV_PERFORMER_IDS || []) : (scope.ids || []);
+      if (ids.length) {
+        parts.push(
+          `performers: { value: [${ids.map((id) => `"${id}"`).join(",")}], modifier: INCLUDES }`
+        );
+      }
     }
     const tagSel = effectiveTags(spec, cfg);
     if (tagSel.tags.length) {
@@ -837,6 +867,10 @@
       Number(minDur) || 0, Number(windowDays) || 0, spec.performerId || "",
       spec.pathIncludes || "", effectiveTags(spec, cfg).tags.join(","), spec.tagMode || "",
       (() => { const algo = effectiveAlgo(spec, cfg); return ["performers", "favorites", "recent"].filter((k) => algo[k]).join("+"); })(),
+      (() => {
+        const scope = effectivePerformers(spec, cfg);
+        return scope.mode === "all" ? "" : scope.mode + ":" + (scope.mode === "favorites" ? "fav" : (scope.ids || []).join("."));
+      })(),
     ].join("|");
     let hash = 0x811c9dc5;
     for (let i = 0; i < text.length; i += 1) {
@@ -1011,6 +1045,7 @@
   }
 
   async function fetchSceneFeed(spec, cfg, page) {
+    await ensurePerformerScope(spec, cfg);
     if (isPooledSort(spec)) {
       try {
         return await fetchSceneFeedFromPool(spec, cfg, page);
@@ -1049,6 +1084,7 @@
   }
 
   async function fetchMarkerFeed(spec, cfg, page) {
+    await ensurePerformerScope(spec, cfg);
     const body = sceneFilterBody(spec, cfg);
     const sceneFilterArg = body ? `scene_filter: { ${body} }` : "";
     /* `tags` on a marker filter is the marker's own (primary) tag, which is a
@@ -1696,6 +1732,9 @@
        random feed towards what this library already knows about the user */
     foryouTags: [],
     foryouTagMode: "OR",
+    /* who For You draws from: every performer, only the ones you favourite, or
+       a hand-picked list { mode: "all"|"favorites"|"filter", ids: [] } */
+    foryouPerformers: { mode: "all", ids: [] },
     favoriteTags: [],
     favoritesAlgo: {},
     folderView: "list",
@@ -5040,6 +5079,22 @@ void main() {
             },
             h(Icon, { name: "menu", size: 18 })
           ),
+          /* mute sits beside the menu button: the user's phone grip is up here
+             and the rail is for the actions you take on the clip */
+          h(
+            "button",
+            {
+              type: "button",
+              className: "stk-top-btn",
+              title: muted ? "Unmute" : "Mute",
+              "aria-label": muted ? "Unmute" : "Mute",
+              onClick: (event) => {
+                event.stopPropagation();
+                setMuted((value) => !value);
+              },
+            },
+            h(Icon, { name: muted ? "mute" : "volume", size: 18 })
+          ),
           /* a one-tag feed is exactly "this tag", so it gets the reel too.
              A plain anchor: CSP blocks fetches to the service, not navigations. */
           spec.type === "tags" && spec.tags && spec.tags.length === 1 &&
@@ -5138,8 +5193,9 @@ void main() {
         !fullscreen && h(
           "div",
           { className: "stk-top stk-top-right" },
-          !duo && h("button", { type: "button", className: "stk-top-btn", title: "Full screen", "aria-label": "Full screen",
-            onClick: enterFullscreen }, h(Icon, { name: "fullscreen", size: 18 })),
+          /* the full-screen button is gone from the bar: the top row is now
+             settings + search, and full screen still comes from the clip's own
+             controls. */
           /* settings sits between full screen and search, and the switch in
              Settings → Navigation removes it for a bare stage */
           prefs.topSettings !== false && onSettings &&
@@ -5371,20 +5427,6 @@ void main() {
               },
             },
             h("span", { className: "stk-rail-circle" }, h(Icon, { name: "more", size: 20 }))
-          ),
-          /* mute lives at the bottom of the rail: same size as the other icons,
-             no caption, and it replaced the top-right speaker */
-          h(
-            "button",
-            {
-              className: "stk-rail-mute",
-              title: muted ? "Unmute" : "Mute",
-              onClick: (event) => {
-                event.stopPropagation();
-                setMuted((value) => !value);
-              },
-            },
-            h(Icon, { name: muted ? "mute" : "volume", size: 26 })
           )
         ),
 
@@ -10523,7 +10565,9 @@ function TagsPage({ onPick, onMarkers, onBack }) {
   /* titles double as the shell's page header, so keep them here */
   const SETTINGS_SECTION_TITLES = {
     feeds: "Your Feeds",
+    "feeds/performers": "Performers",
     "feeds/new-feed": "Create Feed",
+    "feeds/new-feed/performers": "Performers",
     performer: "Performer Page",
     appearance: "Appearance",
     navigation: "Navigation",
@@ -10544,6 +10588,24 @@ function TagsPage({ onPick, onMarkers, onBack }) {
     { value: "resolution", label: "Resolution" },
     { value: "title", label: "Alphabetical" },
   ];
+  const PERFORMER_SCOPE_OPTIONS = [
+    { value: "all", label: "All" },
+    { value: "favorites", label: "Favorites" },
+    { value: "filter", label: "Filter" },
+  ];
+  const PERF_SORTS = [
+    { value: "name", direction: "ASC", label: "Alphabetical" },
+    { value: "updated_at", direction: "DESC", label: "Recently updated" },
+    { value: "created_at", direction: "DESC", label: "Recently added" },
+  ];
+  const performerScopeLabel = (scope) => {
+    const live = scope || DEFAULT_PERFORMER_SCOPE;
+    if (live.mode === "favorites") return "Favorites";
+    const ids = live.ids || [];
+    if (live.mode === "filter" && ids.length) return ids.length + " performer" + (ids.length === 1 ? "" : "s");
+    return "All";
+  };
+
   const ALGO_OPTIONS = [
     { value: "performers", label: "Performers" },
     { value: "favorites", label: "Favorites" },
@@ -10662,16 +10724,144 @@ function TagsPage({ onPick, onMarkers, onBack }) {
     );
   }
 
+  /* A full page, not a sheet: with a search field and a sortable list of every
+     performer, a modal is the wrong container on a phone. */
+  function PerformerFilterPage({ scope, onChange, onDone }) {
+    const [live, setLive] = useState(scope || DEFAULT_PERFORMER_SCOPE);
+    const [q, setQ] = useState("");
+    const [sort, setSort] = useState("name");
+    const [rows, setRows] = useState(null);
+    const [error, setError] = useState("");
+    const ids = live.ids || [];
+
+    useEffect(() => {
+      let alive = true;
+      const entry = PERF_SORTS.find((item) => item.value === sort) || PERF_SORTS[0];
+      setRows(null);
+      const timer = window.setTimeout(() => {
+        gql(
+          `query StashTokPerformerPick($q: String!) {
+            findPerformers(filter: { q: $q, per_page: 80, sort: "${entry.value}", direction: ${entry.direction} }) {
+              count
+              performers { id name image_path scene_count }
+            }
+          }`,
+          { q: q.trim() }
+        )
+          .then((data) => {
+            if (!alive) return;
+            setRows((data.findPerformers && data.findPerformers.performers) || []);
+            setError("");
+          })
+          .catch((err) => {
+            if (!alive) return;
+            setRows([]);
+            setError(String((err && err.message) || err));
+          });
+      }, 200);
+      return () => {
+        alive = false;
+        window.clearTimeout(timer);
+      };
+    }, [q, sort]);
+
+    function toggle(id) {
+      const next = ids.indexOf(id) >= 0 ? ids.filter((tag) => tag !== id) : ids.concat([id]);
+      const value = Object.assign({}, live, { mode: "filter", ids: next });
+      setLive(value);
+      onChange(value);
+    }
+
+    function chooseScope(mode) {
+      const value = Object.assign({}, live, { mode });
+      setLive(value);
+      onChange(value);
+    }
+
+    return h(
+      "div",
+      { className: "stk-perf-filter" },
+      h("div", { className: "stk-perf-scope" },
+        PERFORMER_SCOPE_OPTIONS.map((option) =>
+          h("button", {
+            key: option.value,
+            type: "button",
+            className: "stk-pill" + ((live.mode || "all") === option.value ? " stk-active" : ""),
+            onClick: () => chooseScope(option.value),
+          }, option.label)
+        )
+      ),
+      h("div", { className: "stk-perf-search" },
+        h(Icon, { name: "search", size: 15 }),
+        h("input", {
+          type: "text",
+          value: q,
+          placeholder: "Search performers",
+          autoComplete: "off",
+          onChange: (event) => setQ(event.currentTarget.value),
+        })
+      ),
+      h("div", { className: "stk-perf-sorts" },
+        PERF_SORTS.map((entry) =>
+          h("button", {
+            key: entry.value,
+            type: "button",
+            className: "stk-pill" + (sort === entry.value ? " stk-active" : ""),
+            onClick: () => setSort(entry.value),
+          }, entry.label)
+        )
+      ),
+      error ? h("p", { className: "stk-sub" }, error) : null,
+      !rows
+        ? h("p", { className: "stk-sub" }, "Loading…")
+        : rows.length === 0
+          ? h("p", { className: "stk-sub" }, q.trim() ? `No performers match “${q.trim()}”` : "No performers found")
+          : h("div", { className: "stk-perf-list" },
+              rows.map((performer) => {
+                const on = ids.indexOf(performer.id) >= 0;
+                return h("button", {
+                  key: performer.id,
+                  type: "button",
+                  className: "stk-perf-row" + (on ? " stk-on" : ""),
+                  "aria-pressed": on,
+                  onClick: () => toggle(performer.id),
+                },
+                  h("span", { className: "stk-perf-avatar", style: performer.image_path ? { backgroundImage: `url("${rel(performer.image_path)}")` } : undefined },
+                    performer.image_path ? null : initials(performer.name)),
+                  h("span", { className: "stk-perf-name" }, performer.name),
+                  h("span", { className: "stk-perf-count" }, performer.scene_count ? performer.scene_count + " scenes" : ""),
+                  h("span", { className: "stk-perf-check" + (on ? " stk-on" : "") },
+                    on ? h(Icon, { name: "check", size: 14 }) : null)
+                );
+              })
+            ),
+      h("div", { className: "stk-perf-foot" },
+        h("span", null, live.mode === "filter" && ids.length ? ids.length + " selected" : live.mode === "favorites" ? "Favourited performers" : "Every performer"),
+        h("button", { type: "button", className: "stk-pick-done", onClick: onDone }, "Done")
+      )
+    );
+  }
+
   /* A custom feed and the For You algorithm are the same question: what does
      this feed draw from. The editor reuses the same rows as Settings. */
-  function FeedEditorPage({ initial, onSave, onDelete, onDone }) {
+  function FeedEditorPage({ initial, onSave, onDelete, onDone, onDraft, onOpenPerformers }) {
     const [draft, setDraft] = useState(() =>
-      Object.assign({ name: "", type: "foryou", sort: "random", tags: [], tagMode: "OR", algo: {} }, initial || {})
+      Object.assign({
+        name: "", type: "foryou", sort: "random", tags: [], tagMode: "OR", algo: {},
+        performerScope: DEFAULT_PERFORMER_SCOPE,
+      }, initial || {})
     );
+    /* the draft has to survive a trip to the performer picker page */
+    useEffect(() => {
+      if (onDraft) onDraft(draft);
+    }, [draft]);
     const [picker, setPicker] = useState("");
     const [tagOpen, setTagOpen] = useState(false);
     const tags = draft.tags || [];
     const windowValue = draft.windowDays === undefined ? "all" : String(draft.windowDays);
+    /* the draft is mirrored into a ref so it survives the performer page; a new
+       feed therefore comes back with a draft too — only an id means "editing" */
+    const editing = !!(initial && initial.id);
 
     function toggleTag(id) {
       setDraft(Object.assign({}, draft, {
@@ -10704,7 +10894,11 @@ function TagsPage({ onPick, onMarkers, onBack }) {
         }),
         h(SettingsChoiceRow, {
           title: "Filter by Tag", value: tagCountLabel(tags),
-          onClick: () => setPicker("tags"), last: true,
+          onClick: () => setPicker("tags"),
+        }),
+        h(SettingsChoiceRow, {
+          title: "Performers", value: performerScopeLabel(draft.performerScope),
+          onClick: () => setPicker("performers"), last: true,
         })
       ),
       h("div", { className: "stk-feed-edit-actions" },
@@ -10712,8 +10906,8 @@ function TagsPage({ onPick, onMarkers, onBack }) {
           type: "button",
           className: "stk-btn stk-primary",
           onClick: () => onSave(Object.assign({}, draft, { name: draft.name.trim() || "New feed" })),
-        }, initial ? "Save feed" : "Create feed"),
-        initial && onDelete
+        }, editing ? "Save feed" : "Create feed"),
+        editing
           ? h("button", { type: "button", className: "stk-btn stk-btn-danger", onClick: () => onDelete(initial.id) }, "Delete")
           : null,
         h("button", { type: "button", className: "stk-btn", onClick: onDone }, "Cancel")
@@ -10732,6 +10926,21 @@ function TagsPage({ onPick, onMarkers, onBack }) {
         onPick: (value) => setDraft(Object.assign({}, draft, { windowDays: value === "all" ? 0 : Number(value) })),
         onClose: () => setPicker(""),
       }),
+      picker === "performers" && h(SettingsPicker, {
+        title: "Performers", value: (draft.performerScope || DEFAULT_PERFORMER_SCOPE).mode,
+        options: PERFORMER_SCOPE_OPTIONS,
+        onPick: (value) => {
+          if (value === "filter") {
+            const next = Object.assign({}, draft, { performerScope: Object.assign({}, draft.performerScope || {}, { mode: "filter" }) });
+            if (onDraft) onDraft(next);
+            if (onOpenPerformers) onOpenPerformers();
+            else setDraft(next);
+            return;
+          }
+          setDraft(Object.assign({}, draft, { performerScope: { mode: value, ids: [] } }));
+        },
+        onClose: () => setPicker(""),
+      }),
       picker === "tags" && h(SettingsPicker, {
         title: "Filter by Tag", value: tags.length ? "select" : "all",
         options: [{ value: "all", label: "All Tags" }, { value: "select", label: "Select Tags" }],
@@ -10748,7 +10957,8 @@ function TagsPage({ onPick, onMarkers, onBack }) {
   }
 
   function SettingsPanel({ cfg = {}, feeds = [], onEditFeed = () => {}, onSaveFeed = () => {},
-    onDeleteFeed = () => {}, feedDraft = null, section = "", onSection = () => {},
+    onDeleteFeed = () => {}, onDraftFeed = () => {}, onBack = () => {},
+    feedDraft = null, section = "", onSection = () => {},
     pin, onSetPin = () => {}, onClearPin = () => {}, sfw, onToggleSfw = () => {},
     prefs = {}, setPref = () => {}, onOpenHistory }) {
     const [draft, setDraft] = useState("");
@@ -10799,7 +11009,12 @@ function TagsPage({ onPick, onMarkers, onBack }) {
           h(SettingsChoiceRow, {
             title: "Filter by Tag",
             value: tagCountLabel(prefs.foryouTags),
-            onClick: () => setPicker("foryouTags"), last: true,
+            onClick: () => setPicker("foryouTags"),
+          }),
+          h(SettingsChoiceRow, {
+            title: "Performers",
+            value: performerScopeLabel(prefs.foryouPerformers),
+            onClick: () => setPicker("performers"), last: true,
           })
         ),
 
@@ -10842,12 +11057,29 @@ function TagsPage({ onPick, onMarkers, onBack }) {
 
     function SectionBody() {
       if (section === "feeds") return feedsPage();
+      if (section === "feeds/performers") {
+        return h(PerformerFilterPage, {
+          scope: prefs.foryouPerformers,
+          onChange: (next) => setPref("foryouPerformers", next),
+          onDone: onBack,
+        });
+      }
+      if (section === "feeds/new-feed/performers") {
+        const draft = feedDraft || {};
+        return h(PerformerFilterPage, {
+          scope: draft.performerScope,
+          onChange: (next) => onDraftFeed(Object.assign({}, draft, { performerScope: next })),
+          onDone: onBack,
+        });
+      }
       if (section === "feeds/new-feed") {
         return h(FeedEditorPage, {
           key: (feedDraft && feedDraft.id) || "new",
           initial: feedDraft,
           onSave: onSaveFeed,
           onDelete: onDeleteFeed,
+          onDraft: onDraftFeed,
+          onOpenPerformers: () => onSection("feeds/new-feed/performers"),
           onDone: () => onSection("feeds"),
         });
       }
@@ -10988,6 +11220,21 @@ function TagsPage({ onPick, onMarkers, onBack }) {
             close();
             if (value === "select") setTagSheet(key);
             else setPref(key, []);
+          },
+          onClose: close,
+        });
+      }
+      if (picker === "performers") {
+        return h(SettingsPicker, {
+          title: "Performers", value: (prefs.foryouPerformers || DEFAULT_PERFORMER_SCOPE).mode,
+          options: PERFORMER_SCOPE_OPTIONS,
+          onPick: (value) => {
+            if (value === "filter") {
+              setPref("foryouPerformers", Object.assign({}, prefs.foryouPerformers || {}, { mode: "filter" }));
+              onSection("feeds/performers");
+              return;
+            }
+            setPref("foryouPerformers", { mode: value, ids: [] });
           },
           onClose: close,
         });
@@ -12326,6 +12573,8 @@ function TagsPage({ onPick, onMarkers, onBack }) {
           section: settingsRoute,
           onSection: openSection,
           feedDraft: feedDraftRef.current,
+          onBack: backSection,
+          onDraftFeed: (next) => { feedDraftRef.current = next; },
           onEditFeed: (spec) => {
             feedDraftRef.current = spec || null;
             openSection("feeds/new-feed");
@@ -12387,6 +12636,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
           foryouTagMode: prefs.foryouTagMode || "OR",
           favoriteTags: prefs.favoriteTags || [],
           foryouAlgo: prefs.favoritesAlgo || {},
+          foryouPerformers: prefs.foryouPerformers || DEFAULT_PERFORMER_SCOPE,
         }),
         refreshKey,
         onMenu: () => setNavOpen(true),
