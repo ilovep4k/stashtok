@@ -760,6 +760,77 @@
 
   const DEFAULT_PERFORMER_SCOPE = { mode: "all", ids: [] };
 
+  /* Stash's GenderEnum. Kept as a list rather than introspected: the enum is
+     fixed by the server version, and an unknown value would break the query. */
+  const GENDER_OPTIONS = [
+    { value: "FEMALE", label: "Female" },
+    { value: "MALE", label: "Male" },
+    { value: "TRANSGENDER_FEMALE", label: "Trans female" },
+    { value: "TRANSGENDER_MALE", label: "Trans male" },
+    { value: "NON_BINARY", label: "Non-binary" },
+    { value: "INTERSEX", label: "Intersex" },
+  ];
+  const GENDER_VALUES = GENDER_OPTIONS.map((option) => option.value);
+
+  function shownGenders(cfg) {
+    const chosen = (cfg && cfg.genders) || [];
+    const valid = chosen.filter((value) => GENDER_VALUES.indexOf(value) >= 0);
+    return valid.length ? valid : GENDER_VALUES;
+  }
+
+  function hiddenGenders(cfg) {
+    const shown = shownGenders(cfg);
+    return GENDER_VALUES.filter((value) => shown.indexOf(value) < 0);
+  }
+
+  function genderLabel(cfg) {
+    const hidden = hiddenGenders(cfg);
+    if (!hidden.length) return "All";
+    const label = (value) => (GENDER_OPTIONS.find((option) => option.value === value) || {}).label || value;
+    return "All except " + hidden.map(label).join(", ");
+  }
+
+  /* Scenes are filtered by performer id, not by Stash's performers_filter: that
+     filter drops every scene with no performers at all (158k -> 16k here), and
+     most of this library has no performer metadata. "performers EXCLUDES <ids>"
+     keeps scenes that have no performers and drops the ones that do. */
+  let genderIdCache = { key: "", ids: [] };
+
+  function hiddenGenderIds(cfg) {
+    const hidden = hiddenGenders(cfg);
+    if (!hidden.length) return [];
+    return genderIdCache.key === hidden.slice().sort().join(",") ? genderIdCache.ids : [];
+  }
+
+  async function ensureGenderIds(cfg) {
+    const hidden = hiddenGenders(cfg);
+    if (!hidden.length) { genderIdCache = { key: "", ids: [] }; return []; }
+    const key = hidden.slice().sort().join(",");
+    if (genderIdCache.key === key) return genderIdCache.ids;
+    const ids = [];
+    try {
+      for (let page = 1; page <= 40; page += 1) {
+        const data = await gql(
+          `query StashTokGenderScope($page: Int!) {
+            findPerformers(
+              filter: { page: $page, per_page: 500 },
+              performer_filter: { gender: { value_list: [${hidden.join(", ")}], modifier: INCLUDES } }
+            ) { performers { id } }
+          }`,
+          { page }
+        );
+        const rows = (data.findPerformers && data.findPerformers.performers) || [];
+        rows.forEach((row) => ids.push(row.id));
+        if (rows.length < 500) break;
+      }
+    } catch (err) {
+      /* no filter at all is better than an empty feed */
+      return [];
+    }
+    genderIdCache = { key, ids };
+    return ids;
+  }
+
   /** Who a feed is restricted to. A feed's own scope always wins; only the root
    *  For You feed falls back to the one set in Settings. */
   function effectivePerformers(spec, cfg) {
@@ -777,6 +848,8 @@
     if (effectivePerformers(spec, cfg).mode === "favorites") {
       await favouritePerformerIds().catch(() => []);
     }
+    /* the scene filter is synchronous and cannot await a performer lookup */
+    await ensureGenderIds(cfg).catch(() => []);
   }
 
   /** Which algorithm axes bias this feed. A custom feed carries its own; the
@@ -825,7 +898,16 @@
     /* Stash's own path exclusions: one criterion per fragment, chained through
        AND because a filter input can name `path` only once per object. */
     const excl = exclusionClause(spec.excludePaths);
-    if (excl) parts.push(excl);
+    /* "Show performers" — drop scenes starring a gender the user switched off.
+       Shares the AND slot with the path exclusions: a filter object may carry
+       `AND` once, so both criteria have to live inside the same one. */
+    const hiddenIds = hiddenGenderIds(cfg);
+    const genderClause = hiddenIds.length
+      ? `performers: { value: [${hiddenIds.map((id) => `"${id}"`).join(",")}], modifier: EXCLUDES }`
+      : "";
+    if (excl && genderClause) parts.push(`AND: { ${excl}, ${genderClause} }`);
+    else if (excl) parts.push(excl);
+    else if (genderClause) parts.push(`AND: { ${genderClause} }`);
     const scope = effectivePerformers(spec, cfg);
     if (type !== "performer" && scope.mode !== "all") {
       const ids = scope.mode === "favorites" ? (FAV_PERFORMER_IDS || []) : (scope.ids || []);
@@ -922,6 +1004,9 @@
         const scope = effectivePerformers(spec, cfg);
         return scope.mode === "all" ? "" : scope.mode + ":" + (scope.mode === "favorites" ? "fav" : (scope.ids || []).join("."));
       })(),
+      /* changing "Show performers" must not keep serving the pool drawn under the
+         old setting */
+      hiddenGenders(cfg).join("+"),
     ].join("|");
     let hash = 0x811c9dc5;
     for (let i = 0; i < text.length; i += 1) {
@@ -1141,10 +1226,16 @@
     /* `tags` on a marker filter is the marker's own (primary) tag, which is a
        different axis from the scene's tags: /markers?q=Tag in Stash is this. */
     const markerTagArg = spec.markerTagId ? `tags: ["${spec.markerTagId}"]` : "";
+    /* A marker NAME is its own feed: every marker Stash calls the same thing,
+       in whatever scenes they live in. This Stash has no title criterion on
+       SceneMarkerFilterType, so the name rides on the find filter's `q` and is
+       matched exactly in the client below. */
     const markerFilterArg = [markerTagArg, sceneFilterArg].filter(Boolean).join(", ");
+    const findArg = `per_page: $n, page: $page, sort: "${spec.markerTagId ? "title" : "random"}"` +
+      (spec.markerTitle ? `, q: ${JSON.stringify(spec.markerTitle)}` : "");
     const query = `query StashTokMarkers($n: Int!, $page: Int!) {
       findSceneMarkers(
-        filter: { per_page: $n, page: $page, sort: "${spec.markerTagId ? "title" : "random"}" }
+        filter: { ${findArg} }
         scene_marker_filter: { ${markerFilterArg} }
       ) {
         count
@@ -1159,7 +1250,10 @@
       }
     }`;
     const data = await gql(query, { n: PAGE_SIZE, page });
-    const markers = (data.findSceneMarkers && data.findSceneMarkers.scene_markers) || [];
+    const wanted = spec.markerTitle ? String(spec.markerTitle).trim().toLowerCase() : "";
+    const markers = ((data.findSceneMarkers && data.findSceneMarkers.scene_markers) || []).filter(
+      (marker) => !wanted || String(marker.title || "").trim().toLowerCase() === wanted
+    );
     return {
       count: (data.findSceneMarkers && data.findSceneMarkers.count) || 0,
       items: markers
@@ -1786,6 +1880,9 @@
     /* who For You draws from: every performer, only the ones you favourite, or
        a hand-picked list { mode: "all"|"favorites"|"filter", ids: [] } */
     foryouPerformers: { mode: "all", ids: [] },
+    /* which performer genders the app shows at all. Empty = every gender, so a
+       library that never set a gender on anyone is not filtered into nothing */
+    genders: [],
     favoriteTags: [],
     favoritesAlgo: {},
     folderView: "list",
@@ -3060,23 +3157,32 @@ void main() {
             const resume = resumeRef.current;
             const startId = spec.startSceneId || (resume && resume.sceneId);
             const startTime = spec.startAt || (resume && resume.time) || null;
+            /* Land ON the resumed clip instead of moving it to slot 0. The old
+               rotate-to-front threw away everything the user had already swiped
+               past: back from a performer page put you on video 8 as if it were
+               the first clip, and swiping up could not reach 7. */
+            let startAt = 0;
             if (startId) {
-              // open on the scene the user tapped, wherever it sits in the list
               const at = list.findIndex((entry) => String(entry.scene.id) === String(startId));
-              if (at > 0) list.unshift(list.splice(at, 1)[0]);
-              else if (at < 0) {
+              if (at >= 0) startAt = at;
+              else {
                 // it may not be on page 1 at all: fetch it and lead with it
                 try {
                   const single = await fetchSceneById({ sceneId: startId, startAt: startTime });
-                  if (single.items.length) list.unshift(single.items[0]);
+                  if (single.items.length) {
+                    list.unshift(single.items[0]);
+                    startAt = 0;
+                  }
                 } catch (err) {
                   /* fall through to the normal order */
                 }
               }
             }
-            if (reset && startTime && list.length) list[0] = Object.assign({}, list[0], { startAt: startTime });
+            if (reset && startTime && list.length && list[startAt]) {
+              list[startAt] = Object.assign({}, list[startAt], { startAt: startTime });
+            }
             setItems(list);
-            setIndex(0);
+            setIndex(startAt);
             hydratedRef.current = true;
           } else {
             pageRef.current = page + 1;
@@ -11052,7 +11158,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
      browser's back gesture, a deep link and the in-app chevron all agree. */
 
   const SETTINGS_GROUPS = [
-    { id: "Preferences", rank: 1, rows: ["feeds", "performer", "blur", "lock"] },
+    { id: "Preferences", rank: 1, rows: ["feeds", "performer", "genders", "blur", "lock"] },
     { id: "App Settings", rank: 2, rows: ["appearance", "navigation", "operations", "about"] },
   ];
 
@@ -11063,6 +11169,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
     "feeds/new-feed": "Create Feed",
     "feeds/new-feed/performers": "Performers",
     performer: "Performer Page",
+    genders: "Show performers",
     appearance: "Appearance",
     navigation: "Navigation",
     about: "About",
@@ -11556,6 +11663,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
     const rowById = {
       feeds: { icon: "feed", title: "Your Feeds" },
       performer: { icon: "user", title: "Performer Page" },
+      genders: { icon: "user", title: "Show performers" },
       blur: { icon: "image", title: "Blur Content Thumbnails" },
       lock: { icon: "lock", title: "Privacy Lock" },
       appearance: { icon: "image", title: "Appearance" },
@@ -11671,6 +11779,41 @@ function TagsPage({ onPick, onMarkers, onBack }) {
     }
 
     function SectionBody() {
+      if (section === "genders") {
+        const shown = shownGenders(prefs);
+        const allOn = shown.length === GENDER_VALUES.length;
+        return h("div", { className: "stk-set-block" },
+          h("p", { className: "stk-set-block-sub" },
+            "Which performers the app shows. Untick a gender and its clips drop out of every feed — scenes with no performer set are never hidden."),
+          h("div", { className: "stk-pick-list" },
+            GENDER_OPTIONS.map((option) => {
+              const on = shown.indexOf(option.value) >= 0;
+              return h("button", {
+                key: option.value,
+                type: "button",
+                className: "stk-pick-row" + (on ? " stk-on" : ""),
+                "aria-pressed": on,
+                onClick: () => {
+                  if (on && shown.length === 1) return;   /* never hide every gender */
+                  const next = on
+                    ? shown.filter((value) => value !== option.value)
+                    : shown.concat([option.value]);
+                  setPref("genders", next.length === GENDER_VALUES.length ? [] : next);
+                },
+              },
+                h("span", null, option.label),
+                on ? h(Icon, { name: "check", size: 16 }) : null
+              );
+            })
+          ),
+          h("button", {
+            type: "button",
+            className: "stk-btn",
+            onClick: () => setPref("genders", []),
+            style: { marginTop: "10px" },
+          }, allOn ? "All genders shown" : "Show every gender again")
+        );
+      }
       if (section === "feeds") return feedsPage();
       if (section === "feeds/performers") {
         return h(PerformerFilterPage, {
@@ -11747,6 +11890,13 @@ function TagsPage({ onPick, onMarkers, onBack }) {
 
     function renderRow(id) {
       const meta = rowById[id] || { icon: "info", title: id };
+      if (id === "genders") {
+        return h(SettingsChoiceRow, {
+          key: id, icon: meta.icon, title: meta.title,
+          value: genderLabel(prefs), onClick: () => onSection("genders"),
+          last: id === SETTINGS_GROUPS[0].rows[SETTINGS_GROUPS[0].rows.length - 1],
+        });
+      }
       if (id === "blur") {
         return h(SettingsToggleRow, {
           key: id, icon: meta.icon, title: meta.title,
@@ -12425,6 +12575,43 @@ function TagsPage({ onPick, onMarkers, onBack }) {
         setTab("home");
         return;
       }
+      /* /marker/<id> is one marker's feed: that marker, then every marker Stash
+         gives the same name. Cold-loading the URL rebuilds it, so back and a
+         reload both land somewhere real instead of on the markers list. */
+      if (rest.indexOf("marker/") === 0) {
+        const markerId = rest.slice("marker/".length).replace(/\D/g, "");
+        setPerformerFilter(null);
+        setTab("home");
+        if (markerId) {
+          /* there is no findSceneMarker on this schema: the single-marker read
+             is findSceneMarkers(ids: [...]) */
+          gql(
+            `query StashTokMarkerRoute($ids: [ID!]) {
+              findSceneMarkers(ids: $ids) { scene_markers { id title seconds scene { id } } }
+            }`,
+            { ids: [markerId] }
+          )
+            .then((data) => {
+              const marker = data && data.findSceneMarkers && (data.findSceneMarkers.scene_markers || [])[0];
+              if (!marker || !marker.id) return;
+              setActiveFeed({
+                id: "marker-" + marker.id,
+                name: marker.title || "Marker",
+                type: "markers",
+                markerTitle: marker.title || "",
+                startSceneId: marker.scene && marker.scene.id ? String(marker.scene.id) : null,
+                startAt: Number(marker.seconds) || 0,
+                sort: "random",
+                origin: { kind: "markers" },
+              });
+              setRefreshKey((n) => n + 1);
+            })
+            .catch(() => {
+              /* the route stays; the feed falls back to the default */
+            });
+        }
+        return;
+      }
       /* /markers/<id> is the marker feed for one tag */
       if (rest.indexOf("markers/") === 0) {
         const id = rest.slice("markers/".length).replace(/\D/g, "");
@@ -12926,22 +13113,31 @@ function TagsPage({ onPick, onMarkers, onBack }) {
       goTo(route);
     }
 
-    /* a marker on the markers page: play its scene from the in point */
-    function openMarker(marker) {
+    /* a marker on the markers page opens that marker, and every marker with the
+       same NAME, as one feed. It used to open the scene, which then resolved to
+       the performer's feed and lost both the marker and the route. */
+    function markerFeedSpec(marker) {
       const scene = marker && marker.scene;
-      if (!scene || !scene.id) return;
-      setPerformerFilter(null);
-      setActiveFeed({
-        id: "scene-" + scene.id,
-        name: scene.title || "Scene",
-        type: "scene",
-        sceneId: String(scene.id),
-        startAt: Number(marker.seconds) || 0,
+      return {
+        id: "marker-" + (marker && marker.id),
+        name: (marker && marker.title) || "Marker",
+        type: "markers",
+        markerTitle: (marker && marker.title) || "",
+        startSceneId: scene && scene.id ? String(scene.id) : null,
+        startAt: Number(marker && marker.seconds) || 0,
+        sort: "random",
         origin: { kind: "markers" },
-      });
+      };
+    }
+
+    function openMarker(marker) {
+      if (!marker || !marker.id) return;
+      setPerformerFilter(null);
+      setActiveFeed(markerFeedSpec(marker));
       setTab("home");
       setRefreshKey((n) => n + 1);
-      goTo("scene/" + scene.id);
+      routeClaimRef.current = "marker/" + marker.id;
+      goTo("marker/" + marker.id);
     }
 
     function useFeed(spec) {
@@ -13299,6 +13495,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
           favoriteTags: prefs.favoriteTags || [],
           foryouAlgo: prefs.favoritesAlgo || {},
           foryouPerformers: prefs.foryouPerformers || DEFAULT_PERFORMER_SCOPE,
+          genders: prefs.genders || [],
         }),
         refreshKey,
         onMenu: () => setNavOpen(true),
