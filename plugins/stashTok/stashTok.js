@@ -110,6 +110,8 @@
     menu: "M4 7h16M4 12h16M4 17h16",
     chevronUp: "M6 15l6-6 6 6",
     chevronDown: "M6 9l6 6 6-6",
+    fullscreen: "M9 4H4v5m11-5h5v5M4 15v5h5m11-5v5h-5",
+    fullscreenExit: "M4 9h5V4m11 5h-5V4M9 20v-5H4m11 5v-5h5",
     /* a box with an arrow leaving it: opens the page in Stash itself */
     external: "M13 4h7v7M20 4l-8.2 8.2M18 14v5.5A1.5 1.5 0 0 1 16.5 21h-11A1.5 1.5 0 0 1 4 19.5v-11A1.5 1.5 0 0 1 5.5 7H11",
     sort: "M7 4v16M4 17l3 3 3-3M17 20V4M14 7l3-3 3 3",
@@ -205,7 +207,7 @@
     return h(
       "button",
       { className: "stk-card", onClick: () => onOpen(scene) },
-      h("span", { className: "stk-card-img" }, h(Thumb, { src: rel(scene.paths && scene.paths.screenshot), width: 320 })),
+      h("span", { className: "stk-card-img" }, h(Thumb, { src: rel(scene.paths && scene.paths.screenshot) })),
       file && file.duration ? h("span", { className: "stk-card-dur" }, fmtTime(file.duration)) : null,
       h("span", { className: "stk-card-title" }, scene.title || "Scene " + scene.id)
     );
@@ -215,7 +217,7 @@
     return h(
       "button",
       { className: "stk-card stk-card-person", onClick: () => onOpen(performer) },
-      h("span", { className: "stk-card-img stk-card-round" }, h(Thumb, { src: rel(performer.image_path), width: 160 })),
+      h("span", { className: "stk-card-img stk-card-round" }, h(Thumb, { src: rel(performer.image_path) })),
       h("span", { className: "stk-card-title" }, performer.name),
       h("span", { className: "stk-card-sub" }, fmtCount(performer.scene_count) + " scenes")
     );
@@ -225,7 +227,7 @@
     return h(
       "button",
       { className: "stk-card", onClick: () => onOpen(gallery) },
-      h("span", { className: "stk-card-img" }, h(Thumb, { src: rel(gallery.paths && gallery.paths.cover), width: 320 })),
+      h("span", { className: "stk-card-img" }, h(Thumb, { src: rel(gallery.paths && gallery.paths.cover) })),
       h("span", { className: "stk-card-dur" }, fmtCount(gallery.image_count)),
       h("span", { className: "stk-card-title" }, gallery.title || "Gallery " + gallery.id)
     );
@@ -411,7 +413,7 @@
         height: size,
         fill: filled && name === "heart" ? "currentColor" : "none",
         stroke: "currentColor",
-        strokeWidth: name === "heart" ? 1.8 : 1.7,
+        strokeWidth: name === "more" ? 3.4 : name === "heart" ? 1.8 : 1.7,
         strokeLinecap: "round",
         strokeLinejoin: "round",
         className,
@@ -1254,9 +1256,8 @@
   const TAG_SECTIONS = [
     {
       title: "Body Tags",
-      tags: ["BBW", "Big Ass", "Big Dick", "Big Tits", "Bush", "Curvy", "Fake Tits", "Hairy", "Petite",
-        "Piercings", "Pregnant", "Shaved", "Skinny", "Small Tits", "Tan Lines", "Tattoos", "Natural Tits",
-        "Muscular", "MILF", "Mature"],
+      tags: ["Big Ass", "Big Tits", "Curvy", "Fake Tits", "Mature", "MILF", "Muscular", "Natural Tits",
+        "Petite", "Piercings", "Pregnant", "Skinny", "Small Tits", "Tattoos", "Big Dick"],
     },
     {
       title: "Positions & Acts",
@@ -1370,7 +1371,6 @@
       // 10s keeps 2-second clips out without cutting whole folders
       minDuration: raw.minDuration == null ? 10 : Number(raw.minDuration),
       /* "" = auto-guess from the port, "off" = always use Stash's own images */
-      thumbBase: typeof raw.thumbBase === "string" ? raw.thumbBase.trim() : "",
     };
   }
 
@@ -1389,6 +1389,51 @@
 
   /* Leaving a feed (tap a performer, open search) must not cost the user their place:
      remember the clip and the playhead for an hour, and reopen there. */
+  const WATCH_HISTORY_KEY = "stashTok.watchHistory.v1";
+  const PLAYBACK_LOG_KEY = "stashTok.playbackLog.v1";
+
+  function readLocalList(key) {
+    try {
+      const rows = JSON.parse(window.localStorage.getItem(key) || "[]");
+      return Array.isArray(rows) ? rows : [];
+    } catch (error) {
+      return [];
+    }
+  }
+
+  function writeLocalList(key, rows) {
+    try {
+      window.localStorage.setItem(key, JSON.stringify(rows));
+    } catch (error) {
+      // Private browsing and a full quota can prevent persistence.
+    }
+  }
+
+  function recordPlayback(event, video, elapsed) {
+    const quality = video.getVideoPlaybackQuality?.();
+    const entry = { event, at: Date.now(), elapsedMs: Math.round(elapsed),
+      width: video.videoWidth, height: video.videoHeight,
+      frames: quality?.totalVideoFrames ?? video.webkitDecodedFrameCount ?? null,
+      dropped: quality?.droppedVideoFrames ?? video.webkitDroppedFrameCount ?? null,
+      errorCode: video.error?.code ?? null };
+    writeLocalList(PLAYBACK_LOG_KEY, [...readLocalList(PLAYBACK_LOG_KEY).slice(-199), entry]);
+  }
+
+  function playbackReport() {
+    return JSON.stringify({ version: 1, events: readLocalList(PLAYBACK_LOG_KEY) }, null, 2);
+  }
+
+  function downloadPlaybackReport() {
+    const url = URL.createObjectURL(new Blob([playbackReport()], { type: "application/json" }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "stashtok-playback.json";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
   const RESUME_KEY = "stashTok.resume.v1";
   const RESUME_VERSIONS = new Map();
   const RESUME_TTL_MS = 60 * 60 * 1000;
@@ -1742,6 +1787,13 @@
     };
     if (video.readyState >= 1) doSeek();
     else video.addEventListener("loadedmetadata", doSeek, { once: true });
+  }
+
+  function feedFrameFit(width, height, stageAspect) {
+    const aspect = width / height;
+    if (!width || !height || !stageAspect) return "contain";
+    const retained = Math.min(aspect / stageAspect, stageAspect / aspect);
+    return retained >= 0.75 ? "cover" : "contain";
   }
 
   /** Play, but never start before a pending seek has landed: that race is the black flash. */
@@ -2200,12 +2252,14 @@ void main() {
 
   function createAwake() {
     let sentinel = null;
+    let requesting = false;
     let silent = null;
     let want = false;
     let retryTimer = 0;
     let bound = false;
 
     const supported = () => !!(navigator.wakeLock && navigator.wakeLock.request);
+    const needsSilent = () => !supported() || navigator.maxTouchPoints > 0;
 
     const release = () => {
       const held = sentinel;
@@ -2226,7 +2280,7 @@ void main() {
     /* 2x2 px in the corner and not display:none: WebKit pauses an inline video
        it considers offscreen or invisible, and a paused clip holds nothing */
     const startSilent = () => {
-      if (silent || document.hidden) return;
+      if (silent || document.hidden || !needsSilent()) return;
       const el = document.createElement("video");
       el.setAttribute("playsinline", "");
       el.setAttribute("webkit-playsinline", "");
@@ -2239,7 +2293,7 @@ void main() {
       if (!clip) return;
       el.src = clip;
       el.style.cssText =
-        "position:fixed;right:0;bottom:0;width:2px;height:2px;opacity:0.01;pointer-events:none;z-index:0;";
+        "position:fixed;right:0;bottom:0;width:2px;height:2px;opacity:0.01;pointer-events:none;z-index:10000;";
       /* webkit pauses an inline clip for its own reasons; put it back */
       el.addEventListener("pause", () => {
         if (!want || document.hidden) return;
@@ -2258,13 +2312,14 @@ void main() {
 
     const request = () => {
       if (!want || document.hidden) return;
-      if (!supported() || sentinel) return;
+      if (!supported() || sentinel || requesting) return;
       let pending;
       try {
         pending = navigator.wakeLock.request("screen");
       } catch (e) {
         return;
       }
+      requesting = true;
       Promise.resolve(pending)
         .then((held) => {
           if (!want || document.hidden) {
@@ -2285,9 +2340,9 @@ void main() {
           });
         })
         .catch(() => {
-          /* denied: needs a gesture, or the battery saver said no. the silent
-             clip below is already covering the display */
-        });
+          startSilent();
+        })
+        .finally(() => { requesting = false; });
     };
 
     const restartSilent = () => {
@@ -2297,9 +2352,10 @@ void main() {
     };
 
     const gesture = () => {
-      if (!want) return;
+      if (!want || document.hidden) return;
       request();
-      restartSilent();
+      if (silent) restartSilent();
+      else startSilent();
     };
 
     const onVisibility = () => {
@@ -2308,9 +2364,7 @@ void main() {
         if (silent) { try { silent.pause(); } catch (e) { /* ignore */ } }
         return;
       }
-      if (!want) return;
-      request();
-      restartSilent();
+      gesture();
     };
 
     const bind = () => {
@@ -2318,20 +2372,22 @@ void main() {
       bound = true;
       /* capture, so a tap the feed swallows still counts as activation */
       document.addEventListener("pointerdown", gesture, true);
-      document.addEventListener("touchstart", gesture, true);
+      document.addEventListener("click", gesture, true);
       document.addEventListener("keydown", gesture, true);
       document.addEventListener("visibilitychange", onVisibility);
       window.addEventListener("focus", onVisibility);
+      window.addEventListener("pageshow", onVisibility);
     };
 
     const unbind = () => {
       if (!bound) return;
       bound = false;
       document.removeEventListener("pointerdown", gesture, true);
-      document.removeEventListener("touchstart", gesture, true);
+      document.removeEventListener("click", gesture, true);
       document.removeEventListener("keydown", gesture, true);
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("focus", onVisibility);
+      window.removeEventListener("pageshow", onVisibility);
     };
 
     return {
@@ -2369,6 +2425,40 @@ void main() {
     const [loading, setLoading] = useState(true);
     const [playing, setPlaying] = useState(false);
     const [ready, setReady] = useState(false);
+    const [fullscreen, setFullscreen] = useState(false);
+    const [fullscreenFit, setFullscreenFit] = useState("auto");
+    const nativeFullscreenRef = useRef(false);
+    const exitFullscreen = useCallback(() => {
+      setFullscreen(false);
+      if (nativeFullscreenRef.current && document.fullscreenElement === document.documentElement) {
+        document.exitFullscreen().catch(() => {});
+      }
+      nativeFullscreenRef.current = false;
+    }, []);
+    function enterFullscreen() {
+      setFullscreen(true);
+      if (document.fullscreenEnabled && !document.fullscreenElement && document.documentElement.requestFullscreen) {
+        nativeFullscreenRef.current = true;
+        document.documentElement.requestFullscreen().catch(() => { nativeFullscreenRef.current = false; });
+      }
+    }
+    useEffect(() => {
+      if (!fullscreen) return undefined;
+      document.body.classList.add("stk-fullscreen-mode");
+      const onChange = () => {
+        if (nativeFullscreenRef.current && !document.fullscreenElement) exitFullscreen();
+      };
+      document.addEventListener("fullscreenchange", onChange);
+      return () => {
+        document.body.classList.remove("stk-fullscreen-mode");
+        document.removeEventListener("fullscreenchange", onChange);
+      };
+    }, [fullscreen, exitFullscreen]);
+    useEffect(() => () => {
+      if (nativeFullscreenRef.current && document.fullscreenElement === document.documentElement) {
+        document.exitFullscreen().catch(() => {});
+      }
+    }, []);
     const [streamFallback, setStreamFallback] = useState(false);
     const [failCount, setFailCount] = useState(0);
     const lastTimePush = useRef(0);
@@ -2380,7 +2470,6 @@ void main() {
       awakeRef.current.set(playing);
     }, [playing]);
     useEffect(() => () => awakeRef.current.dispose(), []);
-    const [revealed, setRevealed] = useState(false);
     const [rotation, setRotation] = useState(0);
     const [speed, setSpeed] = useState(() => Number(window.localStorage.getItem("stashTok.speed")) || 1);
     const [muted, setMuted] = useState(cfg.autoplayMuted);
@@ -2448,8 +2537,10 @@ void main() {
     const railPress = useRef(0);
     /* the press that opened the menu must not also count as a tap */
     const railHeld = useRef(false);
-    /* fill the screen unless that would throw away a big slice of the frame */
-    const [fitMode, setFitMode] = useState("cover");
+    const frameHandoff = desktop && !spec.single && !sfw;
+    const useSmartFit = frameHandoff || (fullscreen && desktop);
+    const [stageAspect, setStageAspect] = useState(0);
+    const [decodedSize, setDecodedSize] = useState(null);
     /* portrait framing of a landscape clip: auto (middle half) → full → height */
     const [cropMode, setCropMode] = useState(() => {
       /* only the un-zoomed step comes back after a reload. "fill height" is ~3.6x
@@ -2483,6 +2574,7 @@ void main() {
     }, []);
     const videoRef = useRef(null);
     const wrapRef = useRef(null);
+    const slideRef = useRef(null);
     const pageRef = useRef(1);
     const busyRef = useRef(false);
     const exhaustedRef = useRef(false);
@@ -2507,22 +2599,6 @@ void main() {
 
     /* React can leave videoRef pointing at the clip we just swiped away from, so
        always resolve the element that is actually marked active on screen. */
-    const fitFor = useCallback((video) => {
-      const stage = stageRef.current;
-      if (!video || !stage) return "cover";
-      const vw = video.videoWidth || 0;
-      const vh = video.videoHeight || 0;
-      const box = stageBox();
-      const sw = box.w || 0;
-      const sh = box.h || 0;
-      if (!vw || !vh || !sw || !sh) return "cover";
-      const vr = vw / vh;
-      const sr = sw / sh;
-      // share of the frame that `cover` would crop away
-      const lost = vr >= sr ? 1 - sr / vr : 1 - vr / sr;
-      return lost <= 0.25 ? "cover" : "contain";
-    }, [prefs, stageBox]);
-
     const activeVideo = useCallback(() => {
       const stage = stageRef.current;
       const live = stage && stage.querySelector(".stk-video.stk-active");
@@ -2530,7 +2606,82 @@ void main() {
     }, []);
 
     const item = items[index] || null;
+    const hasItem = !!item;
+    useLayoutEffect(() => {
+      const stage = stageRef.current;
+      if (!useSmartFit || !stage) return undefined;
+      const measure = () => {
+        setStageAspect(stage.clientHeight ? stage.clientWidth / stage.clientHeight : 0);
+      };
+      measure();
+      if (typeof ResizeObserver === "undefined") {
+        window.addEventListener("resize", measure);
+        return () => window.removeEventListener("resize", measure);
+      }
+      const observer = new ResizeObserver(measure);
+      observer.observe(stage);
+      return () => observer.disconnect();
+    }, [useSmartFit, hasItem]);
     const sceneTags = item && item.scene.tags;
+
+    useEffect(() => {
+      const video = activeVideo();
+      const scene = item && item.scene;
+      if (!video || !scene || sfw) return undefined;
+      const startedAt = performance.now();
+      const id = String(scene.id);
+      let watchedAt = 0;
+      let bufferingAt = 0;
+      const log = (event, since = startedAt) => {
+        if (prefs.playbackDiagnostics !== false) recordPlayback(event, video, performance.now() - since);
+      };
+      const onPlaying = () => {
+        if (!watchedAt) {
+          watchedAt = Date.now();
+          const previous = readLocalList(WATCH_HISTORY_KEY).filter((row) => row.id !== id);
+          writeLocalList(WATCH_HISTORY_KEY, [
+            { id, title: String(scene.title || "Scene " + id).slice(0, 240),
+              watchedAt, time: video.currentTime || 0 },
+            ...previous.slice(0, 99),
+          ]);
+          log("playing");
+        } else if (bufferingAt) {
+          log("resumed", bufferingAt);
+        }
+        bufferingAt = 0;
+      };
+      const onWaiting = () => {
+        if (bufferingAt || video.paused || video.seeking) return;
+        bufferingAt = performance.now();
+        log("buffering");
+      };
+      const onError = () => log("media-error");
+      video.addEventListener("playing", onPlaying);
+      video.addEventListener("waiting", onWaiting);
+      video.addEventListener("error", onError);
+      if (!video.paused && !video.seeking && video.readyState >= 2) onPlaying();
+      const timer = prefs.playbackDiagnostics === false ? 0 : window.setInterval(() => {
+        if (!video.paused && !document.hidden) log("sample");
+      }, 15000);
+      const savePosition = () => {
+        if (!watchedAt) return;
+        const rows = readLocalList(WATCH_HISTORY_KEY);
+        const row = rows.find((entry) => entry.id === id && entry.watchedAt === watchedAt);
+        if (row && Number.isFinite(video.currentTime)) {
+          row.time = video.currentTime;
+          writeLocalList(WATCH_HISTORY_KEY, rows);
+        }
+      };
+      window.addEventListener("pagehide", savePosition);
+      return () => {
+        savePosition();
+        window.clearInterval(timer);
+        window.removeEventListener("pagehide", savePosition);
+        video.removeEventListener("playing", onPlaying);
+        video.removeEventListener("waiting", onWaiting);
+        video.removeEventListener("error", onError);
+      };
+    }, [activeVideo, item && item.key, sfw, prefs.playbackDiagnostics]);
     useEffect(() => {
       const node = tagsRef.current;
       if (!node) {
@@ -2597,7 +2748,6 @@ void main() {
       const onResize = () => {
         const video = activeVideo();
         if (video) {
-          setFitMode(fitFor(video));
           /* turning the phone re-decides auto-crop (and re-scales "fill height") */
           if (cropRefreshRef.current) cropRefreshRef.current();
         }
@@ -2608,7 +2758,7 @@ void main() {
         window.removeEventListener("resize", onResize);
         window.removeEventListener("orientationchange", onResize);
       };
-    }, [activeVideo, fitFor]);
+    }, [activeVideo]);
 
     /* remember the seat as we move, not only on the way out */
     useEffect(() => {
@@ -2711,6 +2861,7 @@ void main() {
       if (stage) {
         Array.from(stage.querySelectorAll("video")).forEach((video) => {
           if (video.classList.contains("stk-active")) {
+            if (frameHandoff) return;
             const start = Number(item && item.startAt) || 0;
             const activeKey = item ? item.key : null;
             if (video.paused && seekedSceneRef.current !== activeKey) {
@@ -2807,7 +2958,6 @@ void main() {
       setStreamFallback(false);
       setDuration(0);
       setTime((item && Number(item.startAt)) || 0);
-      setRevealed(false);
       /* reset the user's pinch AND put the clip's framing back: a prewarmed clip
          fires canplay before it becomes active, so waiting for that event here
          left every second clip uncropped */
@@ -2842,8 +2992,17 @@ void main() {
       const video = activeVideo();
       if (!video || !item) return;
       const start = Number(item.startAt) || 0;
+      let cancelReveal = () => {};
       const onLoaded = () => {
-        setFitMode(fitFor(video));
+        const file = item.scene.files && item.scene.files[0];
+        const width = video.videoWidth;
+        const height = video.videoHeight;
+        if (desktop && width && height && (!file || !file.width || !file.height ||
+            Math.abs(width / height - file.width / file.height) > 0.01)) {
+          setDecodedSize((size) => size && size.key === item.key && size.width === width && size.height === height
+            ? size
+            : { key: item.key, width, height });
+        }
         /* the frame size is only known once metadata lands, so the crop lands here */
         applyCrop(cropModeRef.current, false);
         const total = video.duration || 0;
@@ -2851,17 +3010,45 @@ void main() {
         /* canplay fires again every time the browser re-buffers, so seek to the start
            frame ONCE per clip: otherwise scrubbing back lands in an unbuffered gap,
            triggers a refill, and this yanks the playhead forward again */
-        if (positionedRef.current === item.key) return;
-        positionedRef.current = item.key;
+        const source = video.getAttribute("src");
+        const positioned = positionedRef.current;
+        if (positioned && positioned.video === video && positioned.key === item.key && positioned.source === source) return;
+        positionedRef.current = { video, key: item.key, source };
         /* autoscroll picks its own way into the clip; otherwise the feed's start */
         const wanted = autoScrollRef.current ? autoScrollStart(total) : start;
         // a remembered playhead can outlive the file it came from: never seek past the end
         const seekTo = total > 0 ? Math.min(wanted, Math.max(0, total - 3)) : wanted;
-        seekThenPlay(video, seekTo, playGuarded);
+        seekThenPlay(video, seekTo, (element) => {
+          const stillCurrent = () => element.isConnected && element === activeVideo() &&
+            element.getAttribute("src") === source;
+          if (!stillCurrent()) return;
+          if (frameHandoff) {
+            cancelReveal();
+            const reveal = () => {
+              if (stillCurrent()) element.classList.add("stk-frame-ready");
+            };
+            if (typeof element.requestVideoFrameCallback === "function") {
+              const frame = element.requestVideoFrameCallback(reveal);
+              cancelReveal = () => element.cancelVideoFrameCallback(frame);
+            } else {
+              let frame = 0;
+              const afterPlaying = () => { frame = requestAnimationFrame(reveal); };
+              if (element.paused) element.addEventListener("playing", afterPlaying, { once: true });
+              else afterPlaying();
+              cancelReveal = () => {
+                element.removeEventListener("playing", afterPlaying);
+                cancelAnimationFrame(frame);
+              };
+            }
+          }
+          playGuarded(element);
+        });
       };
       video.addEventListener("loadedmetadata", onLoaded);
       video.addEventListener("canplay", onLoaded);
+      if (video.readyState >= 1) onLoaded();
       return () => {
+        cancelReveal();
         video.removeEventListener("loadedmetadata", onLoaded);
         video.removeEventListener("canplay", onLoaded);
         video.pause();
@@ -2870,7 +3057,7 @@ void main() {
           video.load();
         }
       };
-    }, [item && item.key]);
+    }, [item && item.key, frameHandoff]);
 
     /* play/pause is driven directly on the active element: a state-driven pause
        races the layer swap and kills the incoming video */
@@ -2879,6 +3066,7 @@ void main() {
       const video = activeVideo();
       if (!video) return;
       video.muted = muted;
+      if (frameHandoff && !video.classList.contains("stk-frame-ready")) return undefined;
       // some browsers pause an autoplaying video the moment it becomes audible,
       // and a muted autoplay that is unmuted by a tap must keep running
       const resume = () => {
@@ -3053,7 +3241,7 @@ void main() {
         off, so the bars are the only thing lost), or "" for leave it alone. */
     const cropKind = useCallback(() => {
       /* Settings → Auto-crop to fill; on unless the user turned it off */
-      if (prefs.autoCrop === false) return "";
+      if (prefs.autoCrop === false || (fullscreen && fullscreenFit !== "auto")) return "";
       const video = activeVideo();
       if (!video) return "";
       const vw = video.videoWidth || 0;
@@ -3069,7 +3257,7 @@ void main() {
       if (vr >= 1.5) return "wide";
       const lost = vr > sr ? 1 - sr / vr : 1 - vr / sr;
       return lost <= NEAR_RATIO ? "near" : "";
-    }, [activeVideo, prefs.autoCrop, stageBox]);
+    }, [activeVideo, prefs.autoCrop, fullscreen, fullscreenFit]);
 
     const cropEligible = useCallback(() => !!cropKind(), [cropKind]);
 
@@ -3111,6 +3299,9 @@ void main() {
     );
 
     cropRefreshRef.current = () => applyCrop(cropModeRef.current, false);
+    useEffect(() => {
+      cropRefreshRef.current();
+    }, [fullscreen, fullscreenFit]);
 
     const cropLabel = (mode) =>
       mode === "full" ? "Full frame" : mode === "height" ? "Fill height" : cropKind() === "wide" ? "Crop 50%" : "Fill frame";
@@ -3194,33 +3385,38 @@ void main() {
       setIndex((i) => Math.max(0, i - 1));
     }, [resetZoom, spec.single]);
 
-    /* slide the strip out, swap the clip underneath it, slide back in: the same
-       motion a swipe makes, so a wheel step does not look like a hard cut */
+    /* Keep the strip at the end of the slide until React commits the new index. */
+    useLayoutEffect(() => () => {
+      if (slideRef.current) slideRef.current.cancel();
+      slideRef.current = null;
+    }, [index]);
+
     const slideStep = useCallback(
       (direction) => {
+        if (spec.single || slideRef.current) return;
+        const advance = direction > 0 ? goNext : goPrev;
         const wrap = wrapRef.current;
-        const stageEl = stageRef.current;
-        const height = stageEl ? stageEl.getBoundingClientRect().height : 0;
-        if (!wrap || !height) {
+        const stage = stageRef.current;
+        const height = stage && stage.clientHeight;
+        const target = index + direction;
+        if (target < 0 || items.length < 2) {
           setDragY(0);
           return;
         }
-        const duration = 190;
-        wrap.style.transition = `transform ${duration}ms cubic-bezier(.22,.61,.36,1)`;
-        setDragY(direction > 0 ? -height : height);
-        window.setTimeout(() => {
-          wrap.style.transition = "none";
-          wrap.style.transform = "translateY(0px) rotate(0deg)";
-          if (direction > 0) goNext();
-          else goPrev();
-          setDragY(0);
-          // give React a frame to commit the swap before transitions come back
-          window.setTimeout(() => {
-            wrap.style.transition = "";
-          }, 80);
-        }, duration);
+        if (!wrap || !height || !wrap.animate || target >= items.length ||
+            window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+          advance();
+          return;
+        }
+        const y = direction > 0 ? -height : height;
+        const slide = wrap.animate(
+          [{ transform: getComputedStyle(wrap).transform }, { transform: `translateY(${y}px) rotate(${rotation}deg)` }],
+          { duration: 190, easing: "cubic-bezier(.22,.61,.36,1)", fill: "forwards" }
+        );
+        slideRef.current = slide;
+        slide.onfinish = advance;
       },
-      [goNext, goPrev]
+      [goNext, goPrev, index, items.length, rotation, spec.single]
     );
 
     /* ---- desktop wheel -------------------------------------------------
@@ -3514,6 +3710,7 @@ void main() {
         if (tag === "INPUT" || tag === "TEXTAREA" || (event.target && event.target.isContentEditable)) return;
         const video = activeVideo ? activeVideo() : null;
         const key = event.key && event.key !== "Unidentified" ? event.key : CODE_KEYS[event.keyCode] || "";
+        if (fullscreen && (key === "Tab" || (tag === "BUTTON" && (key === "Enter" || key === " ")))) return;
         if (key === "ArrowDown" || key === "PageDown") {
           event.preventDefault();
           goNext();
@@ -3535,6 +3732,7 @@ void main() {
           /* escape peels one layer first: sheet, quick menu, then back */
           if (sheet) setSheet(null);
           else if (quick) setQuick(null);
+          else if (fullscreen && key === "Escape") exitFullscreen();
           else if (onBack) onBack();
         } else if (key === "Tab") {
           event.preventDefault();
@@ -3604,7 +3802,8 @@ void main() {
       }
       window.addEventListener("keydown", onKey);
       return () => window.removeEventListener("keydown", onKey);
-    }, [desktop, goNext, goPrev, toggleHeart, flagCurrent, vrMode, sheet, quick, items, refreshFeed, onSearch, onBack]);
+    }, [desktop, goNext, goPrev, toggleHeart, flagCurrent, vrMode, sheet, quick, items, refreshFeed, onSearch, onBack,
+      fullscreen, exitFullscreen]);
 
     /* ---- scrubber sprites -----------------------------------------
        Stash already renders a sprite sheet plus a WebVTT index for scenes with
@@ -4177,8 +4376,6 @@ void main() {
       lastTimePush.current = now;
       setTime(video.currentTime);
       if (!duration && video.duration) setDuration(video.duration);
-      // real frames only: timeupdate never fires before the clip is rolling
-      if (!revealed && video.currentTime > 0.05 && video.readyState >= 2) setRevealed(true);
     };
 
     /* ---- render ---------------------------------------------------- */
@@ -4353,7 +4550,8 @@ void main() {
 
     return h(
       "div",
-      { className: "stash-tok stk-embedded" + (hud && !clearDisplay ? "" : " stk-hud-hidden") + (clearDisplay ? " stk-clear" : "") },
+      { className: "stash-tok stk-embedded" + (hud && !clearDisplay ? "" : " stk-hud-hidden") +
+        (clearDisplay ? " stk-clear" : "") + (fullscreen ? " stk-feed-fullscreen" : "") },
       h(
         "div",
         {
@@ -4402,34 +4600,36 @@ void main() {
           },
           (desktop && !sfw ? [index - 1, index, index + 1] : [index - 1, index, index + 1, index + 2])
             .filter((at) => at >= 0 && items[at])
-            .map((at) => {
+            .flatMap((at) => {
               const entry = items[at];
               const active = at === index;
               const screenshot = rel(entry.scene.paths && entry.scene.paths.screenshot);
-              if (sfw || (desktop && !active)) {
-                // Desktop neighbours use stills so they never load or seek a video.
-                return h("img", {
-                  key: entry.key,
-                  className: "stk-frame" + (active ? " stk-active" : ""),
-                  src: screenshot || undefined,
-                  alt: "",
-                  draggable: false,
-                  style: {
-                    position: "absolute",
-                    left: 0,
-                    right: 0,
-                    top: (at - index) * 100 + "%",
-                    width: "100%",
-                    height: "100%",
-                    objectFit: "contain",
-                    opacity: 1,
-                    pointerEvents: active ? "auto" : "none",
-                    zIndex: active ? 2 : 1,
-                  },
-                });
-              }
+              const file = entry.scene.files && entry.scene.files[0];
+              const dimensions = decodedSize && decodedSize.key === entry.key ? decodedSize : file;
+              const fit = fullscreen && fullscreenFit !== "auto"
+                ? fullscreenFit
+                : useSmartFit ? feedFrameFit(dimensions?.width, dimensions?.height, stageAspect) : "contain";
+              const still = (sfw || (frameHandoff && screenshot)) && h("img", {
+                key: entry.key + ":still",
+                className: "stk-frame" + (frameHandoff ? " stk-handoff-still" : active ? " stk-active" : ""),
+                src: screenshot || undefined,
+                alt: "",
+                draggable: false,
+                style: {
+                  position: "absolute",
+                  left: 0,
+                  right: 0,
+                  top: (at - index) * 100 + "%",
+                  width: "100%",
+                  height: "100%",
+                  objectFit: fit,
+                  pointerEvents: "none",
+                  zIndex: active ? 3 : 1,
+                },
+              });
+              if (sfw || (frameHandoff && !active)) return still ? [still] : [];
               const source = streamSource(entry.scene);
-              return h("video", {
+              const video = h("video", {
                 key: entry.key,
                 ref: active
                   ? videoRef
@@ -4440,7 +4640,7 @@ void main() {
                 src: active && streamFallback ? source.signed : source.plain,
                 poster: desktop && !spec.single ? screenshot || undefined : undefined,
                 playsInline: true,
-                autoPlay: active,
+                autoPlay: active && !frameHandoff,
                 muted: active ? muted : true,
                 /* four simultaneous streams is what makes a big desktop pane stutter:
                    neighbours only need a header to prewarm their ref */
@@ -4456,7 +4656,8 @@ void main() {
                 onPause: active ? () => setPlaying(false) : undefined,
                 onEnded: active ? (autoScroll ? goNext : loopCurrent) : undefined,
                 onError: active
-                  ? () => {
+                  ? (event) => {
+                      event.currentTarget.classList.remove("stk-frame-ready");
                       setPlaying(false);
                       if (!streamFallback) {
                         setStreamFallback(true);
@@ -4474,12 +4675,13 @@ void main() {
                   top: (at - index) * 100 + "%",
                   width: "100%",
                   height: "100%",
-                  objectFit: desktop && !spec.single ? fitMode : "contain",
+                  objectFit: fit,
                   opacity: 1,
                   pointerEvents: active ? "auto" : "none",
                   zIndex: active ? 2 : 1,
                 },
               });
+              return still ? [video, still] : [video];
             }),
         ),
 
@@ -4797,9 +4999,30 @@ void main() {
             )
         ),
 
-        h(
+        fullscreen && h(
+          "div",
+          { className: "stk-fullscreen-controls", role: "group", "aria-label": "Fullscreen playback" },
+          !spec.single && h("button", {
+            type: "button", className: "stk-top-btn", "aria-label": "Previous clip", disabled: index === 0,
+            onClick: () => slideStep(-1),
+          }, h(Icon, { name: "chevronUp", size: 19 })),
+          !spec.single && h("button", {
+            type: "button", className: "stk-top-btn", "aria-label": "Next clip", disabled: items.length < 2,
+            onClick: () => slideStep(1),
+          }, h(Icon, { name: "chevronDown", size: 19 })),
+          h("div", { className: "stk-fullscreen-fit", role: "group", "aria-label": "Framing" },
+            [["auto", "Auto"], ["contain", "Fit"], ["cover", "Fill"]].map(([mode, label]) =>
+              h("button", { key: mode, type: "button", "aria-pressed": fullscreenFit === mode,
+                onClick: () => setFullscreenFit(mode) }, label))
+          ),
+          h("button", { type: "button", className: "stk-top-btn", "aria-label": "Exit full screen",
+            onClick: exitFullscreen }, h(Icon, { name: "fullscreenExit", size: 19 }))
+        ),
+        !fullscreen && h(
           "div",
           { className: "stk-top stk-top-right" },
+          !duo && h("button", { type: "button", className: "stk-top-btn", title: "Full screen", "aria-label": "Full screen",
+            onClick: enterFullscreen }, h(Icon, { name: "fullscreen", size: 18 })),
           h(
             "button",
             {
@@ -6692,6 +6915,7 @@ void main() {
     const [photoAction, setPhotoAction] = useState(null);
     const photoTileProps = usePhotoHold(setPhotoAction);
     const [menuOpen, setMenuOpen] = useState(false);
+    const profileMenuRef = useDialog(menuOpen, () => setMenuOpen(false));
     const [dupes, setDupes] = useState(null);
     /* ids of the duplicate tags, resolved once; empty list = no exclusion */
     const [dupeTags, setDupeTags] = useState([]);
@@ -7242,7 +7466,6 @@ void main() {
             {
               key,
               className: "stk-pop-item stk-pop-row",
-              role: "menuitem",
               onClick: (event) => {
                 event.stopPropagation();
                 setMenuOpen(false);
@@ -7256,12 +7479,13 @@ void main() {
           detail ? h("small", null, detail) : null
         );
       return h(
-        React.Fragment,
+        Portal,
         null,
-        h("div", { className: "stk-pop-backdrop", onClick: () => setMenuOpen(false) }),
+        h("div", { className: "stk-profile-menu-backdrop", onClick: () => setMenuOpen(false) }),
         h(
           "div",
-          { className: "stk-pop stk-menu-pop", role: "menu", onClick: (event) => event.stopPropagation() },
+          { className: "stk-pop stk-menu-pop", ref: profileMenuRef, role: "dialog", "aria-modal": "true",
+            "aria-label": "Profile actions", onClick: (event) => event.stopPropagation() },
           stashLink &&
             row("stash", "external", "View on Stash", null, () => window.open(stashLink, "_blank", "noopener")),
           !isFolder &&
@@ -7356,20 +7580,7 @@ void main() {
             "div",
             { className: "stk-xname" },
             h("span", { className: "stk-xname-text" }, performer.name),
-            favoritesOnly ? h("span", { className: "stk-fav-chip" }, "Favorites") : null,
-            /* favourite is one tap on the heart beside the name: on, then off */
-            h(
-              "button",
-              {
-                type: "button",
-                className: "stk-xfav" + (performer.favorite ? " stk-xfav-on" : ""),
-                title: performer.favorite ? "Remove from favorites" : "Add to favorites",
-                "aria-label": "Favorite",
-                "aria-pressed": performer.favorite ? "true" : "false",
-                onClick: toggleFollow,
-              },
-              h(Icon, { name: "heart", size: 15, filled: !!performer.favorite })
-            )
+            favoritesOnly ? h("span", { className: "stk-fav-chip" }, "Favorites") : null
           ),
           /* one line, never two: "526 scenes, 0 images, 283 markers" -- each count
              still taps through to its own tab */
@@ -7434,12 +7645,23 @@ void main() {
               href: reelHref(),
               target: "_blank",
               rel: "noopener noreferrer",
-              title: "3 seconds from each clip, stitched into one edit",
+              title: "Play highlights from this library",
             },
             h(Icon, { name: "play", size: 14 }),
             "Highlight reel"
           ),
-          /* the ⋯ sits beside the last button, and it is where "View on Stash" lives */
+          h(
+            "button",
+            {
+              type: "button",
+              className: "stk-xfav" + (performer.favorite ? " stk-xfav-on" : ""),
+              title: performer.favorite ? "Remove from favorites" : "Add to favorites",
+              "aria-label": "Favorite",
+              "aria-pressed": performer.favorite ? "true" : "false",
+              onClick: toggleFollow,
+            },
+            h(Icon, { name: "heart", size: 19, filled: !!performer.favorite })
+          ),
           h(
             "div",
             { className: "stk-xmenu stk-xmenu-inline" + (menuOpen ? " stk-xmenu-open" : "") },
@@ -7448,8 +7670,8 @@ void main() {
               {
                 className: "stk-xmore",
                 onClick: () => setMenuOpen(!menuOpen),
-                "aria-label": "More",
-                "aria-haspopup": "menu",
+                "aria-label": "Profile actions",
+                "aria-haspopup": "dialog",
                 "aria-expanded": menuOpen ? "true" : "false",
               },
               h(Icon, { name: "more", size: 22 })
@@ -8076,7 +8298,7 @@ void main() {
                     else setSelected(performer);
                   },
                 },
-                h("span", { className: "stk-circle-photo" }, h(Thumb, { src: rel(performer.image_path), width: 160 })),
+                h("span", { className: "stk-circle-photo" }, h(Thumb, { src: rel(performer.image_path) })),
                 h("span", { className: "stk-circle-name" }, performer.name)
               )
             )
@@ -10079,7 +10301,81 @@ function TagsPage({ onPick, onMarkers, onBack }) {
 
   /* Stash renders this panel from its own settings page too, where the app's
      context is not mounted: every field has to survive being handed nothing. */
-  function SettingsPanel({ cfg = {}, feeds = [], onEdit, pin, onSetPin, onClearPin, sfw, onToggleSfw, prefs = {}, setPref = () => {} }) {
+  function PlaybackSettings({ prefs, setPref, onOpenHistory, sfw }) {
+    const [history, setHistory] = useState(() => readLocalList(WATCH_HISTORY_KEY));
+    const [upload, setUpload] = useState("");
+    const [sending, setSending] = useState(false);
+
+    async function sendReport() {
+      setSending(true);
+      setUpload("");
+      try {
+        const url = new URL(prefs.diagnosticsUrl.trim(), window.location.origin);
+        if (!["https:", "http:"].includes(url.protocol) || url.username || url.password) {
+          throw new Error("Enter an HTTP or HTTPS endpoint without a username or password.");
+        }
+        const response = await fetch(url.href, {
+          method: "POST",
+          credentials: "omit",
+          redirect: "error",
+          headers: { "Content-Type": "application/json" },
+          body: playbackReport(),
+        });
+        setUpload(response.ok ? "Report sent." : "Server returned HTTP " + response.status + ".");
+      } catch (error) {
+        setUpload(error instanceof TypeError
+          ? "Upload blocked or the server is unreachable. Download the report to share it manually."
+          : error.message);
+      } finally {
+        setSending(false);
+      }
+    }
+
+    return h(React.Fragment, null,
+      h("details", { className: "stk-settings-details" },
+        h("summary", null, "Watch history", h("span", null, history.length + " / 100")),
+        history.length ? h(React.Fragment, null,
+          h("ol", { className: "stk-watch-history" }, history.map((row) =>
+            h("li", { key: row.id },
+              h("button", { type: "button", className: "stk-marker-row", onClick: () => onOpenHistory(row) },
+                h(Icon, { name: "play", size: 14 }),
+                sfw ? "Scene " + row.id : row.title,
+                h("span", null, fmtTime(row.time))
+              )
+            )
+          )),
+          h("button", { className: "stk-btn", type: "button", onClick: () => {
+            writeLocalList(WATCH_HISTORY_KEY, []);
+            setHistory([]);
+          } }, "Clear history")
+        ) : h("p", { className: "stk-sub" }, "Played videos will appear here.")
+      ),
+      h("details", { className: "stk-settings-details" },
+        h("summary", null, "Playback diagnostics"),
+        h(PrefRow, { title: "Record playback events", hint: "Frame counts, timing and media errors are kept on this device. Reports omit scene titles, IDs and media URLs." },
+          h(PrefToggle, { label: "Record playback events", on: prefs.playbackDiagnostics !== false,
+            onChange: (value) => setPref("playbackDiagnostics", value) })
+        ),
+        h("label", { className: "stk-diagnostics-endpoint" }, "Report endpoint",
+          h("input", { type: "text", inputMode: "url", placeholder: "https://your-server.example/reports",
+            value: prefs.diagnosticsUrl || "", onChange: (event) => setPref("diagnosticsUrl", event.target.value) })
+        ),
+        h("div", { className: "stk-diagnostics-actions" },
+          h("button", { className: "stk-btn", type: "button", onClick: downloadPlaybackReport }, "Download JSON"),
+          h("button", { className: "stk-btn", type: "button", disabled: sending || !prefs.diagnosticsUrl?.trim(),
+            onClick: sendReport }, sending ? "Sending…" : "Send report"),
+          h("button", { className: "stk-btn", type: "button", onClick: () => {
+            writeLocalList(PLAYBACK_LOG_KEY, []);
+            setUpload("Local log cleared.");
+          } }, "Clear log")
+        ),
+        upload && h("p", { className: "stk-sub", role: "status" }, upload)
+      )
+    );
+  }
+
+  function SettingsPanel({ cfg = {}, feeds = [], onEdit, pin, onSetPin, onClearPin, sfw, onToggleSfw,
+    prefs = {}, setPref = () => {}, onOpenHistory }) {
     const [draft, setDraft] = useState("");
     const [saved, setSaved] = useState(false);
 
@@ -10107,6 +10403,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
         ),
         h("span", { className: "stk-switch" }, h("span", { className: "stk-knob" }))
       ),
+      h(PlaybackSettings, { prefs, setPref, onOpenHistory, sfw }),
       h("h4", null, "Feed"),
       h(
         PrefRow,
@@ -10637,6 +10934,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
     const [tab, setTab] = useState("home");
     /* /clip/<id>: one scene on its own page, no bottom nav, back button only */
     const [clipScene, setClipScene] = useState(null);
+    const historyClipRef = useRef(null);
     const [feeds, setFeeds] = useState(() => loadFeeds());
     const [activeFeed, setActiveFeed] = useState(defaultFeed());
     const [duo, setDuo] = useState(false);
@@ -10705,12 +11003,15 @@ function TagsPage({ onPick, onMarkers, onBack }) {
       const live = liveRef.current || {};
       const feedNow = live.activeFeed || null;
       /* every route but /clip/<id> leaves the single-scene page behind */
-      setClipScene((cur) => (rest.indexOf("clip/") === 0 ? cur : null));
+      if (!rest.startsWith("clip/")) {
+        setClipScene(null);
+        historyClipRef.current = null;
+      }
       if (!rest) {
         setTab("home");
         setPerformerFilter(null);
         /* keep the feed you were on; only a second tap on Feed asks for new clips */
-        setActiveFeed((cur) => cur || defaultFeed());
+        setActiveFeed((cur) => cur && !scopedFeed(cur) ? cur : defaultFeed());
         return;
       }
       if (rest === "favorites") {
@@ -11031,11 +11332,13 @@ function TagsPage({ onPick, onMarkers, onBack }) {
     }, []);
 
     async function resolvePerformerSlug(name, sceneId, asProfile) {
+      const route = currentRoute();
       try {
         const data = await gql(
           `query StashTokFindByName($q: String) { findPerformers(filter: { q: $q, per_page: 20 }) { performers { id name image_path scene_count } } }`,
           { q: name }
         );
+        if (currentRoute() !== route) return;
         const list = (data.findPerformers && data.findPerformers.performers) || [];
         const exact = list.find((row) => row.name.toLowerCase() === name.toLowerCase()) || list[0];
         if (exact) {
@@ -11046,6 +11349,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
           setTab("performers");
         }
       } catch (err) {
+        if (currentRoute() !== route) return;
         window.__stkRouteErr = String((err && (err.message || err)) || "unknown");
         setTab("performers");
       }
@@ -11111,7 +11415,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
     }
 
     /* where a profile was opened from, so its back chevron returns there */
-    const profileOriginRef = useRef("performers");
+    const profileOriginRef = useRef({ id: null, tab: "performers" });
 
     /** the profile page: /performers/<name> */
     function openFavoritePerformer(performer) {
@@ -11127,27 +11431,38 @@ function TagsPage({ onPick, onMarkers, onBack }) {
       /* liveRef, not the closed-over tab: applyRoute holds the first render's
          openProfile, where tab was still "home", so back went to the feed */
       const now = (liveRef.current && liveRef.current.tab) || tab;
-      /* a normal open always shows everything again */
+      const id = String(performer.id);
+      if (push !== false || profileOriginRef.current.id !== id) {
+        const from = push === false ? "performers" : now;
+        profileOriginRef.current = {
+          id,
+          tab: ["discover", "performers", "favorites"].includes(from) ? from : "home",
+        };
+      }
       setFavOnlyProfile(!!favoriteOnly);
-      profileOriginRef.current = now === "discover" || now === "performers" || now === "favorites" ? now : "home";
       setPerformersOpen(false);
       setPerformerFilter(performer);
       setTagFilter(null);
       setTab("performers");
-      if (push !== false) goTo("performers/" + encodeURIComponent(performer.name));
+      if (push !== false) {
+        const route = "performers/" + encodeURIComponent(performer.name);
+        if (route !== currentRoute()) {
+          routeClaimRef.current = route;
+          goTo(route);
+        }
+      }
     }
 
     /** back out of a profile: to the index page it came from, or to the feed */
     function closeProfile() {
       setPerformerFilter(null);
-      const back = profileOriginRef.current;
-      if (back === "discover" || back === "performers" || back === "favorites") {
-        setTab(back);
-        goTo(back);
-        return;
+      const back = profileOriginRef.current.tab;
+      profileOriginRef.current = { id: null, tab: "performers" };
+      setTab(back);
+      if (back === "home") {
+        setActiveFeed((cur) => cur && !scopedFeed(cur) ? cur : defaultFeed());
       }
-      setTab("home");
-      goTo("");
+      goTo(back === "home" ? "" : back, true);
     }
 
     /** the clip feed for a performer: /performer/<name>/<sceneId> */
@@ -11490,6 +11805,11 @@ function TagsPage({ onPick, onMarkers, onBack }) {
           setPref,
           feeds,
           onEdit: (spec) => { setBuilder({ spec }); setTab("home"); goTo(""); },
+          onOpenHistory: (row) => {
+            if (!/^\d+$/.test(row.id)) return;
+            historyClipRef.current = row;
+            goTo("clip/" + row.id);
+          },
           pin,
           onSetPin: savePin,
           onClearPin: () => savePin(""),
@@ -11515,6 +11835,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
           name: "Scene",
           type: "scene",
           sceneId: clipScene,
+          startAt: historyClipRef.current?.id === clipScene ? historyClipRef.current.time : undefined,
           single: true,
           sort: "date",
           origin: { kind: "clip", sceneId: clipScene },
