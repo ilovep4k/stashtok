@@ -8,6 +8,7 @@ Writes dist/stashTok.zip and index.yml (with a real sha256), so the repo can be
 added in Stash via Settings -> Plugins -> Available Plugins -> Add Source.
 """
 import argparse
+import datetime
 import hashlib
 import pathlib
 import zipfile
@@ -43,7 +44,7 @@ def main() -> None:
   metadata:
     description: Full-screen vertical feed for scenes and markers with swipe, pinch zoom and a marker scrub bar.
   version: {version}
-  date: 2026-11-13 00:00:00
+  date: {datetime.date.today().isoformat()} 00:00:00
   path: {args.base_url.rstrip('/')}/stashTok.zip
   sha256: {digest}
 """
