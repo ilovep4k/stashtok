@@ -2084,7 +2084,10 @@ void main() {
       const canvas = canvasRef.current;
       const video = videoRef.current;
       if (!canvas) return undefined;
-      const gl = canvas.getContext("webgl", { alpha: false, antialias: false });
+      /* webgl2 first: it allows mipmaps on a non-power-of-two texture, which is
+         what the fisheye shrink needs to stop shimmering at the edges */
+      const gl = canvas.getContext("webgl2", { alpha: false, antialias: false }) ||
+        canvas.getContext("webgl", { alpha: false, antialias: false });
       if (!gl) return undefined;
       const shader = (type, src) => {
         const sh = gl.createShader(type);
@@ -2109,9 +2112,39 @@ void main() {
       gl.vertexAttribPointer(pos, 2, gl.FLOAT, false, 0, 0);
       const tex = gl.createTexture();
       gl.bindTexture(gl.TEXTURE_2D, tex);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      /* Mipmaps, not plain LINEAR: the shader reads a 3840-wide fisheye eye into a
+         ~400pt view, so most of the frame is minified 4-10x and bilinear sampling
+         alone aliases into the crawling jaggies. webgl1 only permits mipmaps on a
+         power-of-two texture, so texSize() rounds for that case. */
+      const isGL2 = typeof gl.texStorage2D === "function";
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      const maxTex = Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE) || 4096, 4096);
+      /* if the driver refuses mipmaps (incomplete texture = a black canvas) fall
+         back to plain bilinear rather than losing the picture entirely */
+      let mipOk = true;
+      function mip() {
+        if (!mipOk) return;
+        try {
+          gl.generateMipmap(gl.TEXTURE_2D);
+          if (gl.getError() !== gl.NO_ERROR) throw new Error("mipmap");
+        } catch (err) {
+          mipOk = false;
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        }
+      }
+      /* Target the canvas at device resolution, a bit above it because the fisheye
+         stretch magnifies the centre. Never below 1024 (a 4K source deserves more
+         than the screen) and never above the source or the GPU limit. */
+      function texSize(target, vw, vh) {
+        const want = Math.max(1024, Math.min(target, maxTex, vw));
+        let w = want;
+        if (!isGL2) w = Math.pow(2, Math.floor(Math.log2(want)));
+        const h = Math.max(2, isGL2 ? Math.round((w * vh) / vw) : Math.pow(2, Math.round(Math.log2((w * vh) / vw))));
+        return { w, h };
+      }
       const u = {
         tex: gl.getUniformLocation(prog, "tex"),
         yaw: gl.getUniformLocation(prog, "yaw"),
@@ -2121,8 +2154,8 @@ void main() {
         kind: gl.getUniformLocation(prog, "kind"),
       };
       const scratch = document.createElement("canvas");
-      scratch.width = 2048;
-      scratch.height = 1024;
+      scratch.width = 1024;
+      scratch.height = 512;
       const sctx = scratch.getContext("2d");
 
       /* Safari will not decode an 8K HEVC master (and refuses to sample some
@@ -2175,9 +2208,17 @@ void main() {
         raf = requestAnimationFrame(draw);
         if (now - last < 16) return;
         last = now;
-        const dpr = Math.min(2, window.devicePixelRatio || 1);
-        const w = Math.max(320, Math.round((canvas.clientWidth || 640) * dpr));
-        const h = Math.max(180, Math.round((canvas.clientHeight || 360) * dpr));
+        /* Render at the device's real pixel count: at dpr 3 a 2x cap left the
+           canvas a third of the screen's resolution and the browser upscaled it,
+           which is half of why the image looked aliased before the shader even
+           ran. Bounded so a huge desktop pane cannot allocate an absurd buffer. */
+        let dpr = Math.min(3, window.devicePixelRatio || 1);
+        const cssW = canvas.clientWidth || 640;
+        const cssH = canvas.clientHeight || 360;
+        const BUDGET = 4200000; /* ~4.2 MP */
+        if (cssW * cssH * dpr * dpr > BUDGET) dpr = Math.sqrt(BUDGET / (cssW * cssH));
+        const w = Math.max(320, Math.round(cssW * dpr));
+        const h = Math.max(180, Math.round(cssH * dpr));
         if (canvas.width !== w || canvas.height !== h) {
           canvas.width = w;
           canvas.height = h;
@@ -2199,8 +2240,11 @@ void main() {
         lastFrame = source.currentTime;
         const vw = source.videoWidth || 1920;
         const vh = source.videoHeight || 960;
-        const texW = Math.max(720, Math.min(2048, Math.round(w * 1.15), vw));
-        const texH = Math.max(2, Math.round((texW * vh) / Math.max(1, vw)));
+        /* 2048 was the cap, and on a phone w*1.15 landed near 950: a 4K fisheye
+           squeezed into a sub-screen texture. Size from the canvas instead. */
+        const size = texSize(Math.round(Math.max(canvas.width, 1024) * 1.5), vw, vh);
+        const texW = size.w;
+        const texH = size.h;
         const master = videoRef.current;
         if (source === fallback && master && master.currentTime > 1 && fallback.duration > 2) {
           /* keep the stand-in roughly where the timeline says we are */
@@ -2227,11 +2271,12 @@ void main() {
             return;
           }
           uploadIdle = false;
-          createImageBitmap(source, { resizeWidth: texW, resizeHeight: texH, resizeQuality: "low" })
+          createImageBitmap(source, { resizeWidth: texW, resizeHeight: texH, resizeQuality: "medium" })
             .then((bitmap) => {
               gl.bindTexture(gl.TEXTURE_2D, tex);
               gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bitmap);
               bitmap.close();
+              mip();
               uploadIdle = true;
               paint();
             })
@@ -2257,6 +2302,7 @@ void main() {
           }
           gl.bindTexture(gl.TEXTURE_2D, tex);
           gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, scratch);
+          mip();
         }
       };
       raf = requestAnimationFrame(draw);
@@ -4497,7 +4543,29 @@ void main() {
            which is hold-to-fast-forward. */
         goChannel(1);
       }
-      if (g.mode === "pan") poke();
+      if (g.mode === "pan") {
+        const stageEl = stageRef.current;
+        const height = stageEl ? stageEl.getBoundingClientRect().height : 0;
+        const ox = g.overX || 0;
+        const oy = g.overY || 0;
+        const vertical = Math.abs(oy) >= Math.abs(ox);
+        window.__stkPan = { oy, ox, vertical, height, index, items: items.length };
+        if (vertical && Math.abs(oy) > SWIPE_PX && height) {
+          /* the picture was already at its edge and the finger kept going: the
+             leftover travel is the swipe, so paging never needs a second gesture */
+          const direction = oy < 0 ? 1 : -1;
+          if (direction < 0 && index === 0) refreshFeed();
+          else slideStep(direction);
+        } else if (!vertical && -ox > CHANNEL_PX) {
+          /* leftward past the edge opens the channel carousel */
+          goChannel(1);
+        } else {
+          /* still inside the picture, or a pull that never got far enough */
+          clampPan();
+          applyTransform(true);
+        }
+        poke();
+      }
       poke();
     }
 
