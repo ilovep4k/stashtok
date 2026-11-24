@@ -31,6 +31,7 @@ never logged, returned, or put in a URL the browser can see.
 """
 import hashlib
 import json
+import math
 import os
 import random
 import subprocess
@@ -44,7 +45,6 @@ from urllib.parse import parse_qs, urlparse
 
 PORT = int(os.environ.get("REEL_PORT", "19000"))
 CACHE = os.path.expanduser(os.environ.get("REEL_CACHE", "~/.cache/stashtok-reels"))
-SEG = max(1.0, float(os.environ.get("REEL_SEC", "3")))
 MAX_WINDOWS = 60
 MAX_TOTAL_SECONDS = 200
 # A scene is only worth putting in the playlist if the browser can decode the
@@ -75,6 +75,9 @@ JOBS = {}
 KEYS = {}
 PLANS = {}
 LOCK = threading.Lock()
+# one lock per transcoded window: two players asking for the same cut wait for
+# the first encode instead of running ffmpeg twice
+WINDOW_LOCKS = {}
 
 
 def log(*args):
@@ -115,258 +118,457 @@ def gql(port, query, variables=None):
     return payload["data"]
 
 
-PLAYER_HTML = """<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Highlight reel</title>
-<style>
-  :root { color-scheme: dark; }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
-  body { color: #fff; font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-         -webkit-user-select: none; user-select: none; }
-  #stage { position: fixed; inset: 0; background: #000; }
-  video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;
-          background: #000; opacity: 0; z-index: 1; transition: opacity .18s linear; }
-  video.on { opacity: 1; z-index: 2; }
-  video.cover { object-fit: cover; }
-  #hud { position: fixed; inset: 0; z-index: 5; pointer-events: none;
-         display: flex; flex-direction: column; justify-content: space-between;
-         transition: opacity .25s ease; }
-  #hud.away { opacity: 0; }
-  header { display: flex; align-items: center; gap: 10px; padding: calc(10px + env(safe-area-inset-top)) 14px 10px;
-           font-size: 12px; letter-spacing: .07em; text-transform: uppercase;
-           color: rgba(255,255,255,.72);
-           background: linear-gradient(rgba(0,0,0,.55), transparent); }
-  header b { font-size: 13px; letter-spacing: 0; text-transform: none; color: #fff; font-weight: 600;
-             overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  header .sp { flex: 1; }
-  header a { pointer-events: auto; color: inherit; text-decoration: none; border: 1px solid rgba(255,255,255,.22);
-             border-radius: 999px; padding: 5px 11px; }
-  footer { padding: 10px 14px calc(12px + env(safe-area-inset-bottom));
-           background: linear-gradient(transparent, rgba(0,0,0,.6)); }
-  #bar { height: 3px; border-radius: 999px; background: rgba(255,255,255,.16); overflow: hidden; }
-  #fill { display: block; height: 100%; width: 0; background: #ff2d55; }
-  #note { margin-top: 8px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
-          color: rgba(255,255,255,.55); display: flex; gap: 12px; }
-  #note span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #note span:last-child { margin-left: auto; white-space: nowrap; }
-  #start { position: fixed; inset: 0; z-index: 9; display: flex; align-items: center; justify-content: center;
-           flex-direction: column; gap: 10px; background: rgba(0,0,0,.55); cursor: pointer; }
-  #start.gone { display: none; }
-  #start b { font-size: 15px; font-weight: 600; }
-  #start i { font-style: normal; font-size: 12px; color: rgba(255,255,255,.6); }
-  #err { position: fixed; left: 0; right: 0; bottom: 40%; z-index: 10; text-align: center;
-         color: #ff8098; font-size: 13px; padding: 0 24px; display: none; }
-</style></head>
-<body>
-<div id="stage"><video id="a" playsinline preload="auto"></video><video id="b" playsinline preload="auto"></video></div>
-<div id="hud">
-  <header><b id="name">highlight reel</b><span class="sp"></span>
-    <span id="count"></span><a id="stash" target="_blank" rel="noopener">stash</a></header>
-  <footer>
-    <div id="bar"><i id="fill"></i></div>
-    <div id="note"><span id="what">loading&hellip;</span><span id="clock"></span></div>
-  </footer>
-</div>
-<div id="start"><b>Tap to play</b><i id="startsub"></i></div>
-<div id="err"></div>
-<script>
-(() => {
-  const q = new URLSearchParams(location.search);
-  const vids = [document.getElementById("a"), document.getElementById("b")];
-  const hud = document.getElementById("hud"), start = document.getElementById("start");
-  const nameEl = document.getElementById("name"), countEl = document.getElementById("count");
-  const whatEl = document.getElementById("what"), clockEl = document.getElementById("clock");
-  const fill = document.getElementById("fill"), stashEl = document.getElementById("stash");
-  const errEl = document.getElementById("err");
-  let wins = [], idx = 0, active = vids[0], spare = vids[1], span = 1;
-  const failed = new Set();
-  let playing = false, switched = 0, hideTimer = 0;
-  let stashBase = q.get("stash") || "";
-  const mmss = (t) => { t = Math.max(0, t); const m = Math.floor(t / 60), s = Math.floor(t % 60);
-    return m + ":" + String(s).padStart(2, "0"); };
+PLAYER_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "player.html")
 
-  function reveal() {
-    hud.classList.remove("away");
-    clearTimeout(hideTimer);
-    if (playing) hideTimer = setTimeout(() => hud.classList.add("away"), 3200);
-  }
 
-  function fit(el) {
-    if (!el.videoWidth || !el.videoHeight) return;
-    const a = el.videoWidth / el.videoHeight, b = innerWidth / innerHeight;
-    el.classList.toggle("cover", a / b > 0.8 && a / b < 1.25);
-  }
-
-  vids.forEach((el) => {
-    el.addEventListener("loadedmetadata", () => {
-      const i = +el.dataset.idx, w = wins[i];
-      if (!w) return;
-      fit(el);
-      const dur = el.duration || (w.at + w.dur + 1);
-      const at = Math.max(0, Math.min(w.at, dur - 0.45));
-      try { el.currentTime = at; } catch (e) {}
-      if (el === active && i === idx && playing) el.play().catch(() => {});
-    });
-    el.addEventListener("canplay", () => {
-      const i = +el.dataset.idx;
-      if (el === active && playing && i === idx) el.play().catch(() => {});
-    });
-    el.addEventListener("ended", () => { if (el === active) advance(); });
-    el.addEventListener("error", () => {
-      failed.add(+el.dataset.idx);
-      if (el === active) skip(el.dataset.idx, playing ? "cannot load" : "unreadable");
-    });
-  });
-
-  function load(el, i) {
-    if (!wins.length) return;
-    let j = i % wins.length, guard = 0;
-    while (failed.has(j) && guard++ < wins.length) j = (j + 1) % wins.length;
-    const w = wins[j];
-    if (!w || failed.has(j)) return;
-    el.dataset.idx = String(j);
-    el.src = w.src;
-    if (el === active) switched = Date.now();
-    el.load();
-  }
-
-  function hudFor() {
-    const w = wins[idx];
-    if (!w) return;
-    countEl.textContent = (idx + 1) + " / " + wins.length;
-    whatEl.textContent = w.title || ("scene " + w.scene);
-    if (stashBase) { stashEl.href = stashBase + "/scenes/" + w.scene; stashEl.style.display = ""; }
-    else stashEl.style.display = "none";
-  }
-
-  function advance() {
-    if (!wins.length || failed.size >= wins.length) return;
-    /* the spare was prefetched with the next good window; if it died or never
-       loaded, replace it before the swap rather than showing a dead frame */
-    let target = +spare.dataset.idx;
-    if (!Number.isFinite(target) || failed.has(target)) { load(spare, idx + 1); target = +spare.dataset.idx; }
-    if (!Number.isFinite(target) || failed.has(target)) return;
-    const old = active, next = spare;
-    active = next; spare = old;
-    next.classList.add("on"); old.classList.remove("on");
-    idx = target;
-    switched = Date.now();
-    if (playing) next.play().catch(() => {});
-    hudFor(); reveal();
-    setTimeout(() => {
-      old.pause(); old.removeAttribute("src");
-      try { old.load(); } catch (e) {}
-      load(old, idx + 1);
-    }, 240);
-  }
-
-  function skip(i, why) {
-    if (wins.length < 2) return;
-    if (why.length && playing) {
-      errEl.textContent = "skipping a clip (" + why + ")";
-      errEl.style.display = "block";
-      setTimeout(() => { errEl.style.display = "none"; }, 1400);
-    }
-    if (String(i) === String(idx)) advance();
-  }
-
-  function tick() {
-    requestAnimationFrame(tick);
-    const w = wins[idx];
-    if (!w) return;
-    const t = active.currentTime;
-    const before = wins.slice(0, idx).reduce((n, x) => n + x.dur, 0);
-    const played = before + Math.max(0, Math.min(w.dur, t - w.at));
-    fill.style.width = (100 * Math.min(1, played / span)) + "%";
-    clockEl.textContent = mmss(played) + " / " + mmss(span);
-    if (t >= w.at + w.dur - 0.04) { advance(); return; }
-    /* readyState 1 means the metadata is in and the seek worked: it is just
-       buffering a 4K original, which is the whole point of this player. Only a
-       clip that never even parsed is worth skipping. */
-    if (switched && Date.now() - switched > 20000 && active.readyState === 0) {
-      switched = 0; skip(idx, playing ? "slow to start" : "");
-    }
-  }
-
-  function toggle() {
-    if (active.paused) { active.play().then(() => { playing = true; reveal(); }).catch(() => {}); }
-    else { active.pause(); playing = false; hud.classList.remove("away"); clearTimeout(hideTimer); }
-  }
-
-  addEventListener("keydown", (e) => {
-    if (!start.classList.contains("gone")) return;
-    if (e.key === " ") { e.preventDefault(); toggle(); }
-    else if (e.key === "ArrowRight" || e.key === "j") advance();
-    else if (e.key === "ArrowLeft") { idx = (idx + wins.length - 2) % wins.length; advance(); }
-    else if (e.key === "m") vids.forEach((v) => { v.muted = !v.muted; });
-  });
-  addEventListener("click", (e) => {
-    if (e.target.closest("a") || !start.classList.contains("gone")) return;
-    toggle();
-  });
-  addEventListener("mousemove", reveal);
-  addEventListener("resize", () => vids.forEach(fit));
-
-  (async () => {
-    try {
-      const res = await fetch("/plan?" + q.toString(), { cache: "no-store" });
-      const plan = await res.json();
-      if (!res.ok) throw new Error(plan.error || "playlist failed");
-      wins = plan.windows || [];
-      if (!wins.length) throw new Error("no clip in this library can be played as-is");
-      span = wins.reduce((n, w) => n + w.dur, 0) || 1;
-      // the plan carries the instance's loopback url; the browser needs its own
-      // idea of the same host, on the port the plugin passed in
-      stashBase = location.protocol + "//" + location.hostname + ":" + (q.get("port") || "9998");
-      nameEl.textContent = plan.name || ("performer " + plan.performerId);
-      const missing = plan.unplayable
-        ? " \\u00b7 " + plan.unplayable + " left out (would need a transcode)" : "";
-      document.getElementById("startsub").textContent =
-        wins.length + " clips \\u00b7 " + Math.round(span) + "s, replayed from the originals" + missing;
-      load(active, 0); load(spare, 1);
-      hudFor();
-      start.addEventListener("click", (e) => {
-        /* this same tap bubbles to the window listener, which would read
-           active.paused === false and pause the clip it just started */
-        e.stopPropagation();
-        start.classList.add("gone");
-        playing = true; reveal();
-        active.play().catch((err) => { if (err.name !== "AbortError") playing = false; });
-      }, { once: true });
-      requestAnimationFrame(tick);
-    } catch (err) {
-      errEl.textContent = "failed: " + err.message;
-      errEl.style.display = "block";
-      start.classList.add("gone");
-    }
-  })();
-})();
-</script>
-</body></html>"""
+def player_html():
+    """The player page lives next to this file so it can be edited without
+    touching the server. The fallback only exists so a missing file still
+    answers with something readable."""
+    try:
+        with open(PLAYER_FILE, encoding="utf-8") as fh:
+            return fh.read()
+    except OSError:
+        return ("<!doctype html><title>Highlight reel</title>"
+                "<p style=\"font:14px sans-serif;color:#ccc;background:#000;padding:20px\">"
+                "player.html is missing next to reel.py</p>")
 
 REEL_QUERY = """
-query ReelScenes($id: ID!) {
+query ReelScenes($id: ID!, $page: Int!) {
   findScenes(scene_filter: { performers: { value: [$id], modifier: INCLUDES } },
-             filter: { per_page: 400, sort: "date", direction: DESC }) {
+             filter: { per_page: 400, page: $page, sort: "date", direction: DESC }) {
     count
-    scenes { id title files { duration video_codec audio_codec path } }
+    scenes { id title rating100 files { duration video_codec audio_codec path }
+             scene_markers { id title seconds end_seconds primary_tag { id name } } }
   }
 }
 """
 
 
-def windows_for(duration):
-    """How many windows a clip of this length gets. Unchanged from the cut
-    version: one window in a short clip, five in a long one."""
-    if duration < 45:
+TAG_QUERY = """
+query ReelScenes($id: ID!, $page: Int!) {
+  findScenes(scene_filter: { tags: { value: [$id], modifier: INCLUDES } },
+             filter: { per_page: 400, page: $page, sort: "date", direction: DESC }) {
+    count
+    scenes { id title rating100 files { duration video_codec audio_codec path }
+             scene_markers { id title seconds end_seconds primary_tag { id name } } }
+  }
+}
+"""
+
+FOLDER_QUERY = """
+query ReelScenes($p: String!, $page: Int!) {
+  findScenes(scene_filter: { path: { value: $p, modifier: INCLUDES } },
+             filter: { per_page: 400, page: $page, sort: "date", direction: DESC }) {
+    count
+    scenes { id title rating100 files { duration video_codec audio_codec path }
+             scene_markers { id title seconds end_seconds primary_tag { name } } }
+  }
+}
+"""
+
+
+SEARCH_QUERY = """
+query ReelScenes($q: String!, $page: Int!) {
+  findScenes(filter: { q: $q, per_page: 400, page: $page, sort: "date", direction: DESC }) {
+    count
+    scenes { id title rating100 files { duration video_codec audio_codec path }
+             scene_markers { id title seconds end_seconds primary_tag { id name } } }
+  }
+}
+"""
+
+NAME_QUERY = """
+query ReelName($id: ID!) {
+  findPerformer(id: $id) { name }
+}
+"""
+
+TAG_NAME_QUERY = """
+query ReelName($id: ID!) {
+  findTag(id: $id) { name }
+}
+"""
+
+FAVORITE_MUTATION = """
+mutation ReelFavorite($id: ID!, $rating: Int) {
+  sceneUpdate(input: { id: $id, rating100: $rating }) { id rating100 }
+}
+"""
+
+# ---- tuning -------------------------------------------------------------
+# These numbers are the whole character of the reel, so they are settings, not
+# constants: a 3 s window spread over at least 30 s of each clip is the default
+# for a library of long scenes, and a library of short clips wants different
+# numbers. /settings reads and writes them; the player asks for them at boot.
+SETTINGS_PATH = os.path.expanduser("~/.config/stashtok/reel.json")
+SETTINGS = {
+    "seg": 3.0,           # seconds of each window
+    "min_span": 30.0,     # snapshots of one clip sit at least this far apart
+    "max_per_clip": 5,    # windows one clip may contribute per cycle
+    "short_max": 45.0,    # a clip this short is shown once and not spread
+    "keep_behind": 30,    # player buffer, clips behind the cursor
+    "keep_ahead": 12,     # player buffer, clips ahead of the cursor
+    "transcode": 0,       # 0 = never transcode; a clip the browser cannot play is skipped
+    "favorites_first": 1, # 1 = favorited scenes lead the shuffle (all scenes still play)
+}
+
+RUN = 12  # kept only so old clients that read "run" still get a number
+POOL_TTL = 120
+POOLS = {}
+SKIPPED = {}
+CYCLES = {}
+NAMES = {}
+
+
+def load_settings():
+    """Settings live in a file so a tweak survives a restart, and in memory so
+    a change takes effect without one."""
+    try:
+        with open(SETTINGS_PATH) as fh:
+            disk = json.load(fh)
+    except (OSError, ValueError):
+        return
+    for key, value in disk.items():
+        if key in SETTINGS:
+            try:
+                SETTINGS[key] = float(value) if key in ("seg", "min_span", "short_max") else int(value)
+            except (TypeError, ValueError):
+                pass
+
+
+def save_settings():
+    try:
+        os.makedirs(os.path.dirname(SETTINGS_PATH), exist_ok=True)
+        with open(SETTINGS_PATH, "w") as fh:
+            json.dump(SETTINGS, fh, indent=2)
+    except OSError as exc:
+        log("could not save settings", exc)
+
+
+def update_settings(patch):
+    """Apply a partial settings update. Anything that changes how a window is
+    cut invalidates the cached pool and the cached cycle, so both are dropped."""
+    changed = False
+    for key, value in (patch or {}).items():
+        if key not in SETTINGS:
+            continue
+        try:
+            value = float(value) if key in ("seg", "min_span", "short_max") else int(value)
+        except (TypeError, ValueError):
+            continue
+        if key == "seg":
+            value = max(1.0, min(15.0, value))
+        elif key == "min_span":
+            value = max(0.0, min(600.0, value))
+        elif key == "max_per_clip":
+            value = max(1, min(40, value))
+        elif key == "short_max":
+            value = max(0.0, min(600.0, value))
+        elif key in ("keep_behind", "keep_ahead"):
+            value = max(0, min(200, value))
+        elif key in ("transcode", "favorites_first"):
+            value = 1 if value else 0
+        if SETTINGS[key] != value:
+            SETTINGS[key] = value
+            changed = True
+    if changed:
+        with LOCK:
+            POOLS.clear()
+            SKIPPED.clear()
+            CYCLES.clear()
+        save_settings()
+    return changed
+
+
+def seg():
+    return float(SETTINGS["seg"])
+
+
+def name_for(port, kind, ident):
+    """The performer or tag name, for the player's header."""
+    key = (port, kind, ident)
+    with LOCK:
+        if key in NAMES:
+            return NAMES[key]
+    try:
+        if kind in ("search", "folder"):
+            name = ident.rstrip("/").rsplit("/", 1)[-1] or ident
+        else:
+            query = TAG_NAME_QUERY if kind == "tag" else NAME_QUERY
+            data = gql(port, query, {"id": ident})
+            name = ((data.get("findTag") or data.get("findPerformer") or {}).get("name") or "")
+    except Exception:  # noqa: BLE001 - a missing name is cosmetic
+        name = ""
+    with LOCK:
+        NAMES[key] = name
+    return name
+
+
+def scenes_for(port, kind, ident):
+    """Every clip in the pool the browser can play untouched. Cached briefly so
+    a scroll of 20 windows costs one GraphQL call, not twenty."""
+    key = (port, kind, ident)
+    now = time.time()
+    with LOCK:
+        hit = POOLS.get(key)
+    if hit and now - hit[0] < POOL_TTL:
+        return hit[1]
+    if kind == "tag":
+        query, variables = TAG_QUERY, {"id": ident}
+    elif kind == "search":
+        query, variables = SEARCH_QUERY, {"q": ident}
+    elif kind == "folder":
+        query, variables = FOLDER_QUERY, {"p": ident}
+    else:
+        query, variables = REEL_QUERY, {"id": ident}
+    # One page is 400 scenes. A performer with more than that used to be cut
+    # off at the first 400, so the reel only ever knew a slice of the library.
+    # Walk the pages until the count is reached.
+    scenes, total, page = [], None, 1
+    while True:
+        variables = dict(variables, page=page)
+        data = gql(port, query, variables)
+        found = data.get("findScenes") or {}
+        chunk = found.get("scenes") or []
+        total = found.get("count") if total is None else total
+        scenes.extend(chunk)
+        if not chunk or len(chunk) < 400 or (total is not None and len(scenes) >= total):
+            break
+        page += 1
+        if page > 25:            # 10k scenes: stop rather than hammer Stash
+            break
+    pool = []
+    skipped = 0
+    for scene in scenes:
+        f, duration = primary_file(scene)
+        if not f or duration < 3:
+            continue
+        # A file the browser cannot decode is only usable if transcoding is on.
+        # Transcoding is off by default: a clip the browser cannot play as-is is
+        # skipped and counted, so playback stays seamless and nothing is re-encoded.
+        tc = not playable(f.get("path"), f.get("video_codec"), f.get("audio_codec"))
+        if tc and not SETTINGS["transcode"]:
+            skipped += 1
+            continue
+        marks = []
+        for m in scene.get("scene_markers") or []:
+            try:
+                at = float(m.get("seconds") or 0)
+            except (TypeError, ValueError):
+                continue
+            if at <= 5:                      # an opening marker is not a highlight
+                continue
+            try:
+                end = float(m.get("end_seconds") or 0)
+            except (TypeError, ValueError):
+                end = 0.0
+            marks.append({"id": str(m.get("id") or ""), "title": m.get("title") or "",
+                          "at": at, "end": end,
+                          "tag": ((m.get("primary_tag") or {}).get("name") or "")})
+        pool.append({"id": str(scene["id"]), "title": scene.get("title") or "",
+                     "dur": duration, "markers": marks, "tc": tc,
+                     # the heart state travels with the clip, so the player can show
+                     # it before the first tap instead of guessing "not favorited"
+                     "rating": int(scene.get("rating100") or 0)})
+    with LOCK:
+        POOLS[key] = (now, pool)
+        SKIPPED[key] = skipped
+    return pool
+
+
+def pool_seed(pool):
+    return hashlib.blake2b(
+        ("|".join(sorted(s["id"] for s in pool))).encode(), digest_size=8
+    ).hexdigest()
+
+
+def windows_for(duration, width=None):
+    """How many snapshots one clip gets. A clip long enough to spread gets as
+    many as fit at min_span apart, capped; a short clip gets exactly one, which
+    is what keeps it from taking over the reel."""
+    width = seg() if width is None else width
+    if duration <= SETTINGS["short_max"]:
         return 1
-    if duration < 120:
-        return 2
-    if duration < 300:
-        return 3
-    return 5
+    usable = max(0.0, duration - width - 0.4)
+    if usable < SETTINGS["min_span"]:
+        return 1
+    fit = 1 + int(usable // max(1.0, SETTINGS["min_span"]))
+    return max(1, min(int(SETTINGS["max_per_clip"]), fit))
+
+
+def snapshots(scene, width, rng):
+    """Where in one clip its windows start. Markers drive the pick first: a
+    marker is the editor's own in/out range, so the window starts inside it and
+    never runs past end_seconds. Clips with no usable marker fall back to even
+    snapshots across the timeline. Either way the spread is what makes the reel
+    feel like it is jumping around the video rather than stuttering."""
+    dur = float(scene["dur"])
+    high = max(0.0, dur - width - 0.2)
+    low = min(0.4, high)
+    starts = []
+    marks = sorted(scene.get("markers") or [], key=lambda mk: float(mk.get("at") or 0))
+    for pos, mark in enumerate(marks):
+        at = float(mark.get("at") or 0)
+        end = float(mark.get("end") or 0)
+        if at < 1 or at > high:          # opening marker / past the end
+            continue
+        # a marker with an out point owns [in, out]; one without runs until the
+        # next marker, so a window never spills into the following scene beat
+        if end > at:
+            limit = min(end, dur)
+        elif pos + 1 < len(marks):
+            limit = min(float(marks[pos + 1].get("at") or dur), dur)
+        else:
+            limit = dur
+        room = limit - at - width
+        if room >= 0:
+            # land somewhere inside the marker, biased to its opening seconds
+            start = at + rng.uniform(0.0, min(room, width * 2))
+        else:
+            # marker shorter than one window: keep the in point, fit the clip
+            start = max(0.0, min(at, limit - width))
+        starts.append(round(max(0.0, min(high, start)), 2))
+    out = []
+    for start in starts:
+        if all(abs(start - previous) >= 1.0 for previous in out):
+            out.append(start)
+    count = windows_for(dur, width)
+    if len(out) >= count:
+        return out[:max(1, int(SETTINGS["max_per_clip"]))]
+    if count <= 1:
+        return [round(low, 2)]
+    # Keep useful markers and fill out a long clip from the rest of its timeline.
+    spacing = max(width, float(SETTINGS["min_span"]))
+    count = min(count, 1 + int((high - low) // spacing))
+    room = max(0.0, high - low - spacing * (count - 1))
+    offsets = sorted(rng.uniform(0.0, room) for _ in range(count))
+    candidates = [round(low + i * spacing + offset, 2) for i, offset in enumerate(offsets)]
+    for gap in (spacing, width):
+        for start in candidates:
+            if len(out) >= count:
+                return out
+            if all(abs(start - previous) >= gap - 0.01 for previous in out):
+                out.append(start)
+    return out
+
+
+def cycle_for(port, kind, ident, visit="", width=None):
+    """One full pass over the pool: every snapshot of every clip, ordered so
+    consecutive windows come from different clips. A three clip pool gives
+    1 2 3 1 2 3 1 2 3, which is the order the reel is supposed to serve.
+
+    `visit` is a per-page-load token from the player. It goes into the shuffle
+    seed, so opening the same performer twice gives a different order -- the
+    reel is a random walk through the library, not a fixed playlist you learn
+    by heart. Cached per visit, because a scroll of 20 windows must not
+    reshuffle under the cursor."""
+    width = seg() if width is None else width
+    key = (port, kind, ident, visit, width)
+    now = time.time()
+    with LOCK:
+        hit = CYCLES.get(key)
+    if hit and now - hit[0] < POOL_TTL:
+        return hit[1]
+    pool = [scene for scene in scenes_for(port, kind, ident) if scene["dur"] >= width + 2]
+    if not pool:
+        return []
+    seed = pool_seed(pool) + "|" + str(visit)
+    rng = random.Random(hashlib.blake2b(seed.encode(), digest_size=8).digest())
+    rows = []
+    for scene in pool:
+        row = []
+        for at in snapshots(scene, width, rng):
+            # never run past a marker's out point when the window sits inside one
+            limit = scene["dur"]
+            for mark in scene.get("markers") or []:
+                end = float(mark.get("end") or 0)
+                if end > at and float(mark.get("at") or 0) <= at:
+                    limit = min(limit, end)
+                    break
+            dur = round(min(width, limit - at - 0.2), 2)
+            if dur <= 0:
+                continue
+            if scene.get("tc"):
+                # a file the browser cannot open: this window is cut out and
+                # transcoded on demand, so the URL is a small clip, not a seek
+                src = "/src/window/%s?port=%s&at=%s&d=%s" % (scene["id"], port, at, dur)
+            else:
+                src = "/src/scene/%s?port=%s" % (scene["id"], port)
+            row.append({
+                "scene": scene["id"],
+                "title": scene["title"],
+                "rating": int(scene.get("rating") or 0),
+                "at": at,
+                "dur": dur,
+                "src": src,
+                "tc": bool(scene.get("tc")),
+            })
+        rows.append(row)
+    # Every clip is in the shuffle -- this is a random walk over the whole pool,
+    # not a "best of" list. A favorite is only weighted to come up earlier and
+    # more often between passes; nothing is dropped for being unfavorited.
+    order = list(range(len(rows)))
+    if SETTINGS["favorites_first"]:
+        # Favorites lead the pass, then the rest of the library follows in its
+        # own shuffle. Every clip is still in the order exactly once, so this
+        # prioritizes without filtering anything out.
+        fav = [i for i in order if int(pool[i].get("rating") or 0) >= 80]
+        favorites = set(fav)
+        rest = [i for i in order if i not in favorites]
+        rng.shuffle(fav)
+        rng.shuffle(rest)
+        order = fav + rest
+    else:
+        rng.shuffle(order)
+    # each clip's own snapshots are shuffled too, so the first pass through the
+    # reel is not the opening three seconds of every clip in a row: one clip
+    # leads with its middle, the next with its end
+    for row in rows:
+        rng.shuffle(row)
+    cycle = []
+    depth = 0
+    while True:
+        added = False
+        for idx in order:
+            if depth < len(rows[idx]):
+                cycle.append(rows[idx][depth])
+                added = True
+        if not added:
+            break
+        depth += 1
+    with LOCK:
+        for expired in [stored for stored, (at, _) in CYCLES.items() if now - at >= POOL_TTL]:
+            del CYCLES[expired]
+        CYCLES[key] = (now, cycle)
+        if len(CYCLES) > 32:
+            del CYCLES[next(iter(CYCLES))]
+    return cycle
+
+
+def stream_windows(port, kind, ident, start, count, visit="", width=None):
+    """Windows are addressed by a global integer key. Key k always resolves to
+    the same clip and offset, which is what lets the player walk backwards over
+    ground it has already covered without a server-side cursor. Each pass over
+    the cycle is rotated so the loop does not replay in the same order twice."""
+    cycle = cycle_for(port, kind, ident, visit, width)
+    if not cycle:
+        return []
+    total = len(cycle)
+    out = []
+    for key in range(start, start + count):
+        turn, slot = divmod(key, total)
+        if turn:
+            rot = (turn * 7) % total or 1
+            slot = (slot + rot) % total
+        w = dict(cycle[slot])
+        w["key"] = key
+        # a distinct URL per window: the browser must not treat two windows of
+        # one scene as the same resource, or it reuses the first one's buffer
+        # and every window plays from the top of the file
+        w["src"] = w["src"] + "&k=%d" % key
+        out.append(w)
+    return out
 
 
 def playable(path, vcodec, acodec):
@@ -395,36 +597,31 @@ def primary_file(scene):
     return best, max(0.0, best_dur)
 
 
-def plan_windows(scenes, seed, seg):
-    """3 s windows, five of them in a long video, round-robin across clips so the
-    playlist alternates scenes instead of showing one clip five times running."""
-    rng = random.Random(seed)
+def plan_windows(scenes, seed, width):
+    """The playlist form of the same sampling the stream uses: each clip's
+    snapshots, interleaved so the playlist alternates clips instead of showing
+    one clip five times running."""
     per_scene = []
     skipped = 0
     taken = 0
     for scene in scenes:
-        if taken >= MAX_WINDOWS or taken * seg >= MAX_TOTAL_SECONDS:
+        if taken >= MAX_WINDOWS or taken * width >= MAX_TOTAL_SECONDS:
             break
         f, duration = primary_file(scene)
-        if not f or duration < seg + 3:
+        if not f or duration < width + 2:
             continue
         if not playable(f.get("path"), f.get("video_codec"), f.get("audio_codec")):
             skipped += 1
             continue
-        count = windows_for(duration)
-        # keep the window inside the clip, and never start in the first second
-        low, high = 1.0, max(1.0, duration - seg - 0.5)
-        row = []
-        for _ in range(count):
-            at = round(rng.uniform(low, high), 2)
-            row.append({
-                "scene": str(scene["id"]),
-                "title": scene.get("title") or "",
-                "at": at,
-                "dur": round(min(seg, duration - at - 0.2), 2),
-            })
+        row = [{
+            "scene": str(scene["id"]),
+            "title": scene.get("title") or "",
+            "at": at,
+            "dur": round(min(width, duration - at - 0.2), 2),
+        } for at in snapshots({"id": str(scene["id"]), "dur": duration}, width,
+                               random.Random("%s:%s" % (seed, scene["id"])))]
         per_scene.append(row)
-        taken += count
+        taken += len(row)
 
     windows = []
     depth = 0
@@ -446,9 +643,9 @@ def build_plan(port, performer_id, name):
     seed = int(hashlib.blake2b(
         ("|".join(sorted(str(s["id"]) for s in scenes))).encode(), digest_size=4
     ).hexdigest(), 16)
-    windows, skipped = plan_windows(scenes, seed, SEG)
+    windows, skipped = plan_windows(scenes, seed, seg())
     job = hashlib.blake2b(
-        json.dumps([port, performer_id, windows, SEG]).encode(), digest_size=8
+        json.dumps([port, performer_id, windows, seg()]).encode(), digest_size=8
     ).hexdigest()
     for i, w in enumerate(windows):
         w["src"] = "/src/%s/%d" % (job, i)
@@ -457,7 +654,7 @@ def build_plan(port, performer_id, name):
         "performerId": performer_id,
         "port": port,
         "name": name or "",
-        "seg": SEG,
+        "seg": seg(),
         "seconds": round(sum(w["dur"] for w in windows), 1),
         "unplayable": skipped,
         "stash": INSTANCES[port]["url"],
@@ -487,7 +684,7 @@ def m3u8(plan):
         "# original file; EXT-X-STASHTOK-START says where the browser starts.",
         "#EXT-X-STASHTOK-NAME:" + (plan["name"] or plan["performerId"]),
         "#EXT-X-STASHTOK-WINDOWS:%d" % len(plan["windows"]),
-        "#EXT-X-TARGETDURATION:%d" % (int(SEG) + 1),
+        "#EXT-X-TARGETDURATION:%d" % (int(seg()) + 1),
         "#EXT-X-PLAYLIST-TYPE:VOD",
     ]
     for w in plan["windows"]:
@@ -534,6 +731,83 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
+    def _stream(self, params):
+        """A slice of the endless stream: `start` and `count` are global window
+        keys, so the browser can ask for anything, in any order, and always get
+        the same bytes for the same key."""
+        port = str(params.get("port") or "9998")
+        if port not in INSTANCES:
+            return self._json(400, {"error": "unknown instance"})
+        kind = str(params.get("kind") or "performer").lower()
+        if kind not in ("performer", "tag", "search", "folder"):
+            kind = "performer"
+        ident = str(params.get("id") or "").strip()
+        if not ident:
+            return self._json(400, {"error": "id required"})
+        if kind not in ("search", "folder") and not ident.isdigit():
+            return self._json(400, {"error": "id must be numeric for a performer or tag"})
+        try:
+            start = int(params.get("start") or 0)
+            count = max(1, min(120, int(params.get("count") or 20)))
+        except ValueError:
+            return self._json(400, {"error": "bad start or count"})
+        visit = str(params.get("visit") or "")[:32]
+        try:
+            width = float(params.get("seg") or seg())
+        except (TypeError, ValueError):
+            return self._json(400, {"error": "bad window duration"})
+        if not math.isfinite(width) or not 1 <= width <= 15:
+            return self._json(400, {"error": "window duration must be between 1 and 15 seconds"})
+        width = round(width, 1)
+        try:
+            windows = stream_windows(port, kind, ident, start, count, visit, width)
+            pool = scenes_for(port, kind, ident)
+        except Exception as exc:  # noqa: BLE001 - reported, never fatal
+            return self._json(502, {"error": "Stash query failed: %s" % str(exc)[:200]})
+        if not windows:
+            return self._json(422, {"error": "no clip in this library can be played as-is"})
+        return self._json(200, {
+            "port": port, "kind": kind, "id": ident,
+            "name": name_for(port, kind, ident),
+            "scenes": sum(scene["dur"] >= width + 2 for scene in pool),
+            "skipped": SKIPPED.get((port, kind, ident), 0),
+            "cycle": len(cycle_for(port, kind, ident, visit, width)),
+            "seg": width, "settings": dict(SETTINGS, seg=width),
+            "start": start, "count": len(windows), "windows": windows,
+        })
+
+    def _favorite(self, body):
+        """Set or clear a scene's rating from the player. 100 means the heart is
+        on, 0 means it is off -- Stash's own favorite flag."""
+        scene_id = str(body.get("sceneId") or "").strip()
+        port = str(body.get("port") or "9998")
+        if not scene_id.isdigit():
+            return self._json(400, {"error": "sceneId required"})
+        if port not in INSTANCES:
+            return self._json(400, {"error": "unknown instance"})
+        try:
+            rating = 100 if int(body.get("rating") or 0) else 0
+        except (TypeError, ValueError):
+            rating = 0
+        try:
+            data = gql(port, FAVORITE_MUTATION, {"id": scene_id, "rating": rating})
+        except Exception as exc:  # noqa: BLE001
+            return self._json(502, {"error": "Stash rejected the update: %s" % str(exc)[:200]})
+        scene = (data.get("sceneUpdate") or {})
+        told = int(scene.get("rating100", rating) or 0)
+        # Both caches already hold this scene (the player is looking at it), and a
+        # stale rating there would make the heart flip back on the next window.
+        with LOCK:
+            for pool in POOLS.values():
+                for item in pool:
+                    if str(item.get("id")) == scene_id:
+                        item["rating"] = told
+            for cycle in CYCLES.values():
+                for window in cycle:
+                    if str(window.get("scene")) == scene_id:
+                        window["rating"] = told
+        return self._json(200, {"ok": True, "sceneId": scene_id, "rating": told})
+
     def _plan(self, params):
         performer_id = str(params.get("performerId", "")).strip()
         if not performer_id.isdigit():
@@ -565,7 +839,9 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 return self._json(200, {"ok": True, "plans": len(JOBS)})
         if path == "/player":
-            return self._html(PLAYER_HTML)
+            return self._html(player_html())
+        if path == "/settings":
+            return self._json(200, dict(SETTINGS))
         if path == "/plan":
             return self._plan({k: v[0] for k, v in parse_qs(parsed.query).items()})
         if path.startswith("/reel/") and path.endswith(".m3u8"):
@@ -582,18 +858,30 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if path == "/stream":
+            return self._stream({k: v[0] for k, v in parse_qs(parsed.query).items()})
+        if path.startswith("/src/window/"):
+            return self._window_clip(path, {k: v[0] for k, v in parse_qs(parsed.query).items()})
+        if path.startswith("/src/scene/"):
+            return self._scene_proxy(path, {k: v[0] for k, v in parse_qs(parsed.query).items()})
         if path.startswith("/src/"):
             return self._proxy(path)
         return self._json(404, {"error": "not found"})
 
     def do_POST(self):  # noqa: N802
-        if urlparse(self.path).path != "/reel":
-            return self._json(404, {"error": "not found"})
+        path = urlparse(self.path).path
         length = int(self.headers.get("Content-Length") or 0)
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
         except ValueError:
             return self._json(400, {"error": "bad json"})
+        if path == "/favorite":
+            return self._favorite(body)
+        if path == "/settings":
+            changed = update_settings(body)
+            return self._json(200, {"ok": True, "changed": changed, "settings": dict(SETTINGS)})
+        if path != "/reel":
+            return self._json(404, {"error": "not found"})
         return self._plan({k: str(v) for k, v in body.items() if v is not None})
 
     def _plan_for(self, job):
@@ -626,7 +914,108 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(404, {"error": "no such window"})
         inst = INSTANCES[plan["port"]]
         url = "%s/scene/%s/stream" % (inst["url"], win["scene"])
-        headers = {"ApiKey": key_for(plan["port"])}
+        return self._relay(url, plan["port"])
+
+    def _scene_proxy(self, path, params):
+        """The same original-bytes relay, addressed by scene id. This is what
+        the endless stream uses: a window names a scene and an offset, and the
+        browser pulls the file itself with Range."""
+        scene_id = path.rstrip("/").split("/")[-1]
+        port = str(params.get("port") or "9998")
+        if not scene_id.isdigit():
+            return self._json(404, {"error": "no such scene"})
+        if port not in INSTANCES:
+            return self._json(400, {"error": "unknown instance"})
+        url = "%s/scene/%s/stream" % (INSTANCES[port]["url"], scene_id)
+        return self._relay(url, port)
+
+    def _window_clip(self, path, params):
+        """Cut one window out of a file the browser cannot decode and transcode
+        it to H.264 MP4. Cached on disk, so a window is only ever cut once and
+        the second pass through a reel is instant."""
+        scene_id = path.rstrip("/").split("/")[-1]
+        port = str(params.get("port") or "9998")
+        try:
+            at = float(params.get("at") or 0)
+            dur = float(params.get("d") or 3)
+        except ValueError:
+            return self._json(400, {"error": "bad at/d"})
+        if not scene_id.isdigit() or port not in INSTANCES:
+            return self._json(404, {"error": "no such scene"})
+        key = hashlib.blake2b(
+            ("%s|%s|%.3f|%.3f" % (port, scene_id, at, dur)).encode(), digest_size=8
+        ).hexdigest()
+        out = os.path.join(CACHE, "win-%s.mp4" % key)
+        if not os.path.exists(out):
+            with WINDOW_LOCKS.setdefault(key, threading.Lock()):
+                if not os.path.exists(out):
+                    tmp = out + ".part"
+                    url = "%s/scene/%s/stream" % (INSTANCES[port]["url"], scene_id)
+                    cmd = [
+                        "ffmpeg", "-nostdin", "-loglevel", "error",
+                        "-ss", "%.3f" % at, "-t", "%.3f" % dur,
+                        "-headers", "ApiKey: %s\r\n" % key_for(port),
+                        "-i", url,
+                        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+                        "-c:a", "aac", "-b:a", "128k",
+                        "-movflags", "+faststart", "-f", "mp4", "-y", tmp,
+                    ]
+                    try:
+                        subprocess.run(cmd, timeout=180, check=True,
+                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        os.replace(tmp, out)
+                    except Exception as exc:  # noqa: BLE001
+                        try:
+                            os.unlink(tmp)
+                        except OSError:
+                            pass
+                        return self._json(502, {"error": "transcode failed: %s" % type(exc).__name__})
+        return self._send_file(out)
+
+    def _send_file(self, path):
+        """Serve a cached clip with byte-range support, so the browser can seek
+        inside the window and the player can keep its usual buffering."""
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            return self._json(404, {"error": "no such clip"})
+        start, end = 0, size - 1
+        status = 200
+        rng = self.headers.get("Range")
+        if rng and rng.startswith("bytes="):
+            try:
+                first, _, last = rng[6:].partition("-")
+                start = int(first) if first else 0
+                end = int(last) if last else size - 1
+                end = min(end, size - 1)
+                if start > end:
+                    raise ValueError
+                status = 206
+            except ValueError:
+                start, end = 0, size - 1
+        length = end - start + 1
+        try:
+            with open(path, "rb") as fh:
+                fh.seek(start)
+                self.send_response(status)
+                self.send_header("Content-Type", "video/mp4")
+                self.send_header("Content-Length", str(length))
+                self.send_header("Accept-Ranges", "bytes")
+                if status == 206:
+                    self.send_header("Content-Range", "bytes %d-%d/%d" % (start, end, size))
+                self.end_headers()
+                remaining = length
+                while remaining > 0:
+                    chunk = fh.read(min(256 * 1024, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
+
+    def _relay(self, url, port):
+        headers = {"ApiKey": key_for(port)}
         rng = self.headers.get("Range")
         if rng:
             headers["Range"] = rng
@@ -668,6 +1057,11 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     os.makedirs(CACHE, exist_ok=True)
+    load_settings()
+    for env, key in (("REEL_SEC", "seg"), ("REEL_MIN_SPAN", "min_span"),
+                     ("REEL_MAX_PER_CLIP", "max_per_clip")):
+        if os.environ.get(env):
+            update_settings({key: os.environ[env]})
     for port, inst in INSTANCES.items():
         try:
             inst["key"] = key_for(port)
@@ -676,7 +1070,7 @@ def main():
             log("instance %s unavailable: %s" % (port, exc))
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     server.daemon_threads = True
-    log("highlight reels on :%d, %.0fs windows, cache %s" % (PORT, SEG, CACHE))
+    log("highlight reels on :%d, %.0fs windows, cache %s" % (PORT, seg(), CACHE))
     try:
         server.serve_forever()
     except KeyboardInterrupt:

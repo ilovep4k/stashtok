@@ -1,0 +1,677 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Highlight reel</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; overscroll-behavior: none; }
+  body { color: #fff; font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+  #stage { position: fixed; inset: 0; background: #000; touch-action: none; }
+  video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;
+          background: #000; opacity: 0; z-index: 1; }
+  video.on { opacity: 1; z-index: 2; }
+  video.cover { object-fit: cover; }
+  #reelMenu {
+    position: fixed;
+    z-index: 10;
+    top: calc(8px + env(safe-area-inset-top));
+    right: max(12px, env(safe-area-inset-right));
+    width: 44px;
+    height: 44px;
+    border: 1px solid rgba(255, 255, 255, .28);
+    border-radius: 50%;
+    background: rgba(15, 15, 18, .9);
+    color: #fff;
+    font-size: 26px;
+    line-height: 1;
+    cursor: pointer;
+  }
+  #reelSettings {
+    width: min(330px, calc(100% - 32px));
+    box-sizing: border-box;
+    padding: 18px;
+    border: 1px solid rgba(255, 255, 255, .22);
+    border-radius: 14px;
+    background: #1b1b20;
+    color: #fff;
+  }
+  #reelSettings::backdrop { background: rgba(0, 0, 0, .55); }
+  #reelSettings h2 { margin: 0 0 12px; font-size: 17px; }
+  #reelSettings label { display: grid; gap: 4px; }
+  #reelSettings input { padding: 8px; font: inherit; }
+  #reelSettings button { min-height: 44px; margin-top: 8px; padding: 0 12px; cursor: pointer; }
+  #reelSettings .actions { display: flex; flex-wrap: wrap; gap: 6px; }
+  /* the reel starts playing on its own; this is a dismissible caption, not a gate */
+  #start { position: fixed; left: 0; right: 0; top: 0; z-index: 9;
+           display: flex; align-items: flex-start; gap: 12px;
+           padding: calc(54px + env(safe-area-inset-top)) 16px 14px;
+           background: linear-gradient(rgba(0,0,0,.72), rgba(0,0,0,0));
+           pointer-events: none; transition: opacity .3s ease; }
+  #start.gone { opacity: 0; }
+  #start b { display: block; font-size: 15px; font-weight: 600; }
+  #start i { font-style: normal; font-size: 11px; letter-spacing: .05em;
+             color: rgba(255,255,255,.65); }
+  #start .ib { flex: 1; min-width: 0; }
+  #start button { pointer-events: auto; flex: 0 0 auto; background: rgba(255,255,255,.12);
+             border: 1px solid rgba(255,255,255,.25); color: #fff; font: inherit;
+             font-size: 12px; font-weight: 600; border-radius: 999px;
+             padding: 7px 16px; cursor: pointer; }
+  #pause { position: fixed; left: 0; right: 0; bottom: 0; z-index: 7; display: none;
+           padding: 16px 16px calc(20px + env(safe-area-inset-bottom));
+           background: linear-gradient(transparent, rgba(0,0,0,.85) 40%); }
+  #pause.show { display: block; }
+  #pause .ttl { font-size: 15px; font-weight: 600; margin-bottom: 2px;
+                overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #pause .row { display: flex; gap: 10px; }
+  #pause a, #pause button { flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px;
+           font: inherit; font-size: 13px; font-weight: 600; color: #fff; text-decoration: none;
+           border: 1px solid rgba(255,255,255,.2); border-radius: 12px; padding: 11px 12px;
+           background: rgba(255,255,255,.06); cursor: pointer; }
+  /* the heart reads as a state, not a label: filled when the scene is a favorite */
+  #pause button.on { background: #ff2d55; border-color: #ff2d55; color: #fff; }
+  #pause button.on:hover { background: #ff4166; }
+  /* one scene, full screen, looping: a takeover over the reel, not a feed */
+  #scene { position: fixed; inset: 0; z-index: 40; background: #000; display: none; }
+  #scene.show { display: block; }
+  #scene video { position: fixed; inset: 0; width: 100%; height: 100%;
+                 object-fit: contain; background: #000; }
+  #scene .sbar { position: fixed; top: 0; left: 0; right: 0; z-index: 2;
+                 display: flex; align-items: center; gap: 10px;
+                 padding: calc(12px + env(safe-area-inset-top)) 14px 12px;
+                 background: linear-gradient(rgba(0,0,0,.6), rgba(0,0,0,0)); }
+  #scene .sttl { flex: 1; min-width: 0; font-size: 13px; color: #eee;
+                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #scene .sbar button { flex: 0 0 auto; background: rgba(255,255,255,.12);
+                 border: 1px solid rgba(255,255,255,.2); color: #fff;
+                 border-radius: 12px; padding: 8px 14px; font: inherit; font-size: 13px; }
+  #err { position: fixed; left: 0; right: 0; bottom: 40%; z-index: 10; text-align: center;
+         color: #ff8098; font-size: 13px; padding: 0 24px; display: none; }
+</style></head>
+<body>
+<div id="stage">
+  <video id="a" playsinline preload="auto" muted></video>
+  <video id="b" playsinline preload="auto" muted></video>
+  <video id="c" playsinline preload="auto" muted></video>
+</div>
+<button id="reelMenu" type="button" aria-label="Highlight reel settings"
+  aria-haspopup="dialog" aria-expanded="false">⋯</button>
+<dialog id="reelSettings" aria-labelledby="reelSettingsTitle">
+  <form id="reelDurationForm">
+    <h2 id="reelSettingsTitle">Highlight reel settings</h2>
+    <label>Seconds per clip <input id="reelDuration" type="number" min="1" max="15" step="0.1" required></label>
+    <div class="actions">
+      <button type="submit">Apply</button>
+      <button id="reelShuffle" type="button">Reshuffle</button>
+      <button id="reelSettingsClose" type="button">Close</button>
+    </div>
+  </form>
+</dialog>
+<div id="pause">
+  <div class="ttl" id="ptitle"></div>
+  <div class="row">
+    <button id="pview" type="button">View scene</button>
+    <a id="pfull">Full Scene</a>
+    <button id="pfav" type="button">&#9829; Favorite</button>
+    <a id="popen" target="_blank" rel="noopener">Open in Stash</a>
+  </div>
+</div>
+<div id="scene">
+  <video id="sVideo" playsinline loop preload="auto"></video>
+  <div class="sbar">
+    <span class="sttl" id="sTitle"></span>
+    <button id="sClose" type="button">Close</button>
+  </div>
+</div>
+<div id="start"><div class="ib"><b id="ititle"></b><i id="isub"></i></div>
+  <button id="iok" type="button">OK</button></div>
+<div id="err"></div>
+<script>
+(() => {
+  const q = new URLSearchParams(location.search);
+  const els = [document.getElementById("a"), document.getElementById("b"), document.getElementById("c")];
+  const start = document.getElementById("start");
+  const menu = document.getElementById("reelMenu");
+  const settings = document.getElementById("reelSettings");
+  const durationInput = document.getElementById("reelDuration");
+  const ititle = document.getElementById("ititle"), isub = document.getElementById("isub");
+  const iok = document.getElementById("iok");
+  const errEl = document.getElementById("err");
+  const pauseEl = document.getElementById("pause"), ptitle = document.getElementById("ptitle");
+  const popen = document.getElementById("popen");
+  const pfav = document.getElementById("pfav");
+  const pfull = document.getElementById("pfull");
+  const pview = document.getElementById("pview");
+  const sceneEl = document.getElementById("scene"), sVideo = document.getElementById("sVideo");
+  const sTitle = document.getElementById("sTitle"), sClose = document.getElementById("sClose");
+
+  const port = q.get("port") || "9998";
+  const search = (q.get("q") || "").trim();
+  const folder = (q.get("folder") || "").trim();
+  const kind = search ? "search" : q.get("tagId") ? "tag" : folder ? "folder" : "performer";
+  const ident = search || q.get("tagId") || folder || q.get("performerId") || "";
+  const reelKey = JSON.stringify([port, kind, ident]);
+  const durationKey = "reelDuration:" + reelKey;
+  const storedDuration = () => {
+    try {
+      const seconds = Number(localStorage.getItem(durationKey));
+      return seconds >= 1 && seconds <= 15 ? seconds : 3;
+    } catch (error) { return 3; }
+  };
+  const windowDuration = storedDuration();
+  /* one token per page load: the server shuffles the pool with it, so every
+     visit to a performer is a different order instead of the same playlist.
+     It is re-used - not re-minted - when you come back from Full Scene, so the
+     reel is exactly where you left it instead of reshuffled under you. */
+  let VISIT = Math.random().toString(36).slice(2, 10);
+  const RETURN_KEY = "reelReturn";
+  /* stashed as we navigate away to the scene page; consumed once on the way back */
+  function stashReturn() {
+    try {
+      const w = cur();
+      sessionStorage.setItem(RETURN_KEY, JSON.stringify({ reelKey, duration: windowDuration, visit: VISIT, key: w ? w.key : 0 }));
+    } catch (e) { /* private mode: the reel just restarts */ }
+  }
+  function takeReturn() {
+    try {
+      const raw = sessionStorage.getItem(RETURN_KEY);
+      if (!raw) return null;
+      sessionStorage.removeItem(RETURN_KEY);
+      const saved = JSON.parse(raw);
+      if (!saved || saved.reelKey !== reelKey || saved.duration !== windowDuration || !saved.visit) return null;
+      return saved;
+    } catch (e) { return null; }
+  }
+  const CHUNK = 20;          // windows fetched per request
+  const KEEP_BEHIND = 30;    // segments kept behind the cursor for scrubbing back
+  const KEEP_AHEAD = 30;     // segments buffered ahead
+
+  let buf = [];              // [{key, scene, title, rating, at, dur, src}]
+  let baseKey = 0;           // key of buf[0]
+  let pos = 0;               // index into buf of the segment on screen
+  let active = els[0];
+  let playing = false, seekTimer = 0;
+  let pending = null;
+  let stashBase = "";
+  const favs = new Set();
+  let fetching = false;
+
+  const SILENT_CLIP =
+      "AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAM3bW9vdgAAAGxtdmhkAAAAAAAAAAAAAAAAAAAD6AAAA+gAAQAAAQAA" +
+      "AAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAA" +
+      "AmF0cmFrAAAAXHRraGQAAAADAAAAAAAAAAAAAAABAAAAAAAAA+gAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAA" +
+      "AAAAAAAAAAAAAABAAAAAABAAAAAQAAAAAAAkZWR0cwAAABxlbHN0AAAAAAAAAAEAAAPoAAAAAAABAAAAAAHZbWRpYQAAACBtZGhk" +
+      "AAAAAAAAAAAAAAAAAAAoAAAAKABVxAAAAAAALWhkbHIAAAAAAAAAAHZpZGUAAAAAAAAAAAAAAABWaWRlb0hhbmRsZXIAAAABhG1p" +
+      "bmYAAAAUdm1oZAAAAAEAAAAAAAAAAAAAACRkaW5mAAAAHGRyZWYAAAAAAAAAAQAAAAx1cmwgAAAAAQAAAURzdGJsAAAAuHN0c2QA" +
+      "AAAAAAAAAQAAAKhhdmMxAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAABAAEABIAAAASAAAAAAAAAABFUxhdmM2MC4zMS4xMDIgbGli" +
+      "eDI2NAAAAAAAAAAAAAAAGP//AAAALmF2Y0MBQsAe/+EAFmdCwB7ZHsBEAAADAAQAAAMAKDxYuSABAAVoy4PLIAAAABBwYXNwAAAA" +
+      "AQAAAAEAAAAUYnRydAAAAAAAABUwAAAVMAAAABhzdHRzAAAAAAAAAAEAAAAFAAAIAAAAABRzdHNzAAAAAAAAAAEAAAABAAAAHHN0" +
+      "c2MAAAAAAAAAAQAAAAEAAAAFAAAAAQAAAChzdHN6AAAAAAAAAAAAAAAFAAACgAAAAAoAAAAKAAAACQAAAAkAAAAUc3RjbwAAAAAA" +
+      "AAABAAADZwAAAGJ1ZHRhAAAAWm1ldGEAAAAAAAAAIWhkbHIAAAAAAAAAAG1kaXJhcHBsAAAAAAAAAAAAAAAALWlsc3QAAAAlqXRv" +
+      "bwAAAB1kYXRhAAAAAQAAAABMYXZmNjAuMTYuMTAwAAAACGZyZWUAAAKubWRhdAAAAm0GBf//adxF6b3m2Ui3lizYINkj7u94MjY0" +
+      "IC0gY29yZSAxNjQgcjMxMDggMzFlMTlmOSAtIEguMjY0L01QRUctNCBBVkMgY29kZWMgLSBDb3B5bGVmdCAyMDAzLTIwMjMgLSBo" +
+      "dHRwOi8vd3d3LnZpZGVvbGFuLm9yZy94MjY0Lmh0bWwgLSBvcHRpb25zOiBjYWJhYz0wIHJlZj0zIGRlYmxvY2s9MTowOjAgYW5h" +
+      "bHlzZT0weDE6MHgxMTEgbWU9aGV4IHN1Ym1lPTcgcHN5PTEgcHN5X3JkPTEuMDA6MC4wMCBtaXhlZF9yZWY9MSBtZV9yYW5nZT0x" +
+      "NiBjaHJvbWFfbWU9MSB0cmVsbGlzPTEgOHg4ZGN0PTAgY3FtPTAgZGVhZHpvbmU9MjEsMTEgZmFzdF9wc2tpcD0xIGNocm9tYV9x" +
+      "cF9vZmZzZXQ9LTIgdGhyZWFkcz0xIGxvb2thaGVhZF90aHJlYWRzPTEgc2xpY2VkX3RocmVhZHM9MCBucj0wIGRlY2ltYXRlPTEg" +
+      "aW50ZXJsYWNlZD0wIGJsdXJheV9jb21wYXQ9MCBjb25zdHJhaW5lZF9pbnRyYT0wIGJmcmFtZXM9MCB3ZWlnaHRwPTAga2V5aW50" +
+      "PTUga2V5aW50X21pbj0xIHNjZW5lY3V0PTQwIGludHJhX3JlZnJlc2g9MCByY19sb29rYWhlYWQ9NSByYz1jcmYgbWJ0cmVlPTEg" +
+      "Y3JmPTIzLjAgcWNvbXA9MC42MCBxcG1pbj0wIHFwbWF4PTY5IHFwc3RlcD00IGlwX3JhdGlvPTEuNDAgYXE9MToxLjAwAIAAAAAL" +
+      "ZYiEBHyYoAA2I4AAAAAGQZo4CPqAAAAABkGaVAI+oAAAAAVBmmAQ9QAAAAVBmoA/1A==";
+
+  let wakeLock = null, wakePending = false, wakeVideo = null;
+  async function keepScreenAwake() {
+    if ((!playing && !sceneEl.classList.contains("show")) || document.hidden) {
+      if (wakeLock) {
+        wakeLock.release().catch(() => {});
+        wakeLock = null;
+      }
+      if (wakeVideo) wakeVideo.pause();
+      return;
+    }
+    if (navigator.maxTouchPoints > 0) {
+      if (!wakeVideo) {
+        wakeVideo = document.createElement("video");
+        wakeVideo.src = URL.createObjectURL(new Blob([
+          Uint8Array.from(atob(SILENT_CLIP), (ch) => ch.charCodeAt(0))
+        ], { type: "video/mp4" }));
+        wakeVideo.muted = true;
+        wakeVideo.loop = true;
+        wakeVideo.playsInline = true;
+        wakeVideo.setAttribute("aria-hidden", "true");
+        wakeVideo.style.cssText = "position:fixed;left:0;bottom:0;width:2px;height:2px;opacity:.01;z-index:12;pointer-events:none";
+        document.body.appendChild(wakeVideo);
+      }
+      if (wakeVideo.paused) wakeVideo.play().catch(() => {});
+    }
+    if (!navigator.wakeLock || wakeLock || wakePending) return;
+    wakePending = true;
+    try {
+      const lock = await navigator.wakeLock.request("screen");
+      if ((!playing && !sceneEl.classList.contains("show")) || document.hidden) {
+        await lock.release();
+      } else {
+        wakeLock = lock;
+        lock.addEventListener("release", () => {
+          if (wakeLock === lock) wakeLock = null;
+        }, { once: true });
+      }
+    } catch (error) { /* the browser can refuse the lock */ }
+    finally { wakePending = false; }
+  }
+  document.addEventListener("visibilitychange", keepScreenAwake);
+  document.addEventListener("click", keepScreenAwake);
+  window.addEventListener("pageshow", keepScreenAwake);
+
+  const win = (key) => buf.find((w) => w.key === key);
+  const cur = () => buf[pos];
+
+  function fit(el) {
+    if (!el.videoWidth || !el.videoHeight) return;
+    const a = el.videoWidth / el.videoHeight, b = innerWidth / innerHeight;
+    el.classList.toggle("cover", a / b > 0.8 && a / b < 1.25);
+  }
+
+  /* every window carries its scene's heart state, so a clip opens with the right
+     heart already filled instead of looking unfavorited until you tap it */
+  function absorb(list) {
+    (list || []).forEach((w) => {
+      if (!w || w.rating === undefined || w.rating === null) return;
+      if (Number(w.rating) > 0) favs.add(w.scene); else favs.delete(w.scene);
+    });
+  }
+
+  async function fetchChunk(from, count) {
+    const params = new URLSearchParams({ port, kind, id: ident, visit: VISIT,
+      start: String(from), count: String(count), seg: String(windowDuration) });
+    const res = await fetch("/stream?" + params.toString(), { cache: "no-store" });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "stream failed");
+    absorb(data.windows);
+    return data;
+  }
+
+  /* keep at least KEEP_AHEAD segments forward and KEEP_BEHIND back; the buffer
+     only ever grows, so anything already played stays reachable by ← */
+  async function fill() {
+    if (fetching) return;
+    fetching = true;
+    try {
+      if (buf.length - pos < KEEP_AHEAD) {
+        const { windows: more } = await fetchChunk(baseKey + buf.length, CHUNK);
+        buf = buf.concat(more || []);
+      }
+      if (pos < KEEP_BEHIND) {
+        const { windows: more } = await fetchChunk(baseKey - CHUNK, CHUNK);
+        if (more?.length) { buf = more.concat(buf); baseKey -= more.length; pos += more.length; }
+      }
+    } catch (e) { /* a later move retries */ }
+    fetching = false;
+    prefetch();
+  }
+
+  function elForKey(key) {
+    return els.find((e) => e.dataset.key === String(key)) || null;
+  }
+
+  function loadInto(el, key) {
+    const w = win(key);
+    if (!w) return null;
+    el.dataset.key = String(key);
+    el.dataset.seeked = "";
+    el.pause();
+    /* #t= is the one seek iOS Safari honours before it will let script touch
+       currentTime: without it every window plays from the top of the file,
+       which is exactly the "first three seconds of every clip" bug. A
+       transcoded window (w.tc) is already its own small clip, so it starts at
+       zero and takes no fragment. */
+    el.src = w.tc ? w.src : w.src + "#t=" + w.at;
+    el.load();
+    return el;
+  }
+
+  function seek(el, at) {
+    try { el.currentTime = Math.max(0, at); } catch (e) { /* metadata not in yet */ }
+  }
+
+  function ensureSeek(el) {
+    const w = win(+el.dataset.key);
+    if (!w || el.readyState < 1 || el.seeking || el.dataset.seeked === "1") return;
+    const end = el.duration || (w.at + w.dur + 1);
+    const at = w.tc ? 0 : Math.max(0, Math.min(w.at, end - 0.45));
+    if (Math.abs(el.currentTime - at) <= 0.15) el.dataset.seeked = "1";
+    else seek(el, at);
+  }
+
+  els.forEach((el) => {
+    const ready = () => {
+      ensureSeek(el);
+      if (pending && pending.el === el) {
+        showPrepared();
+      } else if (el === active && playing && cur()?.key === +el.dataset.key &&
+          el.dataset.seeked === "1" && el.readyState >= 2) {
+        el.play().catch(() => {});
+      }
+    };
+    el.addEventListener("loadedmetadata", () => { fit(el); ready(); });
+    el.addEventListener("canplay", ready);
+    el.addEventListener("seeked", ready);
+    el.addEventListener("ended", () => { if (el === active && !pending) go(1); });
+    el.addEventListener("error", () => {
+      if (pending && pending.el === el) {
+        skipPending();
+        return;
+      }
+      if (el !== active || pending) return;
+      errEl.textContent = "skipping a clip that would not load";
+      errEl.style.display = "block";
+      setTimeout(() => { errEl.style.display = "none"; }, 1400);
+      go(1);
+    });
+  });
+
+  function updateHud() {
+    const w = cur();
+    if (!w) return;
+    ptitle.textContent = w.title || ("scene " + w.scene);
+    if (stashBase) {
+      const href = stashBase + "/scenes/" + w.scene;
+      popen.href = href;
+      /* the whole scene, as StashTok's own card: no bottom nav, back only */
+      pfull.href = stashBase + "/stash-tok#/clip/" + w.scene;
+    }
+    const on = favs.has(w.scene);
+    pfav.classList.toggle("on", on);
+    pfav.setAttribute("aria-pressed", on ? "true" : "false");
+    pfav.textContent = on ? "\u2665 Favorited" : "\u2661 Favorite";
+  }
+
+  function showPrepared() {
+    if (!pending) return;
+    const { el, key } = pending;
+    if (el.dataset.key !== String(key) || el.readyState < 2 || el.seeking || el.dataset.seeked !== "1") return;
+    pending = null;
+    const old = active;
+    active = el;
+    el.classList.add("on");
+    if (old !== el) {
+      old.classList.remove("on");
+      old.pause();
+      old.dataset.seeked = "";
+    }
+    if (playing) el.play().catch(() => {});
+    updateHud();
+    prefetch();
+  }
+
+  function skipPending() {
+    if (!pending) return;
+    const { direction } = pending;
+    pending = null;
+    if (buf[pos + direction]) {
+      go(direction);
+    } else {
+      const shownAt = buf.findIndex((w) => String(w.key) === active.dataset.key);
+      if (shownAt >= 0) pos = shownAt;
+      setPlaying(false);
+      fill();
+    }
+  }
+
+  function go(direction) {
+    const target = pos + direction;
+    const w = buf[target];
+    if (!w) {
+      fill();
+      return;
+    }
+    let el = elForKey(w.key);
+    if (!el) {
+      const spare = els.find((candidate) => candidate !== active && candidate !== pending?.el) ||
+        els.find((candidate) => candidate !== active);
+      el = loadInto(spare, w.key);
+      if (!el) return;
+    }
+    pos = target;
+    pending = { el, key: w.key, direction, started: performance.now() };
+    if (el !== active) active.pause();
+    else el.dataset.seeked = "";
+    if (el.error) {
+      skipPending();
+      return;
+    }
+    ensureSeek(el);
+    showPrepared();
+    fill();
+  }
+
+  function prefetch() {
+    const w = cur();
+    if (!w || pending) return;
+    const want = [w.key + 1, w.key - 1];
+    for (const key of want) {
+      if (!win(key)) continue;
+      const loaded = elForKey(key);
+      if (loaded) {
+        ensureSeek(loaded);
+        continue;
+      }
+      const spare = els.find((el) => el !== active && !want.includes(+el.dataset.key));
+      if (spare) loadInto(spare, key);
+    }
+  }
+
+  function tick() {
+    requestAnimationFrame(tick);
+    if (pending) {
+      if (performance.now() - pending.started > 12000) skipPending();
+      else showPrepared();
+      return;
+    }
+    const w = cur();
+    if (!w || active.dataset.key !== String(w.key)) return;
+    const t = active.currentTime;
+    if (active.dataset.seeked !== "1" && active.readyState >= 2) ensureSeek(active);
+    if (playing && (w.tc ? t >= w.dur - 0.04 : t >= w.at + w.dur - 0.04)) { go(1); return; }
+    if (seekTimer && Date.now() - seekTimer > 12000 && active.readyState === 0) {
+      seekTimer = 0;
+      errEl.textContent = "skipping a clip that would not start";
+      errEl.style.display = "block";
+      setTimeout(() => { errEl.style.display = "none"; }, 1200);
+      go(1);
+    }
+  }
+
+  function setPlaying(next) {
+    playing = next;
+    if (playing) {
+      if (!pending) active.play().catch(() => {});
+      pauseEl.classList.remove("show");
+    } else {
+      try { active.pause(); } catch (e) {}
+      pauseEl.classList.add("show");
+      updateHud();
+    }
+    keepScreenAwake();
+  }
+
+  function toggle() { setPlaying(!playing); }
+
+  async function favorite() {
+    const w = cur();
+    if (!w) return;
+    /* flip the heart first and write second: waiting on a round trip makes the
+       tap feel dropped. A refusal puts it back and says why. */
+    const on = !favs.has(w.scene);
+    const rating = on ? 100 : 0;
+    if (on) favs.add(w.scene); else favs.delete(w.scene);
+    updateHud();
+    try {
+      const res = await fetch("/favorite", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sceneId: w.scene, port, rating }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "failed");
+      /* trust the stored value, not the one we asked for */
+      if (Number(data.rating) > 0) favs.add(w.scene); else favs.delete(w.scene);
+      if (cur() && cur().scene === w.scene) cur().rating = Number(data.rating) || 0;
+      updateHud();
+    } catch (e) {
+      if (on) favs.delete(w.scene); else favs.add(w.scene);
+      updateHud();
+      errEl.textContent = "could not favorite: " + e.message;
+      errEl.style.display = "block";
+      setTimeout(() => { errEl.style.display = "none"; }, 1800);
+    }
+  }
+
+  /* Full Scene is a navigation, not a takeover: StashTok's own card, its own page,
+     with a back button that returns here. The position is stashed first so the
+     reel comes back on the same window in the same order. */
+  pfull.addEventListener("click", (e) => { e.stopPropagation(); stashReturn(); });
+
+  /* View scene: the whole scene, looping, over the reel. Closing returns to the
+     same window in the same order -- the reel never loses its place. */
+  let sceneWasPlaying = false;
+  function openScene() {
+    const w = cur();
+    if (!w) return;
+    sceneWasPlaying = playing;
+    if (playing) setPlaying(false);
+    sTitle.textContent = w.title || ("scene " + w.scene);
+    sVideo.src = "/src/scene/" + w.scene + "?port=" + encodeURIComponent(port);
+    sceneEl.classList.add("show");
+    sVideo.play().catch(() => {});
+    keepScreenAwake();
+  }
+  function closeScene() {
+    sceneEl.classList.remove("show");
+    try { sVideo.pause(); } catch (e) {}
+    sVideo.removeAttribute("src");
+    try { sVideo.load(); } catch (e) {}
+    if (sceneWasPlaying) setPlaying(true);
+    else keepScreenAwake();
+  }
+  pview.addEventListener("click", (e) => { e.stopPropagation(); openScene(); });
+  sClose.addEventListener("click", (e) => { e.stopPropagation(); closeScene(); });
+  addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && sceneEl.classList.contains("show")) { e.preventDefault(); closeScene(); }
+  });
+
+
+  addEventListener("keydown", (e) => {
+    if (settings.open || e.target.closest?.("button, input, a")) return;
+    if (!start.classList.contains("gone")) { start.classList.add("gone"); return; }
+    if (e.key === " " || e.key === "k") { e.preventDefault(); toggle(); }
+    else if (e.key === "ArrowRight" || e.key === "j") { e.preventDefault(); go(1); }
+    else if (e.key === "ArrowLeft" || e.key === "l") { e.preventDefault(); go(-1); }
+    else if (e.key === "m") els.forEach((v) => { v.muted = !v.muted; });
+    else if (e.key === "f") { e.preventDefault(); favorite(); }
+  });
+
+  /* tap pauses; swipe up is next, swipe down is previous — the same fade, not a
+     real scroll, because the segments are not one continuous timeline */
+  let touch = null;
+  const stage = document.getElementById("stage");
+  stage.addEventListener("touchstart", (e) => {
+    const t = e.touches[0];
+    touch = { x: t.clientX, y: t.clientY, at: Date.now(), moved: false };
+  }, { passive: true });
+  stage.addEventListener("touchmove", (e) => {
+    if (!touch) return;
+    const t = e.touches[0];
+    if (Math.abs(t.clientY - touch.y) > 12) touch.moved = true;
+  }, { passive: true });
+  stage.addEventListener("touchend", (e) => {
+    if (!start.classList.contains("gone")) { touch = null; start.classList.add("gone"); return; }
+    if (!touch) { touch = null; return; }
+    const t = e.changedTouches[0];
+    const dy = t.clientY - touch.y, dx = t.clientX - touch.x;
+    const quick = Date.now() - touch.at < 700;
+    touch = null;
+    if (Math.abs(dy) > 60 && Math.abs(dy) > Math.abs(dx)) { go(dy < 0 ? 1 : -1); return; }
+    if (quick && !touch && Math.abs(dy) < 12 && Math.abs(dx) < 12) toggle();
+  }, { passive: true });
+
+  addEventListener("click", (e) => {
+    if (e.target.closest("a, button, dialog")) return;
+    if (!start.classList.contains("gone")) { start.classList.add("gone"); return; }
+    toggle();
+  });
+  menu.addEventListener("click", () => {
+    durationInput.value = windowDuration;
+    settings.showModal();
+    menu.setAttribute("aria-expanded", "true");
+  });
+  settings.addEventListener("close", () => menu.setAttribute("aria-expanded", "false"));
+  settings.addEventListener("click", (event) => {
+    if (event.target === settings) settings.close();
+  });
+  document.getElementById("reelSettingsClose").addEventListener("click", () => settings.close());
+  document.getElementById("reelShuffle").addEventListener("click", () => location.reload());
+  document.getElementById("reelDurationForm").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const next = durationInput.valueAsNumber;
+    if (!Number.isFinite(next) || next < 1 || next > 15) return;
+    try {
+      localStorage.setItem(durationKey, String(next));
+    } catch (error) {
+      durationInput.setCustomValidity("This browser could not save the duration.");
+      durationInput.reportValidity();
+      durationInput.setCustomValidity("");
+      return;
+    }
+    location.reload();
+  });
+  addEventListener("resize", () => els.forEach(fit));
+  pfav.addEventListener("click", (e) => { e.stopPropagation(); favorite(); });
+
+  (async () => {
+    try {
+      const back = takeReturn();
+      if (back) VISIT = back.visit;
+      const meta = await fetchChunk((back?.key || 0) - CHUNK, CHUNK * 3);
+      const first = meta.windows;
+      if (!first?.length) throw new Error("no clip in this library can be played as-is");
+      buf = first;
+      baseKey = first[0].key;
+      pos = first.findIndex((w) => w.key === 0);
+      if (back) {
+        const at = first.findIndex((w) => w.key === back.key);
+        if (at >= 0) pos = at;
+      }
+      if (pos < 0) pos = Math.min(CHUNK, first.length - 1);
+      stashBase = location.protocol + "//" + location.hostname + ":" + port;
+      ititle.textContent = (meta.name || "highlight reel") + " \u00b7 highlight reel";
+      const total = meta.scenes || 0;
+      const skipped = meta.skipped || 0;
+      isub.textContent = "selection from " + total + " scene" + (total === 1 ? "" : "s") +
+        (skipped ? " \u00b7 " + skipped + " skipped" : "") +
+        " \u00b7 " + windowDuration + "s windows";
+      loadInto(active, cur().key);
+      active.classList.add("on");
+      updateHud();
+      /* play at once: a muted video is allowed to autoplay, and the reel is
+         muted by design. The caption is an overlay you can dismiss, not a gate. */
+      playing = true;
+      keepScreenAwake();
+      prefetch();
+      seekTimer = Date.now();
+      const dismiss = () => { clearTimeout(introTimer); start.classList.add("gone"); };
+      const introTimer = setTimeout(dismiss, 5000);
+      iok.addEventListener("click", (e) => { e.stopPropagation(); dismiss(); });
+      start.addEventListener("click", dismiss);
+      fill();
+      requestAnimationFrame(tick);
+      setInterval(fill, 4000);
+    } catch (err) {
+      errEl.textContent = "failed: " + err.message;
+      errEl.style.display = "block";
+      start.classList.add("gone");
+    }
+  })();
+})();
+</script>
+</body></html>
