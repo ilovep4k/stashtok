@@ -4622,3 +4622,102 @@ body.stk-fullscreen-mode .stash-tok.stk-feed-fullscreen {
   color: inherit;
 }
 .stk-diagnostics-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* ---------- settings index (grouped rows -> section pages) ---------- */
+/* TikTok shape: one line per subject, grouped under a small caps header, and
+   each line opens its own page. Every surface here is already dark, so the
+   settings read as a list of rows on the black stage, not as a card stack. */
+.stk-set-index {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.stk-set-group { display: flex; flex-direction: column; }
+.stk-set-group-head {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.42);
+  margin: 0 2px 4px;
+}
+.stk-set-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 54px;
+  padding: 10px 4px;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: none;
+  color: #fff;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 0;
+}
+.stk-set-group .stk-set-row:last-of-type { border-bottom: 0; }
+.stk-set-row:active { background: rgba(255, 255, 255, 0.05); }
+.stk-set-row:focus-visible { outline: 2px solid rgba(255, 255, 255, 0.4); outline-offset: -2px; }
+.stk-set-icon {
+  flex: 0 0 auto;
+  width: 26px;
+  display: grid;
+  place-items: center;
+  color: rgba(255, 255, 255, 0.85);
+}
+.stk-set-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.stk-set-copy span { font-size: 15px; color: #fff; }
+.stk-set-copy small {
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, 0.45);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stk-set-chev { flex: 0 0 auto; display: grid; place-items: center; color: rgba(255, 255, 255, 0.32); }
+.stk-set-foot {
+  margin: 0;
+  padding: 4px 12px 8px;
+  font-size: 11px;
+  line-height: 1.4;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.stk-set-page { display: flex; flex-direction: column; }
+.stk-set-subhead {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 0 10px;
+  margin-bottom: 4px;
+  background: #000;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.stk-set-subhead > span { font-size: 16px; font-weight: 600; color: #fff; }
+.stk-set-back {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  cursor: pointer;
+}
+.stk-set-back:active { background: rgba(255, 255, 255, 0.2); }
+.stk-set-page .stk-settings-details { margin-top: 10px; }
+.stk-desktop .stk-set-index,
+.stk-desktop .stk-set-page { max-width: 620px; }

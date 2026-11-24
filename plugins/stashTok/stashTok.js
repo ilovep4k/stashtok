@@ -134,6 +134,8 @@
     /* two squares: find duplicate images */
     dupe: "M9 9h11v11H9zM5 15V4h11",
     link: "M10 14l4-4M9.2 11.4 7 13.6a3.6 3.6 0 1 0 5.1 5.1L14.3 16.5M14.8 12.6 17 10.4a3.6 3.6 0 1 0-5.1-5.1L9.7 7.5",
+    /* padlock: the privacy lock section */
+    lock: "M6.5 10.5h11a1.5 1.5 0 0 1 1.5 1.5v7a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 19v-7a1.5 1.5 0 0 1 1.5-1.5zM8.2 10.5V7.8a3.8 3.8 0 0 1 7.6 0v2.7",
   };
 
   /* ---- thumbnails ------------------------------------------------- *
@@ -10301,7 +10303,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
 
   /* Stash renders this panel from its own settings page too, where the app's
      context is not mounted: every field has to survive being handed nothing. */
-  function PlaybackSettings({ prefs, setPref, onOpenHistory, sfw }) {
+  function PlaybackSettings({ prefs, setPref, onOpenHistory, sfw, expanded }) {
     const [history, setHistory] = useState(() => readLocalList(WATCH_HISTORY_KEY));
     const [upload, setUpload] = useState("");
     const [sending, setSending] = useState(false);
@@ -10332,7 +10334,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
     }
 
     return h(React.Fragment, null,
-      h("details", { className: "stk-settings-details" },
+      h("details", { className: "stk-settings-details", open: !!expanded },
         h("summary", null, "Watch history", h("span", null, history.length + " / 100")),
         history.length ? h(React.Fragment, null,
           h("ol", { className: "stk-watch-history" }, history.map((row) =>
@@ -10350,7 +10352,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
           } }, "Clear history")
         ) : h("p", { className: "stk-sub" }, "Played videos will appear here.")
       ),
-      h("details", { className: "stk-settings-details" },
+      h("details", { className: "stk-settings-details", open: !!expanded },
         h("summary", null, "Playback diagnostics"),
         h(PrefRow, { title: "Record playback events", hint: "Frame counts, timing and media errors are kept on this device. Reports omit scene titles, IDs and media URLs." },
           h(PrefToggle, { label: "Record playback events", on: prefs.playbackDiagnostics !== false,
@@ -10374,196 +10376,265 @@ function TagsPage({ onPick, onMarkers, onBack }) {
     );
   }
 
-  function SettingsPanel({ cfg = {}, feeds = [], onEdit, pin, onSetPin, onClearPin, sfw, onToggleSfw,
+  /* Settings, TikTok shape: a grouped index of one-line rows, each opening its
+     own page. Everything used to live on one long scroll, which on a phone
+     buried the lock and the feed window under six screens of toggles. */
+
+  const SETTINGS_GROUPS = ["Preferences", "Privacy", "Content"];
+
+  const FEED_WINDOW_LABEL = { all: "Everything", 30: "30 days", 90: "90 days", 365: "1 year" };
+  const SORT_LABEL = {
+    filesize: "Size", updated_at: "Recent", duration: "Length",
+    resolution: "Res", title: "A–Z", random: "Random",
+  };
+  const sortLabel = (value) => SORT_LABEL[value] || "Recent";
+
+  function SettingsRow({ icon, title, value, onClick, danger }) {
+    return h(
+      "button",
+      {
+        type: "button",
+        className: "stk-set-row" + (danger ? " stk-set-row-danger" : ""),
+        onClick,
+      },
+      h("span", { className: "stk-set-icon" }, h(Icon, { name: icon || "info", size: 19 })),
+      h(
+        "span",
+        { className: "stk-set-copy" },
+        h("span", null, title),
+        value ? h("small", null, value) : null
+      ),
+      h("span", { className: "stk-set-chev" }, h(Icon, { name: "chevron", size: 15 }))
+    );
+  }
+
+  function SettingsPanel({ cfg = {}, feeds = [], onEdit = () => {}, pin, onSetPin = () => {},
+    onClearPin = () => {}, sfw, onToggleSfw = () => {},
     prefs = {}, setPref = () => {}, onOpenHistory }) {
     const [draft, setDraft] = useState("");
     const [saved, setSaved] = useState(false);
+    const [section, setSection] = useState("");
 
-    return h(
-      "div",
-      { className: "stk-settings", style: { marginTop: "16px" } },
-      h("h4", null, "Blur (safe for work)"),
-      h(
-        "button",
-        {
-          className: "stk-switch-row" + (sfw ? " stk-on" : ""),
-          onClick: () => onToggleSfw(!sfw),
-        },
-        h(
-          "span",
-          { className: "stk-switch-copy" },
-          sfw ? "On — frames only" : "Off — playback",
-          h(
-            "small",
-            null,
-            sfw
+    /* back out of a section with the same keys the rest of the app uses */
+    useEffect(() => {
+      if (!section) return undefined;
+      function onKey(event) {
+        const node = event.target;
+        if (node && (node.tagName === "INPUT" || node.tagName === "TEXTAREA" || node.isContentEditable)) return;
+        if (event.key === "Escape" || event.key === "Backspace") {
+          event.preventDefault();
+          setSection("");
+        }
+      }
+      window.addEventListener("keydown", onKey);
+      return () => window.removeEventListener("keydown", onKey);
+    }, [section]);
+
+    const rows = [
+      {
+        id: "appearance", group: "Preferences", icon: "image", title: "Appearance",
+        value: [(prefs.mono ? "Black & white" : "Full colour"),
+          prefs.autoCrop !== false ? "Crop to fill" : "Letterbox"].join(" · "),
+      },
+      {
+        id: "feed", group: "Preferences", icon: "feed", title: "Feed",
+        value: [FEED_WINDOW_LABEL[prefs.feedWindow] || "Everything",
+          prefs.dragScrub === true ? "Drag-scrub" : "Tap to scrub"].join(" · "),
+      },
+      {
+        id: "playback", group: "Preferences", icon: "play", title: "Playback",
+        value: "History · diagnostics",
+      },
+      {
+        id: "performer", group: "Preferences", icon: "user", title: "Performer page",
+        value: "Sort " + sortLabel(prefs.performerSort),
+      },
+      {
+        id: "favorites", group: "Preferences", icon: "heart", title: "Favorites",
+        value: "Sort " + sortLabel(prefs.favoritesSort),
+      },
+      {
+        id: "navigation", group: "Preferences", icon: "menu", title: "Navigation",
+        value: "Bottom bar",
+      },
+      {
+        id: "privacy", group: "Privacy", icon: "info", title: "Blur (safe for work)",
+        value: sfw ? "On — frames only" : "Off — playback",
+      },
+      {
+        id: "lock", group: "Privacy", icon: "lock", title: "Privacy lock",
+        value: pin ? "PIN set" : "No PIN",
+      },
+      {
+        id: "feeds", group: "Content", icon: "sparkle", title: "Feeds",
+        value: (feeds || []).length + " saved",
+      },
+      {
+        id: "about", group: "Content", icon: "heart", title: "About hearts & feeds",
+        value: "Stash ratings, browser-local feeds",
+      },
+    ];
+
+    function SectionBody() {
+      if (section === "appearance") {
+        return h(React.Fragment, null,
+          h(PrefRow, { title: "Black & white", hint: "Desaturate the whole UI — pairs with a red or greyscale colour filter" },
+            h(PrefToggle, { label: "Black & white", on: !!prefs.mono, onChange: (value) => setPref("mono", value) })),
+          h(PrefRow, { title: "Auto-crop to fill", hint: "Fill a portrait screen: the middle half of a 16:9 clip, or an even top-and-bottom crop when a clip is only a little off the screen's ratio. Off = always letterbox." },
+            h(PrefToggle, { label: "Auto-crop", on: prefs.autoCrop !== false, onChange: (value) => setPref("autoCrop", value) })),
+          h(PrefRow, { title: "Show file path", hint: "Print the folder path under the caption in the feed" },
+            h(PrefToggle, { label: "Show path", on: !!prefs.showPath, onChange: (value) => setPref("showPath", value) }))
+        );
+      }
+      if (section === "feed") {
+        return h(React.Fragment, null,
+          h(PrefRow, { title: "What lands in the feed", hint: "For You draws from this window", stack: true },
+            h(PrefPills, {
+              value: prefs.feedWindow,
+              options: [["all", "Everything"], ["30", "30 days"], ["90", "90 days"], ["365", "1 year"]],
+              onChange: (value) => setPref("feedWindow", value),
+            })),
+          h(PrefRow, { title: "Drag-scrub the stage", hint: "Press and sweep sideways across the video to seek. Off by default — a sideways thumb at the end of a swipe was seeking the clip. Tap the caption to open the scrub bar instead." },
+            h(PrefToggle, { label: "Drag-scrub", on: prefs.dragScrub === true, onChange: (value) => setPref("dragScrub", value) }))
+        );
+      }
+      if (section === "playback") {
+        return h(PlaybackSettings, { prefs, setPref, onOpenHistory, sfw, expanded: true });
+      }
+      if (section === "performer") {
+        return h(React.Fragment, null,
+          h(PrefRow, { title: "Default sort", hint: "Used the first time you open a performer", stack: true },
+            h(PrefPills, {
+              value: prefs.performerSort,
+              options: [["filesize", "Size"], ["updated_at", "Recent"], ["duration", "Length"], ["resolution", "Res"], ["title", "A–Z"], ["random", "Random"]],
+              onChange: (value) => setPref("performerSort", value),
+            })),
+          h(PrefRow, { title: "Folders on top", hint: "Group a performer's clips by folder above the grid" },
+            h(PrefToggle, { label: "Folders on top", on: prefs.foldersOnTop, onChange: (value) => setPref("foldersOnTop", value) })),
+          h(PrefRow, { title: "Hover previews", hint: "Plays the clip's own file when the pointer rests on a tile, skipping ahead every second. Off by default — it streams the real file and is heavy for a decoration." },
+            h(PrefToggle, { label: "Hover previews", on: prefs.hoverPreview === true, onChange: (value) => setPref("hoverPreview", value) })),
+          h(PrefRow, { title: "Show Images tab", hint: "Adds an Images tab next to Scenes on every performer page" },
+            h(PrefToggle, { label: "Images tab", on: prefs.performerImages, onChange: (value) => setPref("performerImages", value) })),
+          h(PrefRow, { title: "Show Markers tab", hint: "Adds a Markers tab next to Scenes on every performer page" },
+            h(PrefToggle, { label: "Markers tab", on: prefs.performerMarkers, onChange: (value) => setPref("performerMarkers", value) }))
+        );
+      }
+      if (section === "favorites") {
+        return h(PrefRow, { title: "Sort order", hint: "How your hearted scenes are ordered", stack: true },
+          h(PrefPills, {
+            value: prefs.favoritesSort,
+            options: [["updated_at", "Recent"], ["filesize", "Size"], ["duration", "Length"], ["resolution", "Res"], ["title", "A–Z"], ["random", "Random"]],
+            onChange: (value) => setPref("favoritesSort", value),
+          }));
+      }
+      if (section === "navigation") {
+        return h(React.Fragment, null,
+          h(PrefRow, { title: "Bottom bar", hint: "Long-press the last three buttons to change what they open" },
+            h("button", { className: "stk-btn", onClick: () => setPref("navSlots", DEFAULT_NAV_SLOTS.slice()) }, "Reset")),
+          h("p", { className: "stk-sub" }, "Settings lives in the drawer, not on the bar. Feed is fixed on the far left.")
+        );
+      }
+      if (section === "privacy") {
+        return h(React.Fragment, null,
+          h(PrefRow, { title: "Blur everything", hint: sfw
               ? "Videos are never requested or played; the feed shows still frames."
-              : "Videos stream and autoplay as usual."
-          )
-        ),
-        h("span", { className: "stk-switch" }, h("span", { className: "stk-knob" }))
-      ),
-      h(PlaybackSettings, { prefs, setPref, onOpenHistory, sfw }),
-      h("h4", null, "Feed"),
-      h(
-        PrefRow,
-        { title: "What lands in the feed", hint: "For You draws from this window", stack: true },
-        h(PrefPills, {
-          value: prefs.feedWindow,
-          options: [["all", "Everything"], ["30", "30 days"], ["90", "90 days"], ["365", "1 year"]],
-          onChange: (value) => setPref("feedWindow", value),
-        })
-      ),
-      h(
-        PrefRow,
-        { title: "Black & white", hint: "Desaturate the whole UI — pairs with a red or greyscale colour filter" },
-        h(PrefToggle, { label: "Black & white", on: !!prefs.mono, onChange: (value) => setPref("mono", value) })
-      ),
-      h(
-        PrefRow,
-        { title: "Auto-crop to fill", hint: "Fill a portrait screen: the middle half of a 16:9 clip, or an even top-and-bottom crop when a clip is only a little off the screen's ratio. Off = always letterbox." },
-        h(PrefToggle, { label: "Auto-crop", on: prefs.autoCrop !== false, onChange: (value) => setPref("autoCrop", value) })
-      ),
-      h(
-        PrefRow,
-        { title: "Show file path", hint: "Print the folder path under the caption in the feed" },
-        h(PrefToggle, { label: "Show path", on: !!prefs.showPath, onChange: (value) => setPref("showPath", value) })
-      ),
-      h(
-        PrefRow,
-        {
-          title: "Drag-scrub the stage",
-          hint: "Press and sweep sideways across the video to seek. Off by default — a sideways thumb at the end of a swipe was seeking the clip. Tap the caption to open the scrub bar instead.",
-        },
-        h(PrefToggle, {
-          label: "Drag-scrub",
-          on: prefs.dragScrub === true,
-          onChange: (value) => setPref("dragScrub", value),
-        })
-      ),
-      h("h4", { style: { marginTop: "18px" } }, "Performer page"),
-      h(
-        PrefRow,
-        { title: "Default sort", hint: "Used the first time you open a performer", stack: true },
-        h(PrefPills, {
-          value: prefs.performerSort,
-          options: [["filesize", "Size"], ["updated_at", "Recent"], ["duration", "Length"], ["resolution", "Res"], ["title", "A–Z"], ["random", "Random"]],
-          onChange: (value) => setPref("performerSort", value),
-        })
-      ),
-      h(
-        PrefRow,
-        { title: "Folders on top", hint: "Group a performer's clips by folder above the grid" },
-        h(PrefToggle, { label: "Folders on top", on: prefs.foldersOnTop, onChange: (value) => setPref("foldersOnTop", value) })
-      ),
-      h(
-        PrefRow,
-        {
-          title: "Hover previews",
-          hint: "Plays the clip's own file when the pointer rests on a tile, skipping ahead every second. Off by default — it streams the real file and is heavy for a decoration.",
-        },
-        h(PrefToggle, {
-          label: "Hover previews",
-          on: prefs.hoverPreview === true,
-          onChange: (value) => setPref("hoverPreview", value),
-        })
-      ),
-      h(
-        PrefRow,
-        { title: "Show Images tab", hint: "Adds an Images tab next to Scenes on every performer page" },
-        h(PrefToggle, { label: "Images tab", on: prefs.performerImages, onChange: (value) => setPref("performerImages", value) })
-      ),
-      h(
-        PrefRow,
-        { title: "Show Markers tab", hint: "Adds a Markers tab next to Scenes on every performer page" },
-        h(PrefToggle, { label: "Markers tab", on: prefs.performerMarkers, onChange: (value) => setPref("performerMarkers", value) })
-      ),
-      h("h4", { style: { marginTop: "18px" } }, "Favorites"),
-      h(
-        PrefRow,
-        { title: "Sort order", hint: "How your hearted scenes are ordered", stack: true },
-        h(PrefPills, {
-          value: prefs.favoritesSort,
-          options: [["updated_at", "Recent"], ["filesize", "Size"], ["duration", "Length"], ["resolution", "Res"], ["title", "A–Z"], ["random", "Random"]],
-          onChange: (value) => setPref("favoritesSort", value),
-        })
-      ),
-      h("h4", { style: { marginTop: "18px" } }, "Navigation"),
-      h(
-        PrefRow,
-        { title: "Bottom bar", hint: "Long-press the last three buttons to change what they open" },
-        h(
-          "button",
-          { className: "stk-btn", onClick: () => setPref("navSlots", DEFAULT_NAV_SLOTS.slice()) },
-          "Reset"
-        )
-      ),
-      h("h4", { style: { marginTop: "18px" } }, "Privacy lock"),
-      h(
-        "p",
-        { className: "stk-sub" },
-        pin
-          ? "A PIN is set. StashTok black-screens the moment this tab loses focus and asks for the PIN when you come back."
-          : "Set a PIN to black-screen StashTok whenever you leave the tab."
-      ),
-      h(
-        "div",
-        { className: "stk-pin-row" },
-        h("input", {
-          type: "tel",
-          inputMode: "numeric",
-          placeholder: pin ? "New PIN (4 digits)" : "PIN (4 digits)",
-          value: draft,
-          maxLength: 4,
-          onChange: (event) => {
-            const next = event.currentTarget.value.replace(/\D/g, "").slice(0, 4);
-            setDraft(next);
-            /* accept the moment four digits exist: no confirm step */
-            if (next.length === 4) {
-              onSetPin(pinDigest(next));
-              setSaved(true);
-            } else {
-              setSaved(false);
-            }
-          },
-          className: "stk-pin-input",
-        }),
-        pin &&
-          h(
-            "button",
-            {
+              : "Videos stream and autoplay as usual." },
+            h(PrefToggle, { label: "Blur (safe for work)", on: !!sfw, onChange: (value) => onToggleSfw(value) })),
+          h("p", { className: "stk-sub" }, "Blur also opens the app blurred: it is the fastest thing to switch before showing someone a screen.")
+        );
+      }
+      if (section === "lock") {
+        return h(React.Fragment, null,
+          h("p", { className: "stk-sub" }, pin
+            ? "A PIN is set. StashTok black-screens the moment this tab loses focus and asks for the PIN when you come back."
+            : "Set a PIN to black-screen StashTok whenever you leave the tab."),
+          h("div", { className: "stk-pin-row" },
+            h("input", {
+              type: "tel",
+              inputMode: "numeric",
+              placeholder: pin ? "New PIN (4 digits)" : "PIN (4 digits)",
+              value: draft,
+              maxLength: 4,
+              onChange: (event) => {
+                const next = event.currentTarget.value.replace(/\D/g, "").slice(0, 4);
+                setDraft(next);
+                /* accept the moment four digits exist: no confirm step */
+                if (next.length === 4) {
+                  onSetPin(pinDigest(next));
+                  setSaved(true);
+                } else {
+                  setSaved(false);
+                }
+              },
+              className: "stk-pin-input",
+            }),
+            pin && h("button", {
               className: "stk-btn stk-btn-danger",
               onClick: () => {
                 onClearPin();
                 setDraft("");
                 setSaved(false);
               },
-            },
-            "Remove"
+            }, "Remove")
+          ),
+          saved && h("p", { className: "stk-sub" }, "PIN saved.")
+        );
+      }
+      if (section === "feeds") {
+        return h(React.Fragment, null,
+          (feeds || []).map((feed) =>
+            h("button", { key: feed.id, className: "stk-set-row", onClick: () => onEdit(feed) },
+              h("span", { className: "stk-set-icon" }, h(Icon, { name: "sparkle", size: 18 })),
+              h("span", { className: "stk-set-copy" }, h("span", null, feed.name), h("small", null, feed.type)),
+              h("span", { className: "stk-set-chev" }, h(Icon, { name: "chevron", size: 15 }))
+            )
+          ),
+          h("button", { className: "stk-btn", onClick: () => onEdit(null), style: { marginTop: "12px" } },
+            h(Icon, { name: "plus", size: 14 }), "New feed")
+        );
+      }
+      return h(React.Fragment, null,
+        h("p", { className: "stk-sub" }, "Hearts are written to Stash as rating100. Any rated scene appears in the Favorites feed, and in Stash's own rating filter. Feed definitions live in this browser only."),
+        h("p", { className: "stk-sub" }, "Long-press the middle of the video for actions · hold the right side to fast-forward · hold the left to rewind · pinch to zoom · long-press then drag to move the frame · double-tap to step the crop.")
+      );
+    }
+
+    if (section) {
+      const current = rows.find((row) => row.id === section);
+      return h(
+        "div",
+        { className: "stk-settings stk-set-page" },
+        h("div", { className: "stk-set-subhead" },
+          h("button", { type: "button", className: "stk-set-back", title: "Back to settings", onClick: () => setSection("") },
+            h(Icon, { name: "back", size: 20 })),
+          h("span", null, current ? current.title : "Settings")
+        ),
+        /* called, not mounted: a fresh component type each render would remount
+           the PIN input on every keystroke and drop the keyboard focus */
+        SectionBody()
+      );
+    }
+
+    return h(
+      "div",
+      { className: "stk-settings stk-set-index" },
+      SETTINGS_GROUPS.map((group) => {
+        const inGroup = rows.filter((row) => row.group === group);
+        if (!inGroup.length) return null;
+        return h("section", { key: group, className: "stk-set-group" },
+          h("h4", { className: "stk-set-group-head" }, group),
+          inGroup.map((row) =>
+            h(SettingsRow, {
+              key: row.id,
+              icon: row.icon,
+              title: row.title,
+              value: row.value,
+              onClick: () => setSection(row.id),
+            })
           )
-      ),
-      saved && h("p", { className: "stk-sub" }, "PIN saved."),
-      h("h4", { style: { marginTop: "18px" } }, "Feeds"),
-      (feeds || []).map((feed) =>
-        h(
-          "button",
-          { key: feed.id, className: "stk-marker-row", onClick: () => onEdit(feed) },
-          h(Icon, { name: "sparkle", size: 14 }),
-          feed.name,
-          h("span", null, feed.type)
-        )
-      ),
-      h(
-        "button",
-        { className: "stk-btn", onClick: () => onEdit(null), style: { marginTop: "8px" } },
-        h(Icon, { name: "plus", size: 14 }),
-        "New feed"
-      ),
-      h(
-        "p",
-        { className: "stk-sub", style: { marginTop: "16px" } },
-        "Hearts are written to Stash as rating100. Any rated scene appears in the Favorites feed, and in Stash's own rating filter. Feed definitions live in this browser only."
-      )
+        );
+      }),
+      h("p", { className: "stk-set-foot" }, "Hearts save to Stash as ratings. Feeds stay in this browser.")
     );
   }
 
@@ -11815,12 +11886,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
           onClearPin: () => savePin(""),
           sfw,
           onToggleSfw: setSfwMode,
-        }),
-        h(
-          "p",
-          { className: "stk-sub" },
-          "Long-press the middle of the video for actions · hold the right side to fast-forward · hold the left to rewind · pinch to zoom · long-press then drag to move the frame · double-tap to step the crop.",
-        )
+        })
       );
     } else if (tab === "clip" && clipScene) {
       /* One scene, opened from the highlight reel's Full Scene: the same card a
