@@ -61,11 +61,17 @@
     return items.filter((_, i) => (offset + i) % 2 === spec.parity);
   }
   const HOLD_MS = 380;
-  /* the quick menu owns a still finger for longer than a grab needs: a held
-     thumb that starts moving grabs the frame instead (see GRAB_MS) */
+  /* the quick menu owns a still finger for longer than a grab needs */
   const LONG_PRESS_MS = 400;
-  /* hold this long, then drag, and the frame moves under one finger */
-  const GRAB_MS = 260;
+  /* a press that moves this far is a grab, not a tap: the frame follows the
+     finger from here on */
+  const PAN_SLOP = 8;
+  /* past the edge of the picture the frame keeps moving at a third of the
+     finger's speed and no further than RUBBER_MAX, so the drag itself is what
+     says "I want the next clip" while the picture says "there is nothing more".
+     The release is judged on the RAW overscroll, so a short flick still pages. */
+  const RUBBER_RATIO = 0.35;
+  const RUBBER_MAX = 96;
   const SWIPE_PX = 70;
   /* a leftward drag longer than this switches from scrubbing to the channel
      carousel. Rightward drags stay scrubbing: the old "swipe right = performer
@@ -678,6 +684,13 @@
 
   function clamp(value, min, max) {
     return Math.min(max, Math.max(min, value));
+  }
+
+  /* how far the frame moves when the finger has already left the picture: the
+     same distance, compressed, so the edge reads as elastic instead of stiff */
+  function rubber(distance) {
+    if (!distance) return 0;
+    return Math.sign(distance) * Math.min(RUBBER_MAX, Math.abs(distance) * RUBBER_RATIO);
   }
 
   function buzz(ms) {
@@ -4287,54 +4300,51 @@ void main() {
 
       const dx = event.clientX - g.x0;
       const dy = event.clientY - g.y0;
-      if (!g.moved && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) {
+      if (!g.moved && (Math.abs(dx) > PAN_SLOP || Math.abs(dy) > PAN_SLOP)) {
         g.moved = true;
         window.clearTimeout(holdTimer.current);
-        /* a held thumb that then drags grabs the frame: one finger where a pan
-           used to need two. Only while the picture is bigger than its box, or
-           there is nothing to move; the quick menu and speed holds step aside. */
-        if (
-          (g.mode === "press" || g.mode === "menu") &&
-          tf.current.s > 1.02 &&
-          performance.now() - g.t0 >= GRAB_MS
-        ) {
-          g.mode = "pan";
-          g.grab = true;
-          g.panX = tf.current.x;
-          g.panY = tf.current.y;
-          /* re-anchor so the frame does not jump by the delay's worth of travel */
-          g.x0 = event.clientX;
-          g.y0 = event.clientY;
+        if (g.mode === "press" || g.mode === "menu") {
+          /* Every drag is a grab: the picture follows the finger (mouse or
+             thumb) at once, with no zoom and no hold required. When the frame
+             has nothing left to give, the overscroll is what a release reads as
+             a swipe, so paging the feed never needs a second gesture. Seeking by
+             drag is the one thing that would eat the grab, so it only wins when
+             it was turned on in Settings. */
           clearPress();
           setQuick(null);
-          buzz(8);
-          return;
+          if (prefs && prefs.dragScrub === true && !userZoomed()) {
+            g.mode = "seek";
+          } else {
+            g.mode = "pan";
+            g.panX = tf.current.x;
+            g.panY = tf.current.y;
+            g.overX = 0;
+            g.overY = 0;
+            /* re-anchor at the slop threshold so the frame does not jump */
+            g.x0 = event.clientX;
+            g.y0 = event.clientY;
+            buzz(6);
+            return;
+          }
         }
       }
       if (!g.moved) return;
 
-      if (g.mode === "press") {
-        clearPress();
-        /* pan only a zoom the fingers made: the crop cycle is already 2x, and
-           treating that as "zoomed" would turn every swipe into a pan */
-        if (userZoomed()) {
-          g.mode = "pan";
-          g.panX = tf.current.x;
-          g.panY = tf.current.y;
-        } else if (Math.abs(dy) > Math.abs(dx)) {
-          g.mode = "swipe";
-        } else {
-          g.mode = "seek";
-        }
-      }
-
       if (g.mode === "pan") {
-        tf.current.x = g.panX + dx;
-        tf.current.y = g.panY + dy;
-        clampPan();
+        const rect = stage.getBoundingClientRect();
+        const maxX = (rect.width * (tf.current.s - 1)) / 2;
+        const maxY = (rect.height * (tf.current.s - 1)) / 2;
+        const wantX = g.panX + (event.clientX - g.x0);
+        const wantY = g.panY + (event.clientY - g.y0);
+        /* what the finger asked for beyond the picture's own edge: kept raw for
+           the release test, drawn through rubber() so the edge feels elastic */
+        const overX = maxX > 0 ? (wantX > maxX ? wantX - maxX : wantX < -maxX ? wantX + maxX : 0) : wantX;
+        const overY = maxY > 0 ? (wantY > maxY ? wantY - maxY : wantY < -maxY ? wantY + maxY : 0) : wantY;
+        g.overX = overX;
+        g.overY = overY;
+        tf.current.x = clamp(wantX, -maxX, maxX) + rubber(overX);
+        tf.current.y = clamp(wantY, -maxY, maxY) + rubber(overY);
         applyTransform();
-      } else if (g.mode === "swipe") {
-        setDragY(dy);
       } else if (g.mode === "seek") {
         /* only a leftward drag leaves scrubbing; rightward keeps seeking */
         if (dx < -CHANNEL_PX) {
@@ -8454,9 +8464,11 @@ void main() {
       if (isDiscover) return undefined;
       let alive = true;
       const direction = sort === "name" ? "ASC" : "DESC";
+      /* "All Favorites" opens this same list scoped to hearted performers */
+      const favOnlyArg = ", performer_filter: { filter_favorites: true }";
       gql(
         `query StashTokPerformers($q: String, $sort: String, $dir: SortDirectionEnum) {
-          findPerformers(filter: { per_page: 200, sort: $sort, direction: $dir, q: $q }) {
+          findPerformers(filter: { per_page: 200, sort: $sort, direction: $dir, q: $q }${favoritesOnly ? favOnlyArg : ""}) {
             count
             performers { id name image_path scene_count favorite updated_at }
           }
@@ -8470,7 +8482,7 @@ void main() {
       return () => {
         alive = false;
       };
-    }, [query, sort]);
+    }, [query, sort, favoritesOnly]);
 
     if (selected) {
       return h(PerformerProfile, {
@@ -9657,23 +9669,69 @@ void main() {
     { key: "longest", title: "Longest", sort: "duration", direction: "DESC" },
   ];
 
-  function FavoritesPage({ prefs, onPlay, setPref, onOpenPerformer }) {
+  /* first performer on the scene: the byline a favourites tile shows */
+  function performerName(scene) {
+    const list = (scene && scene.performers) || [];
+    return (list[0] && list[0].name) || "";
+  }
+
+  /* favourite performers come back "recently updated", which parks the same
+     faces in the same slots on every visit. Shuffle per mount so the row feels
+     alive; the order is local only, no query or sort changes. */
+  function shuffleRows(list) {
+    const out = list.slice();
+    for (let i = out.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const swap = out[i];
+      out[i] = out[j];
+      out[j] = swap;
+    }
+    return out;
+  }
+
+  function FavoritesPage({ prefs, onPlay, setPref, onOpenPerformer, onOpenRow = () => {}, onAllPerformers = () => {} }) {
     const [perfRows, setPerfRows] = useState(null);
     const [rows, setRows] = useState({});
     const [error, setError] = useState("");
+    const pageRef = useRef(null);
+
+    /* A short page cannot scroll vertically, so a wheel over a row used to do
+       nothing at all and the tab read as frozen. When the page itself has no
+       room to scroll, the row under the cursor takes the wheel instead: it is
+       the only thing on screen with more to show. */
+    useEffect(() => {
+      const node = pageRef.current;
+      if (!node) return;
+      const onWheel = (event) => {
+        const strip = event.target.closest && event.target.closest(".stk-fav-perfs, .stk-fav-strip");
+        if (!strip) return;
+        if (node.scrollHeight - node.clientHeight > 2) return;
+        const max = strip.scrollWidth - strip.clientWidth;
+        if (max <= 1) return;
+        const step = event.deltaX || event.deltaY;
+        const next = Math.max(0, Math.min(max, strip.scrollLeft + step));
+        if (next === strip.scrollLeft) return;
+        event.preventDefault();
+        strip.scrollLeft = next;
+      };
+      node.addEventListener("wheel", onWheel, { passive: false });
+      return () => node.removeEventListener("wheel", onWheel);
+    }, []);
 
     useEffect(() => {
       let cancelled = false;
       gql(
+        /* the heart on a performer is Stash's `favorite` flag, not a rating:
+           filtering on rating100 > 80 found 5 of the 16 hearted performers */
         `query StashTokFavPerformers {
-          findPerformers(performer_filter: { rating100: { value: 80, modifier: GREATER_THAN } },
-                         filter: { per_page: 40, sort: "updated_at", direction: DESC }) {
+          findPerformers(performer_filter: { filter_favorites: true },
+                         filter: { per_page: 60, sort: "updated_at", direction: DESC }) {
             performers { id name image_path scene_count }
           }
         }`
       )
         .then((data) => {
-          if (!cancelled) setPerfRows((data.findPerformers && data.findPerformers.performers) || []);
+          if (!cancelled) setPerfRows(shuffleRows((data.findPerformers && data.findPerformers.performers) || []));
         })
         .catch(() => {
           if (!cancelled) setPerfRows([]);
@@ -9690,7 +9748,7 @@ void main() {
           `query StashTokFavoriteRow($sort: String!, $dir: SortDirectionEnum!) {
             findScenes(scene_filter: { rating100: { value: 0, modifier: GREATER_THAN } },
                        filter: { per_page: 20, sort: $sort, direction: $dir }) {
-              scenes { id title rating100 paths { screenshot preview } files { duration size } }
+              scenes { id title rating100 paths { screenshot preview } performers { id name } files { duration size } }
             }
           }`,
           { sort: row.sort, dir: row.direction }
@@ -9733,12 +9791,14 @@ void main() {
           style: { backgroundImage: `url("${rel(scene.paths && scene.paths.screenshot)}")` },
         }),
         h("span", { className: "stk-fav-dur" }, fmtTime((scene.files && scene.files[0] && scene.files[0].duration) || 0)),
-        at < 4 && scene.rating100 >= 60 ? h("span", { className: "stk-tile-heart" }, h(Icon, { name: "heart", size: 11, filled: true })) : null
+        /* the heart was identical on every favourite, so it said nothing; the
+           performer name is the one thing that tells two tiles apart */
+        performerName(scene) ? h("span", { className: "stk-fav-user" }, performerName(scene)) : null
       );
 
     return h(
       "div",
-      { className: "stk-page stk-fav-page" },
+      { className: "stk-page stk-fav-page", ref: pageRef },
       h(
         "h2",
         { className: "stk-fav-h1", onClick: () => openRowFeed(FAVORITE_ROWS[0]) },
@@ -9756,7 +9816,10 @@ void main() {
           h(
             "div",
             { className: "stk-fav-perfs" },
-            perfRows.map((performer) =>
+            /* ten circles, then a card to the full favourites gallery: a
+               horizontal row hides everything past the first screenful, so the
+               rest needs a door rather than a scroll */
+            perfRows.slice(0, 10).map((performer) =>
               h(
                 "button",
                 {
@@ -9770,7 +9833,15 @@ void main() {
                 }),
                 h("span", { className: "stk-fav-perf-name" }, performer.name)
               )
-            )
+            ),
+            perfRows.length > 0
+              ? h(
+                  "button",
+                  { className: "stk-fav-more stk-fav-perf-all", onClick: () => onAllPerformers() },
+                  h(Icon, { name: "chevron", size: 18 }),
+                  h("span", null, "All Favorites")
+                )
+              : null
           )
         ),
 
@@ -9780,7 +9851,7 @@ void main() {
           { key: row.key, className: "stk-fav-section" },
           h(
             "h3",
-            { className: "stk-fav-rowhead", onClick: () => openRowFeed(row) },
+            { className: "stk-fav-rowhead", onClick: () => onOpenRow(row) },
             h("span", null, row.title),
             h("small", null, "View all")
           ),
@@ -9794,13 +9865,105 @@ void main() {
                 rows[row.key].map((scene, at) => tile(scene, row, at)),
                 h(
                   "button",
-                  { className: "stk-fav-more", onClick: () => openRowFeed(row) },
+                  { className: "stk-fav-more", onClick: () => onOpenRow(row) },
                   h(Icon, { name: "chevron", size: 20 }),
                   h("span", null, "View all")
                 )
               )
         )
       )
+    );
+  }
+
+    /* ------------------------------------------------------------------ */
+  /* favorites: one row opened as a gallery ("View all")                */
+  /* ------------------------------------------------------------------ */
+
+  /* "View all" used to drop straight into the feed, which hid the rest of the
+     row behind a swipe. It is a gallery now: the row's whole list as a grid and
+     one Play Feed button for the old behaviour. Tapping a tile plays that scene
+     in the row's own order, so grid and player can never disagree. */
+  function FavoritesGallery({ row, onPlay, onBack }) {
+    const [scenes, setScenes] = useState(null);
+    const [error, setError] = useState("");
+
+    useEffect(() => {
+      let cancelled = false;
+      setScenes(null);
+      setError("");
+      gql(
+        `query StashTokFavoriteGallery($sort: String!, $dir: SortDirectionEnum!) {
+          findScenes(scene_filter: { rating100: { value: 0, modifier: GREATER_THAN } },
+                     filter: { per_page: 240, sort: $sort, direction: $dir }) {
+            scenes { id title rating100 paths { screenshot preview } performers { id name } files { duration size } }
+          }
+        }`,
+        { sort: row.sort, dir: row.direction }
+      )
+        .then((data) => {
+          if (cancelled) return;
+          const list = ((data.findScenes && data.findScenes.scenes) || []).filter(
+            (scene) => scene.files && scene.files.length
+          );
+          setScenes(list);
+        })
+        .catch((err) => {
+          if (cancelled) return;
+          setScenes([]);
+          setError(String((err && err.message) || err));
+        });
+      return () => {
+        cancelled = true;
+      };
+    }, [row.key]);
+
+    const list = scenes || [];
+    const playFrom = (scene) =>
+      onPlay(scene || list[0], {
+        ids: list.map((item) => String(item.id)),
+        sort: row.sort,
+        direction: row.direction,
+        name: row.title,
+      });
+
+    return h(
+      "div",
+      { className: "stk-page stk-fav-gallery" },
+      h(
+        "div",
+        { className: "stk-page-head" },
+        h("button", { className: "stk-page-back", title: "Back", onClick: onBack }, h(Icon, { name: "back", size: 19 })),
+        h("span", { className: "stk-page-title" }, row.title),
+        list.length
+          ? h(
+              "button",
+              { className: "stk-fav-playfeed", onClick: () => playFrom(null) },
+              h(Icon, { name: "play", size: 13 }),
+              h("span", null, "Play Feed")
+            )
+          : null
+      ),
+      !scenes
+        ? h(
+            "div",
+            { className: "stk-grid-3" },
+            [0, 1, 2, 3, 4, 5].map((n) => h("div", { key: "g" + n, className: "stk-fav-ghost" }))
+          )
+        : list.length === 0
+        ? h("p", { className: "stk-sub" }, error || "Nothing here yet.")
+        : h(
+            "div",
+            { className: "stk-grid-3" },
+            list.map((scene) =>
+              h(
+                "button",
+                { key: "g" + scene.id, className: "stk-tile", onClick: () => playFrom(scene) },
+                h("div", { className: "stk-tile-photo" }, h(Thumb, { src: rel(scene.paths && scene.paths.screenshot) })),
+                h("span", { className: "stk-fav-dur" }, fmtTime((scene.files && scene.files[0] && scene.files[0].duration) || 0)),
+                performerName(scene) ? h("span", { className: "stk-fav-user" }, performerName(scene)) : null
+              )
+            )
+          )
     );
   }
 
@@ -10620,7 +10783,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
 
   const SETTINGS_GROUPS = [
     { id: "Preferences", rank: 1, rows: ["feeds", "performer", "blur", "lock"] },
-    { id: "App Settings", rank: 2, rows: ["appearance", "navigation", "about"] },
+    { id: "App Settings", rank: 2, rows: ["appearance", "navigation", "operations", "about"] },
   ];
 
   /* titles double as the shell's page header, so keep them here */
@@ -11021,7 +11184,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
     onDeleteFeed = () => {}, onDraftFeed = () => {}, onBack = () => {},
     feedDraft = null, section = "", onSection = () => {},
     pin, onSetPin = () => {}, onClearPin = () => {}, sfw, onToggleSfw = () => {},
-    prefs = {}, setPref = () => {}, onOpenHistory }) {
+    prefs = {}, setPref = () => {}, onOpenHistory, onOpenOps = () => {} }) {
     const [draft, setDraft] = useState("");
     const [saved, setSaved] = useState(false);
     const [pinEntry, setPinEntry] = useState(false);
@@ -11051,10 +11214,14 @@ function TagsPage({ onPick, onMarkers, onBack }) {
       lock: { icon: "lock", title: "Privacy Lock" },
       appearance: { icon: "image", title: "Appearance" },
       navigation: { icon: "menu", title: "Navigation" },
+      operations: { icon: "ops", title: "Stash Operations" },
       about: { icon: "info", title: "About" },
     };
 
-    const customFeeds = (feeds || []).filter((feed) => feed.type !== "foryou" && feed.type !== "favorites");
+    /* every saved feed is a custom feed. Filtering on `type` hid them all: the
+       editor writes type "foryou" for a random feed, which is also the built-in
+       feed's type, so the list read "No custom feeds yet" right after a save. */
+    const customFeeds = (feeds || []).filter((feed) => feed.id !== "foryou" && feed.id !== "favorites");
 
     function feedsPage() {
       const favTags = prefs.favoriteTags || [];
@@ -11252,7 +11419,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
       }
       return h(SettingsRow, {
         key: id, icon: meta.icon, title: meta.title,
-        onClick: () => onSection(id),
+        onClick: id === "operations" ? () => onOpenOps() : () => onSection(id),
       });
     }
 
@@ -11715,6 +11882,8 @@ function TagsPage({ onPick, onMarkers, onBack }) {
     /* /clip/<id>: one scene on its own page, no bottom nav, back button only */
     const [clipScene, setClipScene] = useState(null);
     const historyClipRef = useRef(null);
+    /* /favorites/<row>: one favourite row opened as a gallery (View all) */
+    const [favRow, setFavRow] = useState(null);
     const [feeds, setFeeds] = useState(() => loadFeeds());
     const [activeFeed, setActiveFeed] = useState(defaultFeed());
     /* which settings page is open: "" is the index, "feeds" the feeds page, ... */
@@ -11806,6 +11975,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
       }
       if (!rest) {
         setTab("home");
+        setFavRow(null);
         setPerformerFilter(null);
         /* keep the feed you were on; only a second tap on Feed asks for new clips */
         setActiveFeed((cur) => cur && !scopedFeed(cur) ? cur : defaultFeed());
@@ -11814,6 +11984,16 @@ function TagsPage({ onPick, onMarkers, onBack }) {
       if (rest === "favorites") {
         setTab("favorites");
         setPerformerFilter(null);
+        setFavRow(null);
+        return;
+      }
+      /* /favorites/<row> is a gallery of that row: the "View all" destination.
+         Keeping it a route means back and a cold reload both land on the grid. */
+      if (rest.indexOf("favorites/") === 0) {
+        const key = rest.slice("favorites/".length);
+        setTab("favorites");
+        setPerformerFilter(null);
+        setFavRow(FAVORITE_ROWS.some((row) => row.key === key) ? key : null);
         return;
       }
       if (rest === "performers") {
@@ -12391,6 +12571,10 @@ function TagsPage({ onPick, onMarkers, onBack }) {
       setBuilder(null);
       setActiveFeed(next);
       setTab("home");
+      /* the URL has to follow the feed: created from #/settings/feeds/new-feed,
+         leaving the hash there meant a reload dropped the user back into an
+         empty editor and the feed looked like it had never been saved */
+      goTo("");
       setRefreshKey((n) => n + 1);
     }
 
@@ -12471,30 +12655,54 @@ function TagsPage({ onPick, onMarkers, onBack }) {
         },
       });
     } else if (tab === "favorites") {
-      body = h(FavoritesPage, {
-        prefs,
-        setPref,
-        onOpenPerformer: (performer) => openFavoritePerformer(performer),
-        onPlay: (scene, meta) => {
-          const info = meta || { sort: "updated_at", direction: "DESC", name: "Favorites" };
-          useFeed({
-            id: "favorites-" + info.sort,
-            name: info.name || "Favorites",
-            type: "favorites",
-            sort: info.sort,
-            direction: info.direction,
-            /* the row's own ids, in its own order: the feed then swipes through the
-               carousel you tapped instead of re-sorting from scratch */
-            orderIds: info.ids || null,
-            startSceneId: scene && scene.id,
-            origin: { kind: "favorites" },
+      const playFavorites = (scene, meta) => {
+        const info = meta || { sort: "updated_at", direction: "DESC", name: "Favorites" };
+        useFeed({
+          id: "favorites-" + info.sort,
+          name: info.name || "Favorites",
+          type: "favorites",
+          sort: info.sort,
+          direction: info.direction,
+          /* the row's own ids, in its own order: the feed then swipes through the
+             carousel you tapped instead of re-sorting from scratch */
+          orderIds: info.ids || null,
+          startSceneId: scene && scene.id,
+          origin: { kind: "favorites" },
+        });
+        if (scene && scene.id) {
+          selfSceneRef.current = String(scene.id);
+          goTo("scene/" + scene.id);
+        }
+      };
+      const favRowSpec = favRow ? FAVORITE_ROWS.filter((item) => item.key === favRow)[0] : null;
+      body = favRowSpec
+        ? h(FavoritesGallery, {
+            key: "favgal:" + favRowSpec.key,
+            row: favRowSpec,
+            onPlay: playFavorites,
+            onBack: () => {
+              if (NAV_DEPTH > 0 && window.history.length > 1) window.history.back();
+              else goTo("favorites");
+            },
+          })
+        : h(FavoritesPage, {
+            prefs,
+            setPref,
+            onOpenPerformer: (performer) => openFavoritePerformer(performer),
+            onOpenRow: (row) => {
+              if (!row || !row.key) return;
+              setFavRow(row.key);
+              goTo("favorites/" + row.key);
+            },
+            onAllPerformers: () => {
+              setFavOnlyProfile(true);
+              setPerformerFilter(null);
+              setPerformersOpen(false);
+              setTab("performers");
+              goTo("performers");
+            },
+            onPlay: playFavorites,
           });
-          if (scene && scene.id) {
-            selfSceneRef.current = String(scene.id);
-            goTo("scene/" + scene.id);
-          }
-        },
-      });
     } else if (tab === "tags") {
       body = h(TagsPage, { onPick: openTag, onMarkers: openMarkers, onBack: () => setTab("home") });
     } else if (tab === "markers") {
@@ -12633,6 +12841,10 @@ function TagsPage({ onPick, onMarkers, onBack }) {
           feeds,
           section: settingsRoute,
           onSection: openSection,
+          onOpenOps: () => {
+            setTab("ops");
+            goTo("ops");
+          },
           feedDraft: feedDraftRef.current,
           onBack: backSection,
           onDraftFeed: (next) => { feedDraftRef.current = next; },
@@ -12924,21 +13136,6 @@ function TagsPage({ onPick, onMarkers, onBack }) {
               )
             )
           : body,
-
-        /* operations sits beside settings: one tap, never buried in settings */
-        tab !== "settings" && tab !== "ops" && tab !== "home" && tab !== "folderProfile" && !profileOpen &&
-          h(
-            "button",
-            {
-              className: "stk-gear-fab stk-ops-fab",
-              title: "Operations",
-              onClick: () => {
-                setTab("ops");
-                goTo("ops");
-              },
-            },
-            h(Icon, { name: "ops", size: 18 })
-          ),
 
         /* one settings entry point for every screen that isn't the feed itself */
         tab !== "settings" && tab !== "ops" &&
