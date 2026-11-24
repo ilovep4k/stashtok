@@ -737,7 +737,7 @@
     play_count
     paths { stream preview screenshot vtt sprite }
     files { path size duration width height video_codec audio_codec frame_rate bit_rate }
-    performers { id name image_path ethnicity }
+    performers { id name image_path ethnicity rating100 }
     studio { id name }
     tags { id name }
     scene_markers { id title seconds end_seconds primary_tag { id name } }
@@ -846,11 +846,11 @@
   }
 
   /* "exclude these paths", the way Stash's own filter does it: every fragment
-     becomes a path NOT_INCLUDES, and the extras nest through AND */
+     becomes a path EXCLUDES (Stash's own modifier), the extras nest via AND */
   function exclusionClause(list) {
     const frags = (list || []).map((item) => String(item || "").trim()).filter(Boolean);
     if (!frags.length) return "";
-    const one = (frag) => `path: { value: ${JSON.stringify(frag)}, modifier: NOT_INCLUDES }`;
+    const one = (frag) => `path: { value: ${JSON.stringify(frag)}, modifier: EXCLUDES }`;
     let acc = "";
     for (let i = frags.length - 1; i >= 1; i -= 1) {
       acc = acc ? `AND: { ${one(frags[i])}, ${acc} }` : `AND: { ${one(frags[i])} }`;
@@ -2636,7 +2636,7 @@ void main() {
     };
   }
 
-  function FeedView({ prefs, spec, cfg, refreshKey, onBack, onSearch, onSettings, onMenu, onOpenPerformer, onOpenTag, onDeriveFeed, onEditFeed, onOpenFolder, onOpenFolderProfile, feeds, onSwitchFeed, onNewFeed, onDuo, duo, desktop }) {
+  function FeedView({ prefs, spec, cfg, refreshKey, onBack, onSearch, onSettings, onMenu, onOpenPerformer, onOpenTag, onDeriveFeed, onEditFeed, onOpenFolder, onOpenFolderProfile, feeds, onSwitchFeed, onNewFeed, onManageFeeds, onDuo, duo, desktop }) {
     const sfw = !!cfg.sfw;
     const [items, setItems] = useState([]);
     const [index, setIndex] = useState(0);
@@ -2747,10 +2747,64 @@ void main() {
     const [duration, setDuration] = useState(0);
     const [time, setTime] = useState(0);
     const [rateBadge, setRateBadge] = useState("");
-    /* the hashtag strip is one line; "…more" opens the full list in a sheet */
+    /* the hashtag strip is one line. When the tags do not fit we drop the last
+       one(s) and put "…more" in flow after them — a control drawn on top of the
+       line covered the final "#" and read as sloppy. `tagFit` is how many tags
+       fit; the rest stay in the DOM (absolutely positioned, invisible) so the
+       measurement still sees their widths after a rotate. */
     const [tagsOpen, setTagsOpen] = useState(false);
-    const [tagsOverflow, setTagsOverflow] = useState(false);
+    const [tagFit, setTagFit] = useState(0);
     const tagsRef = useRef(null);
+    useLayoutEffect(() => {
+      const box = tagsRef.current;
+      if (!box) return;
+      const measure = () => {
+        const kids = Array.from(box.children).filter(
+          (el) => el.classList && el.classList.contains("stk-hashtext") && !el.classList.contains("stk-hashtext-more")
+        );
+        if (!kids.length) {
+          setTagFit((cur) => (cur === 0 ? cur : 0));
+          return;
+        }
+        const wrap = box.closest(".stk-hashtagwrap") || box;
+        const avail = Math.max(box.clientWidth, wrap.clientWidth);
+        if (!avail) return;
+        const moreEl = box.querySelector(".stk-hashtext-more");
+        const gap = 9; /* .stk-hashtags column-gap */
+        const reserve = moreEl ? moreEl.offsetWidth + gap : 0;
+        let acc = 0;
+        let fit = 0;
+        for (const el of kids) {
+          const w = el.offsetWidth + (fit ? gap : 0);
+          if (acc + w > avail - reserve) break;
+          acc += w;
+          fit += 1;
+        }
+        /* everything fits now: allow the last one back in, no "…more" needed */
+        if (fit < kids.length && !moreEl) {
+          let all = 0;
+          let count = 0;
+          for (const el of kids) {
+            const w = el.offsetWidth + (count ? gap : 0);
+            if (all + w > avail) break;
+            all += w;
+            count += 1;
+          }
+          if (count === kids.length) fit = count;
+        }
+        setTagFit((cur) => (cur === fit ? cur : fit));
+      };
+      measure();
+      /* re-fit when the card changes width (rotate, window resize) */
+      let ro = null;
+      if (typeof ResizeObserver !== "undefined") {
+        ro = new ResizeObserver(measure);
+        ro.observe(box);
+      }
+      return () => { if (ro) ro.disconnect(); };
+      /* `tags` is declared further down the component, so the deps use the item
+         list and index instead — referencing it here threw at render time */
+    }, [items, index, tagFit]);
     const [heartBurst, setHeartBurst] = useState(0);
     /* long-press on the heart asks which kind of favourite, instead of guessing */
     const [railMenu, setRailMenu] = useState(null);
@@ -2902,22 +2956,6 @@ void main() {
         video.removeEventListener("error", onError);
       };
     }, [activeVideo, item && item.key, sfw, prefs.playbackDiagnostics]);
-    useEffect(() => {
-      const node = tagsRef.current;
-      if (!node) {
-        setTagsOverflow(false);
-        return undefined;
-      }
-      const measure = () => setTagsOverflow(node.scrollWidth - node.clientWidth > 4);
-      measure();
-      if (typeof ResizeObserver === "undefined") {
-        window.addEventListener("resize", measure);
-        return () => window.removeEventListener("resize", measure);
-      }
-      const observer = new ResizeObserver(measure);
-      observer.observe(node);
-      return () => observer.disconnect();
-    }, [sceneTags]);
 
     useEffect(() => {
       if (!PENDING_CARD) return undefined;
@@ -3126,8 +3164,20 @@ void main() {
     /* Every channel is just a Stash search: For You is the default random query,
        GoonCave is "performers INCLUDES <current performer>", the rest are ordinary
        filters. Saved feeds are appended, so the carousel grows to the left forever. */
+    /* The list behind the feed name. Two feeds ship with the app, in order:
+       For You and Favorites. Everything after them is either a feed the user
+       made or a preset of the same machinery, so the list reads "mine, then
+       suggestions" instead of an undifferentiated pile. */
     function channelsNow() {
-      const list = [{ id: "foryou", name: "For You", spec: defaultFeed() }];
+      const list = [
+        { id: "foryou", name: "For You", spec: defaultFeed(), builtin: true },
+        { id: "favorites", name: "Favorites", spec: { id: "favorites", name: "Favorites", type: "favorites", sort: "rating", direction: "DESC" }, builtin: true },
+      ];
+      (feeds || []).forEach((f) => {
+        if (!f || !f.type) return;
+        list.push({ id: f.id || f.key || f.name, name: f.name || "Feed", spec: f, saved: true });
+      });
+      /* presets: the useful shapes of the same filter language */
       const p = item && item.scene && item.scene.performers && item.scene.performers[0];
       if (p) {
         list.push({
@@ -3138,13 +3188,10 @@ void main() {
           spec: { id: "gooncave:" + p.id, name: p.name, type: "performer", performerId: p.id, sort: "random" },
         });
       }
-      list.push({ id: "favorites", name: "Favorites", spec: { id: "favorites", name: "Favorites", type: "favorites", sort: "rating", direction: "DESC" } });
       list.push({ id: "markers", name: "Markers", spec: { id: "markers", name: "Markers", type: "markers" } });
       list.push({ id: "newest", name: "Newest first", spec: { id: "newest", name: "Newest first", type: "foryou", sort: "created_at", direction: "DESC" } });
-      (feeds || []).forEach((f) => {
-        if (!f || !f.type) return;
-        list.push({ id: f.id || f.key || f.name, name: f.name || "Feed", spec: f, saved: true });
-      });
+      list.push({ id: "unwatched", name: "Never played", spec: { id: "unwatched", name: "Never played", type: "fresh", sort: "random" } });
+      list.push({ id: "long", name: "Long clips", spec: { id: "long", name: "Long clips", type: "foryou", minDuration: 900, sort: "random" } });
       return list;
     }
 
@@ -5321,25 +5368,75 @@ void main() {
             h(
               "div",
               { className: "stk-chan-menu", ref: (el) => { if (el) el.scrollTop = 0; } },
-              channelsNow().map((c, i) =>
-                h(
-                  "button",
-                  {
-                    key: c.id,
-                    className: "stk-chan-row" + (i === channelAt().at ? " stk-on" : ""),
-                    onClick: (event) => {
-                      event.stopPropagation();
-                      pickChannel(c);
+              (() => {
+                const rows = [];
+                const here = channelAt().at;
+                let seenMine = false;
+                let seenMore = false;
+                channelsNow().forEach((c, i) => {
+                  if (c.saved && !seenMine) {
+                    seenMine = true;
+                    rows.push(h("div", { key: "hd-mine", className: "stk-chan-head" }, "Your feeds"));
+                  }
+                  if (!c.builtin && !c.saved && !seenMore) {
+                    seenMore = true;
+                    rows.push(h("div", { key: "hd-more", className: "stk-chan-head" }, "More feeds"));
+                  }
+                  rows.push(
+                    h(
+                      "button",
+                      {
+                        key: c.id,
+                        className: "stk-chan-row" + (i === here ? " stk-on" : ""),
+                        onClick: (event) => {
+                          event.stopPropagation();
+                          pickChannel(c);
+                        },
+                      },
+                      c.image
+                        ? h("img", { className: "stk-chan-avatar", src: rel(c.image), alt: "" })
+                        : h("span", { className: "stk-chan-avatar stk-chan-glyph" }, h(Icon, { name: c.builtin ? "sparkle" : c.saved ? "feed" : c.id === "favorites" ? "heart" : c.id === "markers" ? "chapter" : "sort", size: 13 })),
+                      h("span", { className: "stk-chan-name" }, c.name),
+                      c.kind === "performer" && h("span", { className: "stk-chan-tag" }, "GoonCave"),
+                      i === here && h("span", { className: "stk-chan-dot" })
+                    )
+                  );
+                });
+                rows.push(h("div", { key: "hd-add", className: "stk-chan-head" }, "Add"));
+                rows.push(
+                  h(
+                    "button",
+                    {
+                      key: "new-feed",
+                      className: "stk-chan-row stk-chan-action",
+                      onClick: (event) => {
+                        event.stopPropagation();
+                        setChanOpen(false);
+                        if (onNewFeed) onNewFeed();
+                      },
                     },
-                  },
-                  c.image
-                    ? h("img", { className: "stk-chan-avatar", src: rel(c.image), alt: "" })
-                    : h("span", { className: "stk-chan-avatar stk-chan-glyph" }, h(Icon, { name: c.id === "foryou" ? "sparkle" : c.id === "favorites" ? "heart" : c.id === "markers" ? "chapter" : "sort", size: 13 })),
-                  h("span", { className: "stk-chan-name" }, c.name),
-                  c.kind === "performer" && h("span", { className: "stk-chan-tag" }, "GoonCave"),
-                  i === channelAt().at && h("span", { className: "stk-chan-dot" })
-                )
-              ),
+                    h(Icon, { name: "plus", size: 14 }),
+                    h("span", { className: "stk-chan-name" }, "New feed")
+                  )
+                );
+                rows.push(
+                  h(
+                    "button",
+                    {
+                      key: "manage-feeds",
+                      className: "stk-chan-row stk-chan-action",
+                      onClick: (event) => {
+                        event.stopPropagation();
+                        setChanOpen(false);
+                        if (onManageFeeds) onManageFeeds();
+                      },
+                    },
+                    h(Icon, { name: "gear", size: 14 }),
+                    h("span", { className: "stk-chan-name" }, "Manage feeds")
+                  )
+                );
+                return rows;
+              })(),
               h(
                 "button",
                 {
@@ -5422,11 +5519,19 @@ void main() {
               String(handle.name || "").replace(/\s+/g, " ").trim()
             ),
             handle.performer &&
-              h(
-                "span",
-                { className: "stk-verified", title: "Performer", "aria-label": "Performer" },
-                h(Icon, { name: "verified", size: 14 })
-              )
+              (handle.performer.rating100 != null && handle.performer.rating100 >= cfg.heartRating
+                /* a favourited performer is the stronger fact, so the heart replaces
+                   the blue performer check rather than sitting beside it */
+                ? h(
+                    "span",
+                    { className: "stk-verified stk-verified-fav", title: "Favorite performer", "aria-label": "Favorite performer" },
+                    h(Icon, { name: "heart", size: 14, filled: true })
+                  )
+                : h(
+                    "span",
+                    { className: "stk-verified", title: "Performer", "aria-label": "Performer" },
+                    h(Icon, { name: "verified", size: 14 })
+                  ))
           ),
           (() => {
             const scene = item && item.scene;
@@ -5467,12 +5572,12 @@ void main() {
               h(
                 "div",
                 { className: "stk-hashtags", ref: tagsRef },
-                tags.map((tag) =>
+                tags.map((tag, tagIndex) =>
                   h(
                     "button",
                     {
                       key: tag.id,
-                      className: "stk-hashtext",
+                      className: "stk-hashtext" + (tagIndex >= tagFit ? " stk-hashtext-cut" : ""),
                       onClick: (event) => {
                         event.stopPropagation();
                         onOpenTag(tag);
@@ -5480,23 +5585,22 @@ void main() {
                     },
                     "#" + tag.name.replace(/\s+/g, "-").toLowerCase()
                   )
-                )
-              ),
-              /* the whole list is on one line; when it runs past the card the
-                 last visible character becomes "…more", which opens the full
-                 list. State, not a URL param: browser back must not re-open it. */
-              tagsOverflow &&
-                h(
-                  "button",
-                  {
-                    className: "stk-hashtext stk-hashtext-more",
-                    onClick: (event) => {
-                      event.stopPropagation();
-                      setTagsOpen(true);
+                ),
+                /* in flow, after the tags that fit: nothing is drawn over a tag,
+                   and it disappears with the strip when the HUD folds away */
+                tagFit < tags.length &&
+                  h(
+                    "button",
+                    {
+                      className: "stk-hashtext stk-hashtext-more",
+                      onClick: (event) => {
+                        event.stopPropagation();
+                        setTagsOpen(true);
+                      },
                     },
-                  },
-                  "…more"
-                )
+                    "…more"
+                  )
+              )
             ),
         ),
 
@@ -11253,11 +11357,20 @@ function TagsPage({ onPick, onMarkers, onBack }) {
     }, [draft]);
     const [picker, setPicker] = useState("");
     const [tagOpen, setTagOpen] = useState(false);
+    const [savedFilters, setSavedFilters] = useState([]);
     const tags = draft.tags || [];
+    /* Stash's own scene filters are the import path for a library someone has
+       already curated: pick one and the feed runs that filter */
+    useEffect(() => {
+      gql(`query StashTokSavedFilters { findSavedFilters(mode: SCENES) { id name } }`)
+        .then((data) => setSavedFilters(data.findSavedFilters || []))
+        .catch(() => setSavedFilters([]));
+    }, []);
     const windowValue = draft.windowDays === undefined ? "all" : String(draft.windowDays);
     /* the draft is mirrored into a ref so it survives the performer page; a new
        feed therefore comes back with a draft too — only an id means "editing" */
     const editing = !!(initial && initial.id);
+    const sortEntry = FEED_SORT_UI.find((entry) => entry[0] === (draft.sort || "random")) || FEED_SORT_UI[0];
 
     function toggleTag(id) {
       setDraft(Object.assign({}, draft, {
@@ -11278,6 +11391,35 @@ function TagsPage({ onPick, onMarkers, onBack }) {
         })
       ),
       h("section", { className: "stk-set-block" },
+        h("h4", { className: "stk-set-block-head" }, "What goes in it"),
+        h("p", { className: "stk-set-block-sub" }, "A feed is a saved filter: pick the source, then narrow it below."),
+        h(
+          "div",
+          { className: "stk-feed-types" },
+          FEED_TYPES.map((entry) =>
+            h(
+              "button",
+              {
+                key: entry.type,
+                type: "button",
+                className: "stk-tagpill",
+                style: (draft.type || "foryou") === entry.type ? { background: "#ff2d55", borderColor: "#ff2d55" } : undefined,
+                onClick: () => setDraft(Object.assign({}, draft, { type: entry.type })),
+                title: entry.hint,
+              },
+              entry.label
+            )
+          )
+        ),
+        (draft.type || "foryou") === "saved" &&
+          h(SettingsChoiceRow, {
+            title: "Saved filter",
+            value: (savedFilters.filter((row) => row.id === draft.savedFilterId)[0] || {}).name || "Pick a filter",
+            onClick: () => setPicker("saved"),
+          })
+      ),
+
+      h("section", { className: "stk-set-block" },
         h("h4", { className: "stk-set-block-head" }, "Algorithm"),
         h("p", { className: "stk-set-block-sub" }, "What this feed draws from. Same weighting the For You feed uses."),
         h(SettingsChoiceRow, {
@@ -11297,6 +11439,26 @@ function TagsPage({ onPick, onMarkers, onBack }) {
           onClick: () => setPicker("performers"), last: true,
         })
       ),
+      h("section", { className: "stk-set-block" },
+        h("h4", { className: "stk-set-block-head" }, "Order"),
+        h("p", { className: "stk-set-block-sub" }, "How the clips are picked and ranked."),
+        h(SettingsChoiceRow, { title: "Sort", value: sortEntry[2], onClick: () => setPicker("sort"), last: true })
+      ),
+
+      h("section", { className: "stk-set-block" },
+        h("h4", { className: "stk-set-block-head" }, "Exclusions"),
+        h("p", { className: "stk-set-block-sub" }, "One path fragment per line. Anything containing it stays out of this feed."),
+        h("textarea", {
+          value: (draft.excludePaths || []).join("\n"),
+          rows: 3,
+          placeholder: "/mnt/Vault/trailers",
+          onChange: (event) =>
+            setDraft(Object.assign({}, draft, {
+              excludePaths: event.currentTarget.value.split("\n").map((line) => line.trim()).filter(Boolean),
+            })),
+        })
+      ),
+
       h("div", { className: "stk-feed-edit-actions" },
         h("button", {
           type: "button",
@@ -11315,6 +11477,24 @@ function TagsPage({ onPick, onMarkers, onBack }) {
           ALGO_OPTIONS.map((option) => ({ value: option.value, label: option.label, selected: !!draft.algo[option.value] }))
         ),
         onPick: (value) => setDraft(Object.assign({}, draft, { algo: nextAlgo(draft.algo, value) })),
+        onClose: () => setPicker(""),
+      }),
+      picker === "saved" && h(SettingsPicker, {
+        title: "Saved filter",
+        value: draft.savedFilterId || "",
+        options: savedFilters.length
+          ? savedFilters.map((row) => ({ value: row.id, label: row.name }))
+          : [{ value: "", label: "No saved scene filters found" }],
+        onPick: (value) => setDraft(Object.assign({}, draft, { savedFilterId: value })),
+        onClose: () => setPicker(""),
+      }),
+      picker === "sort" && h(SettingsPicker, {
+        title: "Sort", value: sortEntry[0],
+        options: FEED_SORT_UI.map((entry) => ({ value: entry[0], label: entry[2] })),
+        onPick: (value) => {
+          const picked = FEED_SORT_UI.find((entry) => entry[0] === value) || FEED_SORT_UI[0];
+          setDraft(Object.assign({}, draft, { sort: picked[0], direction: picked[1] }));
+        },
         onClose: () => setPicker(""),
       }),
       picker === "window" && h(SettingsPicker, {
@@ -13158,6 +13338,10 @@ function TagsPage({ onPick, onMarkers, onBack }) {
           setDuo(true);
         },
         onNewFeed: () => setBuilder({ spec: null }),
+        onManageFeeds: () => {
+          setTab("settings");
+          goTo("settings/feeds");
+        },
         onBack: () => {
           /* go back the way the user came: same page entry, same scroll, no reload */
           if (NAV_DEPTH > 0) {

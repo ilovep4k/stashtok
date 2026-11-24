@@ -604,9 +604,16 @@
 .stk-hud-hidden .stk-info { bottom: 10px; }
 .stk-hud-hidden .stk-handle-row { transition: transform 220ms ease; }
 .stk-hashtext-more {
-  border: 1px dashed rgba(255, 255, 255, 0.35);
   background: transparent;
-  color: #e9e9e9;
+  color: rgba(255, 255, 255, 0.9);
+  font-weight: 600;
+}
+/* tags that do not fit: out of flow but still measurable, so the fit count can
+   be recomputed on rotate instead of being frozen at mount */
+.stk-hashtext-cut {
+  position: absolute;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 @media (min-width: 720px) {
@@ -958,11 +965,15 @@
 .stk-hashtagwrap {
   position: relative;
   display: flex;
+  width: 100%;
   max-width: 100%;
   min-width: 0;
 }
 .stk-hashtags {
   display: flex;
+  /* fill the row, so the fit measurement has the real available width */
+  flex: 1 1 auto;
+  width: 100%;
   flex-wrap: nowrap;
   gap: 2px 9px;
   font-size: 12px;
@@ -987,17 +998,12 @@
 }
 /* the last visible character: the strip is cut here, so the label sits on a short
    fade over it and opens the full list */
+/* in flow at the end of the line: the tag it follows is dropped whole instead
+   of being covered by a gradient, and it collapses with the strip when the HUD
+   hides (an absolutely positioned control stayed on screen by itself) */
 .stk-hashtext-more {
-  position: absolute;
-  right: 0;
-  top: 0;
-  bottom: 0;
-  display: inline-flex;
-  align-items: center;
-  padding: 0 0 0 18px;
-  color: rgba(255, 255, 255, 0.92);
-  font-weight: 600;
-  background: linear-gradient(90deg, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0.72) 55%, rgba(0, 0, 0, 0.85) 100%);
+  flex: 0 0 auto;
+  padding: 0 0 0 4px;
 }
 .stk-hashtext-more:hover { color: #fff; }
 .stk-feed-pill-sm {
@@ -2774,6 +2780,9 @@ img.stk-scrub-cell {
   flex: 0 0 auto;
 }
 .stk-verified svg { stroke-width: 2; }
+/* a favourited performer gets the heart in place of the blue check */
+.stk-verified-fav { color: #ff4d6d; }
+.stk-verified-fav svg { stroke-width: 1.6; }
 
 /* the caption reads as a caption: no weight, sits right under the name */
 .stk-caption-title {
@@ -4549,6 +4558,15 @@ html.stk-mono { filter: grayscale(1) contrast(1.06); }
 .stk-feed-name .stk-pill-caret { opacity: .75; }
 .stk-feed-name.stk-open .stk-pill-caret { transform: rotate(180deg); }
 
+.stk-chan-head {
+  padding: 9px 12px 3px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, .42);
+}
+.stk-chan-row.stk-chan-action { color: rgba(255, 255, 255, .8); }
 .stk-chan-scrim {
   position: fixed;
   inset: 0;
@@ -5186,6 +5204,22 @@ body.stk-fullscreen-mode .stash-tok.stk-feed-fullscreen {
 }
 
 /* custom feed editor page */
+.stk-feed-types {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 4px;
+}
+.stk-feed-edit textarea {
+  width: 100%;
+  padding: 9px 11px;
+  border-radius: 10px;
+  background: #1b1b1b;
+  border: 1px solid #333;
+  color: #fff;
+  font-size: 12.5px;
+  resize: vertical;
+}
 .stk-feed-edit-name {
   display: flex;
   flex-direction: column;
