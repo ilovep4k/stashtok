@@ -5329,3 +5329,139 @@ body.stk-fullscreen-mode .stash-tok.stk-feed-fullscreen {
 }
 .stk-perf-foot span { font-size: 12.5px; color: rgba(255, 255, 255, 0.55); }
 .stk-perf-foot .stk-pick-done { width: auto; margin: 0; padding: 0 20px; }
+
+
+/* ==================================================================
+   DESIGN SYSTEM — one set of tokens, one set of controls.
+   Everything below is additive: token values match the greys the app
+   already used, so the surface looks the same but new work can stop
+   inventing colours, radii and paddings per screen. Prefix --stk-.
+   ================================================================== */
+:root,
+.stash-tok,
+.stash-tok-wrap,
+.stk-app,
+.stk-desktop,
+.stk-settings {
+  --stk-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --stk-ink: #ffffff;
+  --stk-ink-dim: rgba(255, 255, 255, 0.55);
+  --stk-ink-faint: rgba(255, 255, 255, 0.35);
+  --stk-bg: #000000;
+  --stk-surface: #1b1b1b;
+  --stk-surface-2: #232323;
+  --stk-surface-3: #2c2c2c;
+  --stk-line: rgba(255, 255, 255, 0.14);
+  --stk-line-strong: rgba(255, 255, 255, 0.3);
+  --stk-accent: #ff2d55;
+  --stk-radius-sm: 8px;
+  --stk-radius: 12px;
+  --stk-radius-lg: 16px;
+  --stk-radius-pill: 999px;
+  --stk-space-xs: 4px;
+  --stk-space-sm: 8px;
+  --stk-space: 12px;
+  --stk-space-lg: 16px;
+  --stk-control: 36px;
+  --stk-fs-title: 20px;
+  --stk-fs-body: 15px;
+  --stk-fs-small: 12.5px;
+}
+
+/* one button. legacy names inherit it so the app stops having five lookalikes */
+.stk-btn,
+.stk-sort-btn,
+.stk-ops-btn,
+.stk-more-btn,
+.stk-seeall {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: var(--stk-control);
+  padding: 0 14px;
+  border: 1px solid var(--stk-line);
+  border-radius: var(--stk-radius);
+  background: var(--stk-surface);
+  color: var(--stk-ink);
+  font-family: var(--stk-font);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  text-decoration: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.stk-btn:active,
+.stk-sort-btn:active,
+.stk-ops-btn:active,
+.stk-more-btn:active,
+.stk-seeall:active { background: var(--stk-surface-3); }
+.stk-btn:disabled { opacity: 0.45; cursor: default; }
+
+.stk-btn-primary,
+.stk-btn.stk-primary { background: var(--stk-accent); border-color: var(--stk-accent); color: #fff; }
+.stk-btn-danger { background: transparent; border-color: var(--stk-accent); color: #ff5f7a; }
+.stk-btn-ghost { background: transparent; border-color: transparent; color: var(--stk-ink-dim); }
+.stk-btn-wide { width: 100%; }
+.stk-btn-sm { min-height: 30px; padding: 0 10px; font-size: 12.5px; }
+.stk-btn-lg { min-height: 44px; padding: 0 18px; font-size: 15px; }
+
+/* round icon button, the same one the HUD and page headers use */
+.stk-btn-icon {
+  width: var(--stk-control);
+  height: var(--stk-control);
+  min-height: 0;
+  padding: 0;
+  border-radius: var(--stk-radius-pill);
+  background: rgba(255, 255, 255, 0.1);
+  border: 0;
+}
+
+/* text inputs share one skin */
+.stk-field {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--stk-line);
+  border-radius: var(--stk-radius);
+  background: var(--stk-surface);
+  color: var(--stk-ink);
+  font-family: var(--stk-font);
+  font-size: var(--stk-fs-body);
+  line-height: 1.2;
+  outline: none;
+}
+.stk-field::placeholder { color: var(--stk-ink-faint); }
+.stk-field:focus { border-color: var(--stk-line-strong); }
+
+/* a back button points BACK. The full-view header was rotating its chevron 90deg,
+   which read as "down" on every profile the user opened from a list. */
+.stk-fv-back .stk-back-icon { transform: rotate(180deg); }
+.stk-search-back svg,
+.stk-fv-back .stk-back-icon,
+.stk-page-back svg { transform-origin: 50% 50%; }
+
+/* the performers list: search and sort on one line, same controls as settings */
+.stk-perf-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--stk-space-sm);
+  margin-bottom: var(--stk-space);
+}
+.stk-perf-tools .stk-field { flex: 1 1 auto; min-width: 0; margin: 0; }
+.stk-perf-tools .stk-sort-btn { flex: 0 0 auto; margin-left: 0; }
+
+/* one page heading for every top-level page */
+.stk-page-title-lg {
+  font-size: var(--stk-fs-title);
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+.stk-page h2 {
+  font-size: var(--stk-fs-title);
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  margin: 6px 2px 12px;
+}
+.stk-page-head + .stk-perf-tools { margin-top: 2px; }

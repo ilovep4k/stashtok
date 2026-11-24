@@ -8772,7 +8772,10 @@ void main() {
     useEffect(() => {
       if (isDiscover) return undefined;
       let alive = true;
-      const direction = sort === "name" ? "ASC" : "DESC";
+      /* "Favorites first" is an ordering, not a Stash sort: there is no favorite
+         sort key, so the server answers by recency and the hearts float up. */
+      const serverSort = sort === "favorite" ? "updated_at" : sort;
+      const direction = serverSort === "name" ? "ASC" : "DESC";
       /* "All Favorites" opens this same list scoped to hearted performers */
       const favOnlyArg = ", performer_filter: { filter_favorites: true }";
       gql(
@@ -8782,10 +8785,13 @@ void main() {
             performers { id name image_path scene_count favorite updated_at }
           }
         }`,
-        { q: query || null, sort, dir: direction }
+        { q: query || null, sort: serverSort, dir: direction }
       )
         .then((data) => {
-          if (alive) setRows(data.findPerformers.performers);
+          if (!alive) return;
+          const list = data.findPerformers.performers || [];
+          /* stable enough: the server order is kept inside each group */
+          setRows(sort === "favorite" ? list.slice().sort((a, b) => (b.favorite ? 1 : 0) - (a.favorite ? 1 : 0)) : list);
         })
         .catch(() => alive && setRows([]));
       return () => {
@@ -8808,6 +8814,7 @@ void main() {
     }
 
     const SORTS = [
+      ["favorite", "Favorites first"],
       ["updated_at", "Recently added"],
       ["name", "A–Z"],
       ["scenes_count", "Most scenes"],
@@ -8819,7 +8826,9 @@ void main() {
     return h(
       "div",
       { className: "stk-page", onContextMenu: (event) => event.preventDefault() },
-      h("h2", null, isDiscover ? "Discover" : "Performers"),
+      h("div", { className: "stk-page-head" },
+        h("span", { className: "stk-page-title stk-page-title-lg" }, isDiscover ? "Discover" : "Performers")
+      ),
       isDiscover &&
         onSeeAll &&
         h(
@@ -8829,13 +8838,21 @@ void main() {
           h(Icon, { name: "chevron", size: 15 })
         ),
       !isDiscover &&
-        h("input", {
-          type: "search",
-          placeholder: "Search creators",
-          value: query,
-          onChange: (event) => setQuery(event.currentTarget.value),
-          style: { width: "100%", marginBottom: "10px", padding: "9px 11px", borderRadius: "10px", background: "#171717", border: "1px solid #2a2a2a", color: "#fff" },
-        }),
+        h("div", { className: "stk-perf-tools" },
+          h("input", {
+            type: "search",
+            className: "stk-field",
+            placeholder: "Search creators",
+            value: query,
+            onChange: (event) => setQuery(event.currentTarget.value),
+          }),
+          h("button", {
+            type: "button",
+            className: "stk-sort-btn",
+            "aria-expanded": !!sortOpen,
+            onClick: () => setSortOpen(!sortOpen),
+          }, sortLabel, h(Icon, { name: "chevronDown", size: 13 }))
+        ),
       isDiscover &&
         !query &&
         circles &&
@@ -8941,12 +8958,8 @@ void main() {
               h(GalleryCard, { key: "gu" + gallery.id, gallery, onOpen: (item) => window.open(rel("/gallery/" + item.id), "_blank") })))
         ),
       !isDiscover &&
-        h(
-          "div",
-          { className: "stk-sort-bar" },
-          h("button", { className: "stk-sort-btn", onClick: () => setSortOpen(!sortOpen) }, sortLabel, " ▾"),
-          rows && h("span", { className: "stk-sub" }, rows.length + " creators")
-        ),
+        rows &&
+        h("p", { className: "stk-sub" }, rows.length + " creators"),
       !isDiscover &&
         sortOpen &&
         h(
@@ -10349,7 +10362,10 @@ void main() {
     return h(
       "div",
       { className: "stk-page" },
-      h("h2", null, onBack && h("button", { onClick: onBack }, h(Icon, { name: "chevron", size: 18 })), "Markers"),
+      h("div", { className: "stk-page-head" },
+        onBack && h("button", { className: "stk-page-back", title: "Back", onClick: onBack }, h(Icon, { name: "back", size: 19 })),
+        h("span", { className: "stk-page-title stk-page-title-lg" }, "Markers")
+      ),
       h("input", {
         type: "search",
         placeholder: "Search markers",
@@ -10424,7 +10440,10 @@ function TagsPage({ onPick, onMarkers, onBack }) {
     return h(
       "div",
       { className: "stk-page" },
-      h("h2", null, onBack && h("button", { onClick: onBack }, h(Icon, { name: "chevron", size: 18 })), "Tags"),
+      h("div", { className: "stk-page-head" },
+        onBack && h("button", { className: "stk-page-back", title: "Back", onClick: onBack }, h(Icon, { name: "back", size: 19 })),
+        h("span", { className: "stk-page-title stk-page-title-lg" }, "Tags")
+      ),
       h("input", {
         type: "search",
         placeholder: "Search tags",
