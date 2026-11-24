@@ -10376,44 +10376,44 @@ function TagsPage({ onPick, onMarkers, onBack }) {
     );
   }
 
-  /* Settings, TikTok shape: a grouped index of one-line rows, each opening its
-     own page. Everything used to live on one long scroll, which on a phone
-     buried the lock and the feed window under six screens of toggles. */
+  /* Settings, TikTok shape: a short grouped index — one line per subject, no
+     sub labels — where each line opens its own page. Two rows are live controls
+     (blur, privacy lock) so the things a person actually flips in public are a
+     single tap from the top. */
 
-  const SETTINGS_GROUPS = ["Preferences", "Privacy", "Content"];
+  const SETTINGS_GROUPS = [
+    { id: "Preferences", rank: 1, rows: ["feeds", "performer", "blur", "lock"] },
+    { id: "App Settings", rank: 2, rows: ["appearance", "navigation", "about"] },
+  ];
 
-  const FEED_WINDOW_LABEL = { all: "Everything", 30: "30 days", 90: "90 days", 365: "1 year" };
-  const SORT_LABEL = {
-    filesize: "Size", updated_at: "Recent", duration: "Length",
-    resolution: "Res", title: "A–Z", random: "Random",
-  };
-  const sortLabel = (value) => SORT_LABEL[value] || "Recent";
-
-  function SettingsRow({ icon, title, value, onClick, danger }) {
+  function SettingsRow({ icon, title, onClick }) {
     return h(
       "button",
-      {
-        type: "button",
-        className: "stk-set-row" + (danger ? " stk-set-row-danger" : ""),
-        onClick,
-      },
+      { type: "button", className: "stk-set-row", onClick },
       h("span", { className: "stk-set-icon" }, h(Icon, { name: icon || "info", size: 19 })),
-      h(
-        "span",
-        { className: "stk-set-copy" },
-        h("span", null, title),
-        value ? h("small", null, value) : null
-      ),
+      h("span", { className: "stk-set-copy" }, h("span", null, title)),
       h("span", { className: "stk-set-chev" }, h(Icon, { name: "chevron", size: 15 }))
+    );
+  }
+
+  function SettingsToggleRow({ icon, title, on, onChange }) {
+    return h(
+      "div",
+      { className: "stk-set-row stk-set-toggle" },
+      h("span", { className: "stk-set-icon" }, h(Icon, { name: icon || "info", size: 19 })),
+      h("span", { className: "stk-set-copy" }, h("span", null, title)),
+      h(PrefToggle, { label: title, on: !!on, onChange })
     );
   }
 
   function SettingsPanel({ cfg = {}, feeds = [], onEdit = () => {}, pin, onSetPin = () => {},
     onClearPin = () => {}, sfw, onToggleSfw = () => {},
     prefs = {}, setPref = () => {}, onOpenHistory }) {
+    const [section, setSection] = useState("");
     const [draft, setDraft] = useState("");
     const [saved, setSaved] = useState(false);
-    const [section, setSection] = useState("");
+    const [pinEntry, setPinEntry] = useState(false);
+    const [confirmOff, setConfirmOff] = useState(false);
 
     /* back out of a section with the same keys the rest of the app uses */
     useEffect(() => {
@@ -10430,76 +10430,60 @@ function TagsPage({ onPick, onMarkers, onBack }) {
       return () => window.removeEventListener("keydown", onKey);
     }, [section]);
 
-    const rows = [
-      {
-        id: "appearance", group: "Preferences", icon: "image", title: "Appearance",
-        value: [(prefs.mono ? "Black & white" : "Full colour"),
-          prefs.autoCrop !== false ? "Crop to fill" : "Letterbox"].join(" · "),
-      },
-      {
-        id: "feed", group: "Preferences", icon: "feed", title: "Feed",
-        value: [FEED_WINDOW_LABEL[prefs.feedWindow] || "Everything",
-          prefs.dragScrub === true ? "Drag-scrub" : "Tap to scrub"].join(" · "),
-      },
-      {
-        id: "playback", group: "Preferences", icon: "play", title: "Playback",
-        value: "History · diagnostics",
-      },
-      {
-        id: "performer", group: "Preferences", icon: "user", title: "Performer page",
-        value: "Sort " + sortLabel(prefs.performerSort),
-      },
-      {
-        id: "favorites", group: "Preferences", icon: "heart", title: "Favorites",
-        value: "Sort " + sortLabel(prefs.favoritesSort),
-      },
-      {
-        id: "navigation", group: "Preferences", icon: "menu", title: "Navigation",
-        value: "Bottom bar",
-      },
-      {
-        id: "privacy", group: "Privacy", icon: "info", title: "Blur (safe for work)",
-        value: sfw ? "On — frames only" : "Off — playback",
-      },
-      {
-        id: "lock", group: "Privacy", icon: "lock", title: "Privacy lock",
-        value: pin ? "PIN set" : "No PIN",
-      },
-      {
-        id: "feeds", group: "Content", icon: "sparkle", title: "Feeds",
-        value: (feeds || []).length + " saved",
-      },
-      {
-        id: "about", group: "Content", icon: "heart", title: "About hearts & feeds",
-        value: "Stash ratings, browser-local feeds",
-      },
-    ];
+    /* Turning the lock off always erases the PIN: there is no way to keep a
+       secret the user has just said they no longer want guarded, and a PIN left
+       behind would silently lock the next session out. */
+    function requestLockOff() {
+      setPinEntry(false);
+      setConfirmOff(true);
+    }
+
+    function requestLockOn() {
+      setConfirmOff(false);
+      if (pin) return;
+      setSaved(false);
+      setPinEntry(true);
+    }
+
+    const rowById = {
+      feeds: { icon: "feed", title: "Your Feeds" },
+      performer: { icon: "user", title: "Performer Page" },
+      blur: { icon: "image", title: "Blur Content Thumbnails" },
+      lock: { icon: "lock", title: "Privacy Lock" },
+      appearance: { icon: "image", title: "Appearance" },
+      navigation: { icon: "menu", title: "Navigation" },
+      about: { icon: "info", title: "About" },
+    };
 
     function SectionBody() {
-      if (section === "appearance") {
+      if (section === "feeds") {
         return h(React.Fragment, null,
-          h(PrefRow, { title: "Black & white", hint: "Desaturate the whole UI — pairs with a red or greyscale colour filter" },
-            h(PrefToggle, { label: "Black & white", on: !!prefs.mono, onChange: (value) => setPref("mono", value) })),
-          h(PrefRow, { title: "Auto-crop to fill", hint: "Fill a portrait screen: the middle half of a 16:9 clip, or an even top-and-bottom crop when a clip is only a little off the screen's ratio. Off = always letterbox." },
-            h(PrefToggle, { label: "Auto-crop", on: prefs.autoCrop !== false, onChange: (value) => setPref("autoCrop", value) })),
-          h(PrefRow, { title: "Show file path", hint: "Print the folder path under the caption in the feed" },
-            h(PrefToggle, { label: "Show path", on: !!prefs.showPath, onChange: (value) => setPref("showPath", value) }))
-        );
-      }
-      if (section === "feed") {
-        return h(React.Fragment, null,
-          h(PrefRow, { title: "What lands in the feed", hint: "For You draws from this window", stack: true },
+          h("h4", { className: "stk-set-sub-head" }, "Saved feeds"),
+          (feeds || []).map((feed) =>
+            h("button", { key: feed.id, className: "stk-set-row", onClick: () => onEdit(feed) },
+              h("span", { className: "stk-set-icon" }, h(Icon, { name: "sparkle", size: 18 })),
+              h("span", { className: "stk-set-copy" }, h("span", null, feed.name), h("small", null, feed.type)),
+              h("span", { className: "stk-set-chev" }, h(Icon, { name: "chevron", size: 15 }))
+            )
+          ),
+          !(feeds || []).length && h("p", { className: "stk-sub" }, "No saved feeds yet."),
+          h("button", { className: "stk-btn", onClick: () => onEdit(null), style: { marginTop: "12px" } },
+            h(Icon, { name: "plus", size: 14 }), "New feed"),
+          h("h4", { className: "stk-set-sub-head" }, "What lands in the feed"),
+          h(PrefRow, { title: "Window", hint: "For You draws from this window", stack: true },
             h(PrefPills, {
               value: prefs.feedWindow,
               options: [["all", "Everything"], ["30", "30 days"], ["90", "90 days"], ["365", "1 year"]],
               onChange: (value) => setPref("feedWindow", value),
             })),
-          h(PrefRow, { title: "Drag-scrub the stage", hint: "Press and sweep sideways across the video to seek. Off by default — a sideways thumb at the end of a swipe was seeking the clip. Tap the caption to open the scrub bar instead." },
-            h(PrefToggle, { label: "Drag-scrub", on: prefs.dragScrub === true, onChange: (value) => setPref("dragScrub", value) }))
+          h("h4", { className: "stk-set-sub-head" }, "Favorites"),
+          h(PrefRow, { title: "Sort order", hint: "How your hearted scenes are ordered", stack: true },
+            h(PrefPills, {
+              value: prefs.favoritesSort,
+              options: [["updated_at", "Recent"], ["filesize", "Size"], ["duration", "Length"], ["resolution", "Res"], ["title", "A–Z"], ["random", "Random"]],
+              onChange: (value) => setPref("favoritesSort", value),
+            }))
         );
-      }
-      if (section === "playback") {
-        return h(PlaybackSettings, { prefs, setPref, onOpenHistory, sfw, expanded: true });
       }
       if (section === "performer") {
         return h(React.Fragment, null,
@@ -10519,13 +10503,17 @@ function TagsPage({ onPick, onMarkers, onBack }) {
             h(PrefToggle, { label: "Markers tab", on: prefs.performerMarkers, onChange: (value) => setPref("performerMarkers", value) }))
         );
       }
-      if (section === "favorites") {
-        return h(PrefRow, { title: "Sort order", hint: "How your hearted scenes are ordered", stack: true },
-          h(PrefPills, {
-            value: prefs.favoritesSort,
-            options: [["updated_at", "Recent"], ["filesize", "Size"], ["duration", "Length"], ["resolution", "Res"], ["title", "A–Z"], ["random", "Random"]],
-            onChange: (value) => setPref("favoritesSort", value),
-          }));
+      if (section === "appearance") {
+        return h(React.Fragment, null,
+          h(PrefRow, { title: "Black & white", hint: "Desaturate the whole UI — pairs with a red or greyscale colour filter" },
+            h(PrefToggle, { label: "Black & white", on: !!prefs.mono, onChange: (value) => setPref("mono", value) })),
+          h(PrefRow, { title: "Auto-crop to fill", hint: "Fill a portrait screen: the middle half of a 16:9 clip, or an even top-and-bottom crop when a clip is only a little off the screen's ratio. Off = always letterbox." },
+            h(PrefToggle, { label: "Auto-crop", on: prefs.autoCrop !== false, onChange: (value) => setPref("autoCrop", value) })),
+          h(PrefRow, { title: "Show file path", hint: "Print the folder path under the caption in the feed" },
+            h(PrefToggle, { label: "Show path", on: !!prefs.showPath, onChange: (value) => setPref("showPath", value) })),
+          h(PrefRow, { title: "Drag-scrub the stage", hint: "Press and sweep sideways across the video to seek. Off by default — a sideways thumb at the end of a swipe was seeking the clip. Tap the caption to open the scrub bar instead." },
+            h(PrefToggle, { label: "Drag-scrub", on: prefs.dragScrub === true, onChange: (value) => setPref("dragScrub", value) }))
+        );
       }
       if (section === "navigation") {
         return h(React.Fragment, null,
@@ -10534,73 +10522,81 @@ function TagsPage({ onPick, onMarkers, onBack }) {
           h("p", { className: "stk-sub" }, "Settings lives in the drawer, not on the bar. Feed is fixed on the far left.")
         );
       }
-      if (section === "privacy") {
-        return h(React.Fragment, null,
-          h(PrefRow, { title: "Blur everything", hint: sfw
-              ? "Videos are never requested or played; the feed shows still frames."
-              : "Videos stream and autoplay as usual." },
-            h(PrefToggle, { label: "Blur (safe for work)", on: !!sfw, onChange: (value) => onToggleSfw(value) })),
-          h("p", { className: "stk-sub" }, "Blur also opens the app blurred: it is the fastest thing to switch before showing someone a screen.")
-        );
-      }
-      if (section === "lock") {
-        return h(React.Fragment, null,
-          h("p", { className: "stk-sub" }, pin
-            ? "A PIN is set. StashTok black-screens the moment this tab loses focus and asks for the PIN when you come back."
-            : "Set a PIN to black-screen StashTok whenever you leave the tab."),
-          h("div", { className: "stk-pin-row" },
-            h("input", {
-              type: "tel",
-              inputMode: "numeric",
-              placeholder: pin ? "New PIN (4 digits)" : "PIN (4 digits)",
-              value: draft,
-              maxLength: 4,
-              onChange: (event) => {
-                const next = event.currentTarget.value.replace(/\D/g, "").slice(0, 4);
-                setDraft(next);
-                /* accept the moment four digits exist: no confirm step */
-                if (next.length === 4) {
-                  onSetPin(pinDigest(next));
-                  setSaved(true);
-                } else {
-                  setSaved(false);
-                }
-              },
-              className: "stk-pin-input",
-            }),
-            pin && h("button", {
-              className: "stk-btn stk-btn-danger",
-              onClick: () => {
-                onClearPin();
-                setDraft("");
-                setSaved(false);
-              },
-            }, "Remove")
-          ),
-          saved && h("p", { className: "stk-sub" }, "PIN saved.")
-        );
-      }
-      if (section === "feeds") {
-        return h(React.Fragment, null,
-          (feeds || []).map((feed) =>
-            h("button", { key: feed.id, className: "stk-set-row", onClick: () => onEdit(feed) },
-              h("span", { className: "stk-set-icon" }, h(Icon, { name: "sparkle", size: 18 })),
-              h("span", { className: "stk-set-copy" }, h("span", null, feed.name), h("small", null, feed.type)),
-              h("span", { className: "stk-set-chev" }, h(Icon, { name: "chevron", size: 15 }))
-            )
-          ),
-          h("button", { className: "stk-btn", onClick: () => onEdit(null), style: { marginTop: "12px" } },
-            h(Icon, { name: "plus", size: 14 }), "New feed")
-        );
-      }
       return h(React.Fragment, null,
         h("p", { className: "stk-sub" }, "Hearts are written to Stash as rating100. Any rated scene appears in the Favorites feed, and in Stash's own rating filter. Feed definitions live in this browser only."),
-        h("p", { className: "stk-sub" }, "Long-press the middle of the video for actions · hold the right side to fast-forward · hold the left to rewind · pinch to zoom · long-press then drag to move the frame · double-tap to step the crop.")
+        h("p", { className: "stk-sub" }, "Long-press the middle of the video for actions · hold the right side to fast-forward · hold the left to rewind · pinch to zoom · long-press then drag to move the frame · double-tap to step the crop."),
+        h("h4", { className: "stk-set-sub-head" }, "Playback"),
+        h(PlaybackSettings, { prefs, setPref, onOpenHistory, sfw, expanded: true })
       );
     }
 
+    function renderRow(id) {
+      const meta = rowById[id] || { icon: "info", title: id };
+      if (id === "blur") {
+        return h(SettingsToggleRow, {
+          key: id, icon: meta.icon, title: meta.title,
+          on: !!sfw, onChange: (value) => onToggleSfw(value),
+        });
+      }
+      if (id === "lock") {
+        return h(React.Fragment, { key: id },
+          h(SettingsToggleRow, {
+            icon: meta.icon, title: meta.title,
+            on: !!pin, onChange: (value) => (value ? requestLockOn() : requestLockOff()),
+          }),
+          confirmOff && h("div", { className: "stk-set-notice" },
+            h("p", null, "Turning the Privacy Lock off resets the PIN. You will set a new one the next time you switch it on."),
+            h("div", { className: "stk-set-notice-actions" },
+              h("button", { type: "button", className: "stk-btn", onClick: () => setConfirmOff(false) }, "Keep it on"),
+              h("button", {
+                type: "button",
+                className: "stk-btn stk-btn-danger",
+                onClick: () => {
+                  onClearPin();
+                  setDraft("");
+                  setSaved(false);
+                  setConfirmOff(false);
+                },
+              }, "Turn off & reset PIN")
+            )
+          ),
+          pinEntry && !pin && h("div", { className: "stk-set-notice" },
+            h("p", null, "Choose a 4-digit PIN. It saves the moment the fourth digit lands."),
+            h("div", { className: "stk-pin-row" },
+              h("input", {
+                type: "tel",
+                inputMode: "numeric",
+                placeholder: "PIN (4 digits)",
+                value: draft,
+                maxLength: 4,
+                autoFocus: true,
+                onChange: (event) => {
+                  const next = event.currentTarget.value.replace(/\D/g, "").slice(0, 4);
+                  setDraft(next);
+                  if (next.length === 4) {
+                    onSetPin(pinDigest(next));
+                    setPinEntry(false);
+                    setSaved(true);
+                  }
+                },
+                className: "stk-pin-input",
+              })
+            ),
+            h("div", { className: "stk-set-notice-actions" },
+              h("button", { type: "button", className: "stk-btn", onClick: () => { setPinEntry(false); setDraft(""); } }, "Cancel")
+            )
+          ),
+          saved && h("p", { className: "stk-set-notice-ok" }, "PIN set — the lock is on.")
+        );
+      }
+      return h(SettingsRow, {
+        key: id, icon: meta.icon, title: meta.title,
+        onClick: () => setSection(id),
+      });
+    }
+
     if (section) {
-      const current = rows.find((row) => row.id === section);
+      const current = rowById[section];
       return h(
         "div",
         { className: "stk-settings stk-set-page" },
@@ -10618,26 +10614,14 @@ function TagsPage({ onPick, onMarkers, onBack }) {
     return h(
       "div",
       { className: "stk-settings stk-set-index" },
-      SETTINGS_GROUPS.map((group) => {
-        const inGroup = rows.filter((row) => row.group === group);
-        if (!inGroup.length) return null;
-        return h("section", { key: group, className: "stk-set-group" },
-          h("h4", { className: "stk-set-group-head" }, group),
-          inGroup.map((row) =>
-            h(SettingsRow, {
-              key: row.id,
-              icon: row.icon,
-              title: row.title,
-              value: row.value,
-              onClick: () => setSection(row.id),
-            })
-          )
-        );
-      }),
-      h("p", { className: "stk-set-foot" }, "Hearts save to Stash as ratings. Feeds stay in this browser.")
+      SETTINGS_GROUPS.map((group) =>
+        h("section", { key: group.id, className: "stk-set-group" },
+          h("h1", { className: "stk-set-group-head" + (group.rank === 1 ? " stk-set-h1" : "") }, group.id),
+          group.rows.map((id) => renderRow(id))
+        )
+      )
     );
   }
-
   /* ------------------------------------------------------------------ */
   /* root                                                               */
   /* ------------------------------------------------------------------ */

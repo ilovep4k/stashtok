@@ -4624,30 +4624,41 @@ body.stk-fullscreen-mode .stash-tok.stk-feed-fullscreen {
 .stk-diagnostics-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
 /* ---------- settings index (grouped rows -> section pages) ---------- */
-/* TikTok shape: one line per subject, grouped under a small caps header, and
-   each line opens its own page. Every surface here is already dark, so the
-   settings read as a list of rows on the black stage, not as a card stack. */
+/* TikTok shape: one line per subject, grouped under a heading, and each line
+   opens its own page. Rows carry a label only — no sub labels — so the list
+   reads at a glance. One web-safe stack for the whole panel, so labels do not
+   inherit Stash's admin font and small text stays legible. */
+.stk-settings,
+.stk-settings button,
+.stk-settings input,
+.stk-settings summary {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
 .stk-set-index {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 22px;
 }
 .stk-set-group { display: flex; flex-direction: column; }
 .stk-set-group-head {
-  font-size: 11px;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: rgba(255, 255, 255, 0.92);
+  margin: 0 2px 6px;
+}
+.stk-set-group-head.stk-set-h1 {
+  font-size: 24px;
   font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.42);
-  margin: 0 2px 4px;
+  margin-bottom: 8px;
 }
 .stk-set-row {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
   width: 100%;
-  min-height: 54px;
-  padding: 10px 4px;
+  min-height: 56px;
+  padding: 12px 4px;
   border: 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   background: none;
@@ -4656,9 +4667,11 @@ body.stk-fullscreen-mode .stash-tok.stk-feed-fullscreen {
   cursor: pointer;
   border-radius: 0;
 }
-.stk-set-group .stk-set-row:last-of-type { border-bottom: 0; }
+.stk-set-group .stk-set-row:last-child { border-bottom: 0; }
 .stk-set-row:active { background: rgba(255, 255, 255, 0.05); }
 .stk-set-row:focus-visible { outline: 2px solid rgba(255, 255, 255, 0.4); outline-offset: -2px; }
+.stk-set-row.stk-set-toggle { cursor: default; }
+.stk-set-row.stk-set-toggle:active { background: none; }
 .stk-set-icon {
   flex: 0 0 auto;
   width: 26px;
@@ -4671,24 +4684,46 @@ body.stk-fullscreen-mode .stash-tok.stk-feed-fullscreen {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
 }
-.stk-set-copy span { font-size: 15px; color: #fff; }
+.stk-set-copy span { font-size: 16px; font-weight: 450; color: #fff; }
 .stk-set-copy small {
-  font-size: 11.5px;
-  color: rgba(255, 255, 255, 0.45);
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.55);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .stk-set-chev { flex: 0 0 auto; display: grid; place-items: center; color: rgba(255, 255, 255, 0.32); }
-.stk-set-foot {
-  margin: 0;
-  padding: 4px 12px 8px;
-  font-size: 11px;
-  line-height: 1.4;
-  text-align: center;
-  color: rgba(255, 255, 255, 0.35);
+
+.stk-set-sub-head {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.45);
+  margin: 18px 2px 6px;
+}
+.stk-set-sub-head:first-child { margin-top: 4px; }
+
+/* the lock's on/off confirmation and PIN entry sit inline under its row */
+.stk-set-notice {
+  margin: 6px 0 10px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.06);
+}
+.stk-set-notice p {
+  margin: 0 0 10px;
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.78);
+}
+.stk-set-notice-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.stk-set-notice-ok {
+  margin: 4px 2px 10px;
+  font-size: 13px;
+  color: #4cd964;
 }
 
 .stk-set-page { display: flex; flex-direction: column; }
@@ -4704,7 +4739,7 @@ body.stk-fullscreen-mode .stash-tok.stk-feed-fullscreen {
   background: #000;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
-.stk-set-subhead > span { font-size: 16px; font-weight: 600; color: #fff; }
+.stk-set-subhead > span { font-size: 17px; font-weight: 600; color: #fff; }
 .stk-set-back {
   flex: 0 0 auto;
   width: 34px;
@@ -4719,5 +4754,9 @@ body.stk-fullscreen-mode .stash-tok.stk-feed-fullscreen {
 }
 .stk-set-back:active { background: rgba(255, 255, 255, 0.2); }
 .stk-set-page .stk-settings-details { margin-top: 10px; }
+/* sub labels survive inside a section page, so keep them readable there */
+.stk-set-page .stk-pref-copy span { font-size: 15px; }
+.stk-set-page .stk-pref-copy small { font-size: 12.5px; line-height: 1.4; color: rgba(255, 255, 255, 0.6); }
+.stk-set-page .stk-sub { font-size: 12.5px; line-height: 1.45; }
 .stk-desktop .stk-set-index,
 .stk-desktop .stk-set-page { max-width: 620px; }
