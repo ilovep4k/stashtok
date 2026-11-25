@@ -403,6 +403,10 @@
       muted: true,
       autoPlay: true,
       playsInline: true,
+      /* Firefox paints its own PiP toggle over the top-right of any playing
+         video; the rail's save button lives under that corner, so the badge
+         landed on top of our own icon. Off for every video we render. */
+      disablePictureInPicture: true,
       preload: "metadata",
       /* reveal only once a frame can paint; a file the browser cannot decode
          stays hidden and the still underneath keeps showing */
@@ -5715,6 +5719,9 @@ void main() {
                 src: active && streamFallback ? source.signed : source.plain,
                 poster: desktop && !spec.single ? screenshot || undefined : undefined,
                 playsInline: true,
+                /* no Firefox PiP badge over the top-right corner: it drew on top
+                   of the rail's save button, and PiP is not how this feed is used */
+                disablePictureInPicture: true,
                 autoPlay: active && !frameHandoff,
                 muted: active ? muted : true,
                 /* four simultaneous streams is what makes a big desktop pane stutter:
@@ -8293,6 +8300,62 @@ void main() {
     const [attrError, setAttrError] = useState("");
     const [attrUndo, setAttrUndo] = useState(null);
     const [attrDone, setAttrDone] = useState("");
+    /* images carry the same attributes, and a performer page is mostly photos */
+    const [attrImages, setAttrImages] = useState(null);
+    /* the bulk write runs as a Stash job, not in this tab: this is its handle */
+    const [attrJob, setAttrJob] = useState(null);
+    /* follow the job instead of waiting inside a fetch: progress, failure and
+       cancellation all arrive from the queue, and the panel stays usable */
+    const attrJobId = attrJob && attrJob.id ? attrJob.id : "";
+    useEffect(() => {
+      if (!attrJobId) return undefined;
+      let alive = true;
+      let timer = 0;
+      const finish = (message, isError) => {
+        if (!alive) return;
+        setAttrJob(null);
+        setAttrBusy(false);
+        if (isError) setAttrError(message);
+        else setAttrDone(message);
+        refreshAttrRows();
+      };
+      const tick = async () => {
+        if (!alive) return;
+        try {
+          const data = await gql(`query StashTokAttrJob { jobQueue { id status progress description error } }`);
+          const jobs = (data && data.jobQueue) || [];
+          const mine = jobs.filter((job) => String(job.id) === String(attrJobId))[0];
+          if (!mine) {
+            /* Stash drops a job from the queue the moment it ends, so absence is
+               the success signal; failures are caught while it is still listed */
+            finish("Done — the write finished on the server.", false);
+            return;
+          }
+          if (mine.status === "FINISHED") {
+            finish("Done — the write finished on the server.", false);
+            return;
+          }
+          if (mine.status === "FAILED" || mine.status === "CANCELLED") {
+            finish(
+              (mine.error && String(mine.error)) ||
+                (mine.status === "CANCELLED" ? "Stopped." : "The job failed."),
+              true
+            );
+            return;
+          }
+          const progress = mine.progress == null ? 0 : Number(mine.progress);
+          setAttrJob((prev) => (prev ? Object.assign({}, prev, { progress: progress }) : prev));
+          timer = setTimeout(tick, 1200);
+        } catch (err) {
+          timer = setTimeout(tick, 2500);
+        }
+      };
+      tick();
+      return () => {
+        alive = false;
+        clearTimeout(timer);
+      };
+    }, [attrJobId]);
     /* ids of the duplicate tags, resolved once; empty list = no exclusion */
     const [dupeTags, setDupeTags] = useState([]);
     const [stuck, setStuck] = useState(false);
@@ -8854,6 +8917,29 @@ void main() {
       return rows;
     }
 
+    async function loadAttrImages(pid) {
+      const rows = [];
+      let page = 1;
+      for (;;) {
+        const data = await gql(
+          `query StashTokPerfAttrImages($id: ID!, $page: Int!) {
+            findImages(filter: { per_page: 250, page: $page },
+                       image_filter: { performers: { value: [$id], modifier: INCLUDES } }) {
+              count
+              images { id tags { id name } }
+            }
+          }`,
+          { id: pid, page }
+        );
+        const found = (data && data.findImages) || {};
+        const batch = found.images || [];
+        batch.forEach((row) => rows.push(row));
+        if (!batch.length || rows.length >= (found.count || 0) || page >= 80) break;
+        page += 1;
+      }
+      return rows;
+    }
+
     function attrHave(attr, scene) {
       const have = new Set(((scene && scene.tags) || []).map((tag) => String(tag.name).trim().toLowerCase()));
       return attr.tags.every((name) => have.has(name.toLowerCase()));
@@ -8863,23 +8949,113 @@ void main() {
       return (scenes || []).filter((scene) => attrHave(attr, scene)).length;
     }
 
+    /* The undo record must outlive the panel: it is the only thing standing
+       between a wrong bulk write and a manual cleanup of hundreds of rows. It
+       goes to localStorage per performer, not into React state that a
+       navigation throws away. */
+    function undoKeyFor(pid) {
+      return "stashTok.attrUndo.v1." + String(pid || "");
+    }
+
+    function readUndoRecord(pid) {
+      try {
+        const raw = window.localStorage.getItem(undoKeyFor(pid));
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (!parsed || !parsed.entries || !parsed.entries.length) return null;
+        /* a week is enough to notice a mistake; older records are noise */
+        if (parsed.at && Date.now() - parsed.at > 7 * 24 * 60 * 60 * 1000) {
+          window.localStorage.removeItem(undoKeyFor(pid));
+          return null;
+        }
+        return parsed;
+      } catch (err) {
+        return null;
+      }
+    }
+
+    function writeUndoRecord(pid, payload) {
+      try {
+        if (!payload) {
+          window.localStorage.removeItem(undoKeyFor(pid));
+          return;
+        }
+        window.localStorage.setItem(undoKeyFor(pid), JSON.stringify(Object.assign({ at: Date.now() }, payload)));
+      } catch (err) {
+        /* private mode: undo just becomes panel-only, which is still correct */
+      }
+    }
+
+    function hasTag(row, name) {
+      const want = String(name).trim().toLowerCase();
+      return ((row && row.tags) || []).some((tag) => String(tag.name).trim().toLowerCase() === want);
+    }
+
     function openAttrs() {
       if (isFolder || !performerId) return;
       setMenuOpen(false);
       setAttrOpen(true);
       setAttrDone("");
       setAttrError("");
-      if (attrScenes) return;
-      loadAttrScenes(performerId)
-        .then((rows) => setAttrScenes(rows))
-        .catch((err) => {
-          setAttrError(String((err && err.message) || err));
-          setAttrScenes([]);
-        });
+      /* an undo from a previous visit is still a live undo */
+      if (!attrUndo && performerId) {
+        const kept = readUndoRecord(performerId);
+        if (kept) {
+          setAttrUndo(kept);
+          setAttrDone("Last sync: " + kept.label + " — still reversible.");
+        }
+      }
+      /* scenes and images are separate reads, and the panel is dishonest if it
+         only counts half of what it is about to write */
+      if (!attrScenes) {
+        loadAttrScenes(performerId)
+          .then((rows) => setAttrScenes(rows))
+          .catch((err) => {
+            setAttrError(String((err && err.message) || err));
+            setAttrScenes([]);
+          });
+      }
+      if (!attrImages) {
+        loadAttrImages(performerId)
+          .then((rows) => setAttrImages(rows))
+          .catch(() => setAttrImages([]));
+      }
     }
 
     function toggleAttr(name) {
       setAttrPick((prev) => Object.assign({}, prev, { [name]: !prev[name] }));
+    }
+
+    /* Hand the write to Stash as a job. The tab is only a spectator after this:
+       close it, lock the iPad, walk away — the job keeps writing, and comes back
+       with progress instead of a spinner. */
+    async function startAttrJob(payload, description) {
+      const args = {
+        mode: payload.mode,
+        performerId: payload.performerId,
+        entries: JSON.stringify(payload.entries),
+        chunk: "100",
+      };
+      const data = await gql(
+        `mutation StashTokRunTask($p: ID!, $t: String!, $a: Map, $d: String) {
+          runPluginTask(plugin_id: $p, task_name: $t, args_map: $a, description: $d)
+        }`,
+        { p: "stashTok", t: "TagSync", a: args, d: description }
+      );
+      const id = (data && data.runPluginTask) || "";
+      setAttrJob({ id: String(id), progress: 0, label: payload.label, description });
+      return id;
+    }
+
+    async function refreshAttrRows() {
+      if (!performerId) return;
+      try {
+        const [rows, images] = await Promise.all([loadAttrScenes(performerId), loadAttrImages(performerId)]);
+        setAttrScenes(rows);
+        setAttrImages(images);
+      } catch (err) {
+        /* the write already landed; a failed re-read is not a failed operation */
+      }
     }
 
     async function applyAttrs() {
@@ -8889,6 +9065,7 @@ void main() {
       setAttrError("");
       setAttrDone("");
       setAttrUndo(null);
+      setAttrJob(null);
       try {
         const cache = {};
         const ids = {};
@@ -8897,55 +9074,47 @@ void main() {
           if (names.indexOf(name) < 0) names.push(name);
         }));
         for (const name of names) ids[name] = await ensureTagId(name, cache);
-        /* the snapshot is what makes undo honest: only the scenes that did not
-           have the tag are recorded, so undo takes back exactly this write */
-        const plan = picks.map((attr) => ({
-          name: attr.name,
-          tagIds: attr.tags.map((name) => ids[name]),
-          sceneIds: attrScenes.filter((scene) => !attrHave(attr, scene)).map((scene) => String(scene.id)),
-        }));
-        const allTagIds = [];
-        plan.forEach((entry) => entry.tagIds.forEach((id) => {
-          if (allTagIds.indexOf(id) < 0) allTagIds.push(id);
-        }));
-        const targets = [];
-        plan.forEach((entry) => entry.sceneIds.forEach((id) => {
-          if (targets.indexOf(id) < 0) targets.push(id);
-        }));
-        /* the performer carries them too: the attribute is a fact about her,
-           which is the whole reason it can be pushed to her scenes at all */
-        await addPerformerTags(performerId, allTagIds);
-        for (let at = 0; at < targets.length; at += 200) {
-          await gql(
-            `mutation StashTokAttrSync($ids: [ID!]!, $tags: [ID!]!) {
-              bulkSceneUpdate(input: { ids: $ids, tag_ids: { ids: $tags, mode: ADD } }) { id }
-            }`,
-            { ids: targets.slice(at, at + 200), tags: allTagIds }
-          );
+
+        /* one entry per tag, listing only the rows actually missing it: that
+           list is both the write plan and the undo record */
+        const sceneRows = attrScenes || [];
+        const imageRows = attrImages || [];
+        const entries = names
+          .map((name) => ({
+            tagId: ids[name],
+            name,
+            scenes: sceneRows.filter((row) => !hasTag(row, name)).map((row) => String(row.id)),
+            images: imageRows.filter((row) => !hasTag(row, name)).map((row) => String(row.id)),
+          }))
+          .filter((entry) => entry.scenes.length || entry.images.length);
+
+        if (!entries.length) {
+          setAttrDone("Everything here already carries those tags.");
+          setAttrBusy(false);
+          return;
         }
-        /* the local copy follows the write, so the counts show the new truth */
-        const stamp = picks.map((attr) => ({ attr, tags: attr.tags.map((name) => ({ id: ids[name], name })) }));
-        setAttrScenes((prev) => (prev || []).map((scene) => {
-          const have = new Set((scene.tags || []).map((tag) => String(tag.name).trim().toLowerCase()));
-          const add = [];
-          stamp.forEach(({ attr, tags }) => {
-            if (attr.tags.every((name) => have.has(name.toLowerCase()))) return;
-            tags.forEach((tag) => {
-              const key = String(tag.name).toLowerCase();
-              if (have.has(key)) return;
-              have.add(key);
-              add.push(tag);
-            });
-          });
-          return add.length ? Object.assign({}, scene, { tags: (scene.tags || []).concat(add) }) : scene;
-        }));
-        setAttrUndo({ performerId, plan });
+
+        const scenesWanted = new Set();
+        const imagesWanted = new Set();
+        entries.forEach((entry) => {
+          entry.scenes.forEach((id) => scenesWanted.add(id));
+          entry.images.forEach((id) => imagesWanted.add(id));
+        });
+        const payload = {
+          mode: "add",
+          performerId: String(performerId),
+          entries,
+          label: picks.map((attr) => attr.name).join(", "),
+        };
+        await startAttrJob(
+          payload,
+          "StashTok: " + payload.label + " \u2014 " + scenesWanted.size + " scenes, " + imagesWanted.size + " images"
+        );
+        setAttrUndo(payload);
+        writeUndoRecord(performerId, payload);
         setAttrPick({});
-        setAttrDone("Added " + picks.map((attr) => attr.name).join(", ") + " to " + targets.length +
-          " scene" + (targets.length === 1 ? "" : "s") + ".");
       } catch (err) {
         setAttrError(String((err && err.message) || err));
-      } finally {
         setAttrBusy(false);
       }
     }
@@ -8957,38 +9126,44 @@ void main() {
       setAttrError("");
       setAttrDone("");
       try {
-        for (const entry of snap.plan) {
-          for (let at = 0; at < entry.sceneIds.length; at += 200) {
-            await gql(
-              `mutation StashTokAttrUndo($ids: [ID!]!, $tags: [ID!]!) {
-                bulkSceneUpdate(input: { ids: $ids, tag_ids: { ids: $tags, mode: REMOVE } }) { id }
-              }`,
-              { ids: entry.sceneIds.slice(at, at + 200), tags: entry.tagIds }
-            );
-          }
-        }
-        const allTagIds = [];
-        snap.plan.forEach((entry) => entry.tagIds.forEach((id) => {
-          if (allTagIds.indexOf(id) < 0) allTagIds.push(id);
-        }));
-        await removePerformerTags(snap.performerId, allTagIds);
-        setAttrScenes(await loadAttrScenes(snap.performerId));
+        await startAttrJob(Object.assign({}, snap, { mode: "remove" }), "StashTok undo: " + snap.label);
         setAttrUndo(null);
-        setAttrDone("Removed again.");
+        writeUndoRecord(performerId, null);
       } catch (err) {
         setAttrError(String((err && err.message) || err));
-      } finally {
         setAttrBusy(false);
+      }
+    }
+
+    async function stopAttrJob() {
+      if (!attrJob || !attrJob.id) return;
+      try {
+        await gql(`mutation StashTokStopJob($id: ID!) { stopJob(job_id: $id) }`, { id: attrJob.id });
+        setAttrDone("Stopped. Rows already written stay written \u2014 Undo reverses them.");
+      } catch (err) {
+        setAttrError(String((err && err.message) || err));
       }
     }
 
     function attrSheet() {
       const scenes = attrScenes;
+      const images = attrImages;
       const total = scenes ? scenes.length : 0;
+      const imageTotal = images ? images.length : 0;
       const picks = SYNC_ATTRS.filter((attr) => attrPick[attr.name]);
-      const targets = scenes
+      const sceneTargets = scenes
         ? scenes.filter((scene) => picks.some((attr) => !attrHave(attr, scene))).length
         : 0;
+      const imageTargets = images
+        ? images.filter((row) => picks.some((attr) => attr.tags.some((name) => !hasTag(row, name)))).length
+        : 0;
+      const targets = sceneTargets + imageTargets;
+      const targetLabel = [
+        sceneTargets ? sceneTargets + " scene" + (sceneTargets === 1 ? "" : "s") : "",
+        imageTargets ? imageTargets + " image" + (imageTargets === 1 ? "" : "s") : "",
+      ]
+        .filter(Boolean)
+        .join(" + ");
       /* what is on some of her scenes and not others is the interesting row:
          it sorts first, so the panel reads as "these are the ones to settle" */
       const rows = SYNC_ATTRS
@@ -9021,6 +9196,7 @@ void main() {
             " — ",
             total || "…",
             " scene" + (total === 1 ? "" : "s"),
+            imageTotal ? " and " + imageTotal + " image" + (imageTotal === 1 ? "" : "s") : "",
             ". Tick what is true of her. Nothing is written until you confirm."
           ),
           !scenes
@@ -9046,15 +9222,40 @@ void main() {
                   );
                 })
               ),
+          attrJob
+            ? h(
+                "div",
+                { className: "stk-attr-progress" },
+                h(
+                  "div",
+                  { className: "stk-attr-bar" },
+                  h("span", { style: { width: Math.round((attrJob.progress || 0) * 100) + "%" } })
+                ),
+                h(
+                  "div",
+                  { className: "stk-attr-progress-row" },
+                  h(
+                    "span",
+                    null,
+                    Math.round((attrJob.progress || 0) * 100) + "% — running on the server, safe to close this page"
+                  ),
+                  h(
+                    "button",
+                    { type: "button", className: "stk-btn stk-btn-danger", onClick: stopAttrJob },
+                    "Stop"
+                  )
+                )
+              )
+            : null,
           attrError ? h("p", { className: "stk-attr-error" }, attrError) : null,
           attrDone ? h("p", { className: "stk-attr-done" }, attrDone) : null,
           h(
             "p",
             { className: "stk-attr-warn" },
-            "This writes to every scene at once, so it cannot be undone one scene at a time. ",
+            "This writes across every scene and image of her at once, so it cannot be undone one scene at a time. ",
             attrUndo
-              ? "Undo removes exactly these tags from exactly the scenes that were missing them — anything you tag by hand in between comes off too."
-              : "Undo is offered here right after the write."
+              ? "Undo removes exactly these tags from exactly the rows that were missing them — anything you tag by hand in between comes off too."
+              : "Undo is offered here right after you apply."
           ),
           h(
             "div",
@@ -9068,16 +9269,18 @@ void main() {
                 onClick: applyAttrs,
               },
               attrBusy
-                ? "Working…"
+                ? attrJob
+                  ? "Working… " + Math.round((attrJob.progress || 0) * 100) + "%"
+                  : "Starting…"
                 : picks.length
-                ? "Apply to " + targets + " scene" + (targets === 1 ? "" : "s")
+                ? "Apply to " + targetLabel
                 : "Pick attributes"
             ),
             attrUndo &&
               h(
                 "button",
                 { type: "button", className: "stk-btn stk-btn-danger", disabled: attrBusy, onClick: undoAttrs },
-                "Undo"
+                attrBusy && !attrJob ? "Undoing…" : "Undo"
               )
           )
         )
@@ -12059,6 +12262,10 @@ function TagsPage({ onPick, onMarkers, onBack }) {
     const [boxes, setBoxes] = useState([]);
     const [note, setNote] = useState("");
     const [busy, setBusy] = useState("");
+    /* bulk tag syncs leave a reversal record behind: this is where they are
+       found again, including the ones started on another device or long after
+       the panel that started them was closed */
+    const [undos, setUndos] = useState([]);
 
     const load = useCallback(() => {
       gql(`query StashTokJobs { jobQueue { id status description progress startTime endTime error } }`)
@@ -12066,17 +12273,77 @@ function TagsPage({ onPick, onMarkers, onBack }) {
         .catch(() => setJobs((cur) => cur || []));
     }, []);
 
+    const loadUndos = useCallback(() => {
+      const rows = [];
+      try {
+        const prefix = "stashTok.attrUndo.v1.";
+        for (let i = 0; i < window.localStorage.length; i += 1) {
+          const key = window.localStorage.key(i);
+          if (!key || key.indexOf(prefix) !== 0) continue;
+          const rec = JSON.parse(window.localStorage.getItem(key) || "null");
+          if (!rec || !rec.entries || !rec.entries.length) continue;
+          let scenes = 0;
+          let images = 0;
+          rec.entries.forEach((entry) => {
+            scenes += (entry.scenes || []).length;
+            images += (entry.images || []).length;
+          });
+          rows.push({
+            key,
+            performerId: key.slice(prefix.length),
+            label: rec.label || "sync",
+            at: rec.at || 0,
+            scenes,
+            images,
+            entries: rec.entries,
+          });
+        }
+      } catch (err) {
+        /* private mode or a corrupt record: nothing to show, nothing to break */
+      }
+      rows.sort((a, b) => b.at - a.at);
+      setUndos(rows);
+    }, []);
+
     useEffect(() => {
       load();
+      loadUndos();
       gql(`query StashTokBoxes { configuration { general { stashBoxes { endpoint api_key } } } }`)
         .then((data) => {
           const general = (data && data.configuration && data.configuration.general) || {};
           setBoxes(general.stashBoxes || []);
         })
         .catch(() => {});
-      const tick = window.setInterval(load, 2500);
+      const tick = window.setInterval(() => {
+        load();
+        loadUndos();
+      }, 2500);
       return () => window.clearInterval(tick);
-    }, [load]);
+    }, [load, loadUndos]);
+
+    function reverse(row) {
+      const args = {
+        mode: "remove",
+        performerId: row.performerId,
+        entries: JSON.stringify(row.entries),
+        chunk: "100",
+      };
+      gql(
+        `mutation StashTokReverseSync($p: ID!, $t: String!, $a: Map, $d: String) {
+          runPluginTask(plugin_id: $p, task_name: $t, args_map: $a, description: $d)
+        }`,
+        { p: "stashTok", t: "TagSync", a: args, d: "StashTok undo: " + row.label }
+      )
+        .then(() => {
+          try {
+            window.localStorage.removeItem(row.key);
+          } catch (err) {}
+          setNote("Reversal queued — it runs on the server like any other task.");
+          load();
+          loadUndos();
+        })
+        .catch((err) => setNote(String((err && err.message) || err)));
+    }
 
     function run(id) {
       setBusy(id);
@@ -12091,7 +12358,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
     }
 
     function stop(jobId) {
-      gql(`mutation StashTokStopJob($id: ID!) { stopJob(input: { job_id: $id }) }`, { id: jobId })
+      gql(`mutation StashTokStopJob($id: ID!) { stopJob(job_id: $id) }`, { id: jobId })
         .then(load)
         .catch((err) => setNote(String((err && err.message) || err)));
     }
@@ -12146,6 +12413,45 @@ function TagsPage({ onPick, onMarkers, onBack }) {
                   h("span", null, `${Math.round((job.progress || 0) * 100)}%`),
                   job.error ? h("span", { className: "stk-ops-err" }, job.error) : null,
                   h("button", { className: "stk-btn", onClick: () => stop(job.id) }, "Stop")
+                )
+              )
+            )
+          ),
+
+      h("h4", { style: { marginTop: "18px" } }, "Reversible syncs"),
+      undos.length === 0
+        ? h("p", { className: "stk-sub" }, "No bulk tag sync waiting to be reversed.")
+        : h(
+            "div",
+            { className: "stk-ops-jobs" },
+            undos.map((row) =>
+              h(
+                "div",
+                { key: row.key, className: "stk-ops-job" },
+                h(
+                  "div",
+                  { className: "stk-ops-job-top" },
+                  h("span", { className: "stk-ops-job-desc" }, row.label),
+                  h(
+                    "span",
+                    { className: "stk-ops-job-status" },
+                    row.at ? new Date(row.at).toLocaleDateString() : "—"
+                  )
+                ),
+                h(
+                  "div",
+                  { className: "stk-ops-job-foot" },
+                  h(
+                    "span",
+                    null,
+                    row.scenes + " scene" + (row.scenes === 1 ? "" : "s") +
+                      (row.images ? ", " + row.images + " image" + (row.images === 1 ? "" : "s") : "")
+                  ),
+                  h(
+                    "button",
+                    { className: "stk-btn stk-btn-danger", onClick: () => reverse(row) },
+                    "Reverse"
+                  )
                 )
               )
             )

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased - bulk writes run on the server
+
+- **Body-tag sync is a Stash job, not a browser loop.** `ops/attrSync.js` (plugin task `TagSync`, `interface: js`) applies attributes to every scene and image of a performer inside the Stash process: it keeps writing when the panel is closed, reports real progress in the queue, and can be stopped there.
+- **Cost is per row, not per tag**: measured 650 ms/scene, 1 scene × 5 tags = 660 ms, 2 scenes × 5 tags = 1333 ms. The task therefore groups rows by their exact tag set and writes each row once — three tags on one scene is one write, not three.
+- **Images are included** (`bulkImageUpdate`) and counted in the panel, which used to speak only about scenes.
+- **Undo is exact and outlives the panel**: the plan (only the rows actually missing each tag) is kept per performer in localStorage and replayed as `mode: "remove"`. It also shows up under Ops → Reversible syncs, where it can be reversed later or from another tab.
+- **`stopJob` takes `job_id` directly** — `stopJob(job_id: $id)`, not `stopJob(input: { job_id: ... })`; the wrapped form is a 422 and the Stop button never worked.
+- **Embedded plugin JS gotchas**, worth remembering: args arrive as `input.Args` (capitalised, goja exposes Go fields), the returned object needs a capitalised `Output`, and `runPluginOperation` (synchronous) deadlocks on bulk writes — only `runPluginTask` is safe.
+
 ## Unreleased - marker compilation feeds
 
 - **A marker-tag chip on the Markers page now plays, it no longer filters.**

@@ -56,3 +56,12 @@ settings:
     displayName: Thumbnail service URL
     description: Resizing sidecar (see tools/thumbs-service). Empty = auto, which uses the sidecar beside this instance (9997 to 18997, 9998 to 18996) and falls back to Stash's own images if it is unreachable. Set a URL to override, or off to always use Stash.
     type: STRING
+
+# Plugin tasks run inside the Stash process, in the same job queue as a scan:
+# they keep going when the page is closed and expose progress and a Stop.
+exec:
+  - ops/attrSync.js
+interface: js
+tasks:
+  - name: TagSync
+    description: Apply body/ethnicity tags to every scene and image of a performer (server-side, survives closing the page).
