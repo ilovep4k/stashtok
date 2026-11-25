@@ -2746,6 +2746,22 @@ body.stk-clip-mode .stk-gear-fab { display: none; }
   background: #000;
 }
 
+/* the viewer could not start: say why instead of showing an empty frame */
+.stk-vr-fail {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  background: #000;
+  color: #bbb;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 /* ---- timeline scrubber sprite (desktop hover) ---- */
 .stk-scrub-preview {
   position: absolute;

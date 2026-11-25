@@ -2292,6 +2292,9 @@ void main() {
 
   function VrCanvas({ videoRef, layout, sceneKey, previewUrl, onTap, onSource }) {
     const canvasRef = useRef(null);
+    /* non-empty when the GL path could not run: shown in place of the canvas so a
+       broken viewer says why instead of presenting a white rectangle */
+    const [problem, setProblem] = useState("");
     const tapRef = useRef(onTap);
     tapRef.current = onTap;
     const srcRef = useRef(onSource);
@@ -2303,18 +2306,33 @@ void main() {
       viewRef.current.yaw = 0;
       viewRef.current.pitch = 0;
       viewRef.current.fov = 1.75;
+      /* a new clip retries the GL path even if the previous one failed */
+      setProblem("");
     }, [sceneKey]);
 
     useEffect(() => {
       if (!layout) return undefined;
       const canvas = canvasRef.current;
-      const video = videoRef.current;
       if (!canvas) return undefined;
-      /* webgl2 first: it allows mipmaps on a non-power-of-two texture, which is
-         what the fisheye shrink needs to stop shimmering at the edges */
+      /* A throw inside the render loop leaves the canvas transparent, and a phone
+         shows a transparent canvas over a light page as a plain white rectangle
+         with no hint of what broke. Any setup or per-frame failure now replaces
+         the canvas with the reason. */
+      let raf = 0;
+      let stopped = false;
+      const fail = (why) => {
+        stopped = true;
+        if (raf) cancelAnimationFrame(raf);
+        setProblem(String(why));
+      };
+      /* webgl2 first (it tolerates a non-power-of-two texture at any size), then
+         webgl1; both run the same GLSL ES 1.00 shader and plain LINEAR sampling */
       const gl = canvas.getContext("webgl2", { alpha: false, antialias: false }) ||
         canvas.getContext("webgl", { alpha: false, antialias: false });
-      if (!gl) return undefined;
+      if (!gl) {
+        fail("VR view unavailable: this browser has no WebGL");
+        return undefined;
+      }
       const shader = (type, src) => {
         const sh = gl.createShader(type);
         gl.shaderSource(sh, src);
@@ -2323,12 +2341,18 @@ void main() {
       };
       const vs = shader(gl.VERTEX_SHADER, VR_VS);
       const fs = shader(gl.FRAGMENT_SHADER, VR_FS);
-      if (!vs || !fs) return undefined;
+      if (!vs || !fs) {
+        fail("VR view unavailable: the shader did not compile");
+        return undefined;
+      }
       const prog = gl.createProgram();
       gl.attachShader(prog, vs);
       gl.attachShader(prog, fs);
       gl.linkProgram(prog);
-      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) return undefined;
+      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+        fail("VR view unavailable: the shader program did not link");
+        return undefined;
+      }
       gl.useProgram(prog);
       const buf = gl.createBuffer();
       gl.bindBuffer(gl.ARRAY_BUFFER, buf);
@@ -2338,21 +2362,34 @@ void main() {
       gl.vertexAttribPointer(pos, 2, gl.FLOAT, false, 0, 0);
       const tex = gl.createTexture();
       gl.bindTexture(gl.TEXTURE_2D, tex);
-      /* Plain LINEAR, deliberately. With the frame uploaded at its native size the
-         view samples roughly one texel per canvas pixel — the visible window of a
-         4320-wide fisheye eye is about as wide as the screen's backing store — so
-         there is almost nothing left to alias. Mipmaps here meant rebuilding a 9 MP
-         mip chain every single frame, which is what made the player crawl. */
+      /* Plain LINEAR, no mipmaps: this is the upload path that always painted. The
+         frame is copied through a 2D canvas at three times the player's pixel
+         width, so the fisheye shrink reads from a big texture and the old
+         blocky/jagged look is gone without a per-frame 9 MP mip chain. */
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      /* Every uniform the shader reads, looked up once. Losing this block is what
+         blanked the viewer: paint() dereferenced an undefined `u` on the first
+         frame, the throw killed the loop, and the canvas stayed transparent. */
+      const u = {
+        tex: gl.getUniformLocation(prog, "tex"),
+        yaw: gl.getUniformLocation(prog, "yaw"),
+        pitch: gl.getUniformLocation(prog, "pitch"),
+        fov: gl.getUniformLocation(prog, "fov"),
+        aspect: gl.getUniformLocation(prog, "aspect"),
+        kind: gl.getUniformLocation(prog, "kind"),
+      };
+      if (!u.tex || !u.yaw || !u.pitch || !u.fov || !u.aspect || !u.kind) {
+        fail("VR view unavailable: shader uniforms missing");
+        return undefined;
+      }
       /* the driver's real limit: a 4320-wide VR frame must not be shrunk by an
          arbitrary cap, only by what the GPU cannot hold */
       const maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE) || 4096;
-      /* a copy of the frame, still at full resolution: the 2D canvas is only a
-         transfer vehicle for devices that cannot texture a video directly */
-      let direct = true;
+      /* the frame is copied here, then uploaded: one canvas, resized to the
+         texture size, drawn once per decoded frame */
       const scratch = document.createElement("canvas");
       scratch.width = 1024;
       scratch.height = 512;
@@ -2399,12 +2436,10 @@ void main() {
         return null;
       };
 
-      let raf = 0;
       let last = 0;
       let lastFrame = -1;
       let lastKind = "";
-      const draw = (now) => {
-        raf = requestAnimationFrame(draw);
+      const frame = (now) => {
         if (now - last < 16) return;
         last = now;
         /* Render at the device's real pixel count: at dpr 3 a 2x cap left the
@@ -2432,31 +2467,14 @@ void main() {
           lastFrame = -1;
           if (srcRef.current) srcRef.current(kind);
         }
-        /* a 30fps source does not need 60 uploads a second: the texture is only
-           re-uploaded when a new frame has actually been decoded */
-        if (source.currentTime === lastFrame) {
-          gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-          return;
-        }
-        lastFrame = source.currentTime;
-        const vw = source.videoWidth || 1920;
-        const vh = source.videoHeight || 960;
-        /* No resampling at all: the decoded frame goes to the GPU at the size it
-           was decoded at, so nothing between the file and the screen softens it.
-           The only exception is a frame wider than the GPU's texture limit, which
-           has to be shrunk to that limit to be uploaded at all. */
-        const fits = vw <= maxTex && vh <= maxTex;
-        const texW = fits ? vw : maxTex;
-        const texH = fits ? vh : Math.max(2, Math.round((maxTex * vh) / vw));
-        const master = videoRef.current;
-        if (source === fallback && master && master.currentTime > 1 && fallback.duration > 2) {
-          /* keep the stand-in roughly where the timeline says we are */
-          const want = master.currentTime % fallback.duration;
-          if (Math.abs(fallback.currentTime - want) > 1.5) fallback.currentTime = want;
-        }
+        /* the shader is driven entirely by uniforms; the texture is already bound */
         const view = viewRef.current;
         const paint = () => {
           gl.viewport(0, 0, canvas.width, canvas.height);
+          /* a clear as well as a full-screen quad: if the draw ever produces
+             nothing, the canvas goes black instead of transparent white */
+          gl.clearColor(0.0, 0.0, 0.0, 1.0);
+          gl.clear(gl.COLOR_BUFFER_BIT);
           gl.uniform1i(u.tex, 0);
           gl.uniform1f(u.yaw, view.yaw);
           gl.uniform1f(u.pitch, view.pitch);
@@ -2465,37 +2483,50 @@ void main() {
           gl.uniform1i(u.kind, layout === "equirect" ? 1 : 0);
           gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
         };
-        if (fits && direct) {
-          /* straight from the video element: one GPU-to-GPU copy, no canvas, no
-             bitmap, no scale step. Some devices refuse a video as a texture
-             source, so a throw demotes this canvas to the canvas-copy path for
-             the rest of its life instead of dying frame after frame. */
-          try {
-            gl.bindTexture(gl.TEXTURE_2D, tex);
-            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
-            paint();
-          } catch (err) {
-            direct = false;
-            legacyUpload(texW, texH);
-            paint();
-          }
-        } else {
-          legacyUpload(texW, texH);
+        /* a 30fps source does not need 60 uploads a second: the texture is only
+           re-uploaded when a new frame has actually been decoded */
+        if (source.currentTime === lastFrame) {
           paint();
+          return;
         }
-
-        function legacyUpload(width, height) {
-          if (scratch.width !== width || scratch.height !== height) {
-            scratch.width = width;
-            scratch.height = height;
-          }
-          try {
-            sctx.drawImage(source, 0, 0, scratch.width, scratch.height);
-          } catch (err) {
-            return;
-          }
-          gl.bindTexture(gl.TEXTURE_2D, tex);
-          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, scratch);
+        lastFrame = source.currentTime;
+        const vw = source.videoWidth || 1920;
+        const vh = source.videoHeight || 960;
+        /* Three times the player's own pixel width. The version that uploaded at
+           1.15x is the one that loaded but looked jagged; 3x of a phone at dpr 3
+           is the native 4320-wide VR frame, so the fisheye shrink stops throwing
+           detail away before the shader even samples it. Capped only by the
+           decoded frame and by what this GPU will hold. */
+        const texW = Math.max(720, Math.min(maxTex, vw, Math.round(w * 1.15 * 3)));
+        const texH = Math.max(2, Math.round((texW * vh) / Math.max(1, vw)));
+        const master = videoRef.current;
+        if (source === fallback && master && master.currentTime > 1 && fallback.duration > 2) {
+          /* keep the stand-in roughly where the timeline says we are */
+          const want = master.currentTime % fallback.duration;
+          if (Math.abs(fallback.currentTime - want) > 1.5) fallback.currentTime = want;
+        }
+        if (scratch.width !== texW || scratch.height !== texH) {
+          scratch.width = texW;
+          scratch.height = texH;
+        }
+        try {
+          sctx.drawImage(source, 0, 0, texW, texH);
+        } catch (err) {
+          return;
+        }
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, scratch);
+        paint();
+      };
+      /* one guarded loop: a throw here used to kill the animation silently and
+         leave an empty canvas behind, so it is caught and reported instead */
+      const draw = (now) => {
+        raf = requestAnimationFrame(draw);
+        if (stopped) return;
+        try {
+          frame(now);
+        } catch (err) {
+          fail("VR: " + ((err && err.message) || err));
         }
       };
       raf = requestAnimationFrame(draw);
@@ -2580,6 +2611,7 @@ void main() {
       canvas.addEventListener("click", swallow);
 
       return () => {
+        stopped = true;
         canvas.removeEventListener("wheel", onWheel);
         canvas.removeEventListener("pointerdown", down);
         canvas.removeEventListener("pointermove", move);
@@ -2598,6 +2630,8 @@ void main() {
     }, [layout, sceneKey, videoRef, previewUrl]);
 
     if (!layout) return null;
+    /* a viewer that cannot run says so; it does not present a blank rectangle */
+    if (problem) return h("div", { className: "stk-vr-fail" }, problem);
 
     return h("canvas", { className: "stk-vr-canvas", ref: canvasRef });
   }
