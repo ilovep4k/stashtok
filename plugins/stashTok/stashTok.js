@@ -13421,17 +13421,17 @@ function TagsPage({ onPick, onMarkers, onBack }) {
       setSfw(next);
     }
 
-    /* the desktop rail shrinks to icons when the pointer leaves it, so the video
-       gets the width back; pinning keeps it open across reloads */
+    /* the desktop rail is open by default; the pin collapses it to an icon strip
+       and that choice survives reloads. Collapsed never re-expands on hover —
+       the icons carry a tooltip instead, so the pane keeps its width. */
     const [railPin, setRailPin] = useState(() => {
       try {
-        return window.localStorage.getItem(RAIL_KEY) === "1";
+        return window.localStorage.getItem(RAIL_KEY) !== "0";
       } catch (e) {
-        return false;
+        return true;
       }
     });
-    const [railHover, setRailHover] = useState(false);
-    const railMin = desktop && !railPin && !railHover && !isTablet();
+    const railMin = desktop && !railPin && !isTablet();
     /* The rail must offer everything the tab bar does, or switching shells loses a
        tab: it is built from the user's own nav slots, then the extra sections that
        only exist on a wide screen. Deduped, Feed always first. */
@@ -13451,8 +13451,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
       setRailPin((cur) => {
         const next = !cur;
         try {
-          if (next) window.localStorage.setItem(RAIL_KEY, "1");
-          else window.localStorage.removeItem(RAIL_KEY);
+          window.localStorage.setItem(RAIL_KEY, next ? "1" : "0");
         } catch (e) {
           /* ignore */
         }
@@ -14767,12 +14766,6 @@ function TagsPage({ onPick, onMarkers, onBack }) {
             "aside",
             {
               className: "stk-desk-rail" + (railMin ? " stk-min" : ""),
-              onMouseEnter: () => setRailHover(true),
-              onMouseLeave: () => setRailHover(false),
-              onFocusCapture: () => setRailHover(true),
-              onBlurCapture: (event) => {
-                if (!event.currentTarget.contains(event.relatedTarget)) setRailHover(false);
-              },
             },
             h(
               "div",
@@ -14783,8 +14776,8 @@ function TagsPage({ onPick, onMarkers, onBack }) {
                 "button",
                 {
                   className: "stk-desk-pin" + (railPin ? " stk-on" : ""),
-                  title: railPin ? "Let the sidebar shrink again" : "Keep the sidebar open",
-                  "aria-label": railPin ? "Unpin the sidebar" : "Pin the sidebar",
+                  title: railPin ? "Collapse the sidebar to icons" : "Keep the sidebar open",
+                  "aria-label": railPin ? "Collapse the sidebar" : "Pin the sidebar",
                   "aria-expanded": railPin ? "true" : "false",
                   onClick: toggleRailPin,
                 },
@@ -14796,10 +14789,11 @@ function TagsPage({ onPick, onMarkers, onBack }) {
                 "button",
                 {
                   key: id,
-                  title: label,
-                  className:
-                    "stk-desk-link" +
+                  className: "stk-desk-link" +
                     ((id === "feed" && tab === "home") || tab === id ? " stk-on" : ""),
+                  title: railMin ? label : undefined,
+                  "data-label": label,
+                  "aria-label": label,
                   onClick: () => (id === "feed" ? goHome() : runNav(id)),
                 },
                 h(Icon, { name: icon, size: 18 }),

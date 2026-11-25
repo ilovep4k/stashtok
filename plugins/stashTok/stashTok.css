@@ -5750,3 +5750,53 @@ body.stk-fullscreen-mode .stash-tok.stk-feed-fullscreen {
   background: rgba(255, 255, 255, .16);
   color: rgba(255, 255, 255, .85);
 }
+
+/* ---------------- desktop rail: pinned open, collapsed = icons + names ----------
+   Final word on the rail, so the older duplicated blocks above cannot win.
+   Open is the default. Collapsing is a deliberate click on the pin, and the
+   collapsed strip never grows back on hover — the pointer moving over it must
+   not steal width from the video, so each icon shows its name instead. */
+.stk-desktop.stk-rail-min .stk-desk-rail {
+  overflow: visible;
+}
+.stk-desktop.stk-rail-min .stk-desk-logo {
+  flex-direction: column;
+  gap: 10px;
+  padding: 2px 0 14px;
+  justify-content: center;
+}
+.stk-desktop.stk-rail-min .stk-desk-pin {
+  position: static;
+  margin: 0;
+}
+.stk-desktop.stk-rail-min .stk-desk-link {
+  position: relative;
+}
+.stk-desktop.stk-rail-min .stk-desk-link::after {
+  content: attr(data-label);
+  position: absolute;
+  left: calc(100% + 12px);
+  top: 50%;
+  transform: translateY(-50%) translateX(-4px);
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: #1c1c1f;
+  color: #fff;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.15;
+  white-space: nowrap;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.12s ease, transform 0.12s ease;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+  z-index: 9300;
+}
+.stk-desktop.stk-rail-min .stk-desk-link:hover::after,
+.stk-desktop.stk-rail-min .stk-desk-link:focus-visible::after {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(-50%) translateX(0);
+}
