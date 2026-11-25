@@ -1626,9 +1626,20 @@
     return all.concat(section.tags);
   }, []);
 
-  /* a marker is named by one tag, and now offers the same six sections */
-  const MARKER_TAG_SECTIONS = TAG_SHEET_SECTIONS;
-  const MARKER_TAG_NAMES = TAG_VOCABULARY;
+  /* A marker is named by one tag and is drawn from the same section list as the
+     add-tag sheet, minus the sections that describe a person rather than a
+     moment: no ethnicity, no body. */
+  const MARKER_TAG_SECTIONS = TAG_SHEET_SECTIONS.filter(
+    (section) => section.id !== "ethnicity" && section.id !== "body"
+  );
+  const MARKER_TAG_NAMES = MARKER_TAG_SECTIONS.reduce((all, section) => {
+    if (section.parents) {
+      return all.concat(section.parents).concat(
+        section.parents.reduce((kids, parent) => kids.concat(section.children[parent]), [])
+      );
+    }
+    return all.concat(section.tags);
+  }, []);
 
   /* Attributes belong to a person, not a clip: they are the tags the performer
      page may push across every scene of a performer. Ebony carries its scene
@@ -6711,6 +6722,7 @@ void main() {
               "div",
               { className: "stk-tag-scroll" },
               h(TagSections, {
+                sections: MARKER_TAG_SECTIONS,
                 query: markerTyping ? markerName : "",
                 shown: markerShown,
                 onMore: (sectionId, total) => showMore(sectionId, total, setMarkerShown),
@@ -6994,7 +7006,7 @@ void main() {
      parents with a child drawer. Paged sections show TAG_PAGE chips and grow
      eight at a time; a search query overrides the pagination so a hidden tag
      is never unreachable by typing. */
-  function TagSections({ query, shown, onMore, isOn, isChildOn, onToggle, category, onCategory, onChild }) {
+  function TagSections({ sections = TAG_SHEET_SECTIONS, query, shown, onMore, isOn, isChildOn, onToggle, category, onCategory, onChild }) {
     const kidOn = isChildOn || isOn;
     const q = String(query || "").trim().toLowerCase();
     const matches = (name) => !q || String(name).toLowerCase().includes(q);
@@ -7014,7 +7026,7 @@ void main() {
       );
     };
 
-    return TAG_SHEET_SECTIONS.map((section) => {
+    return sections.map((section) => {
       if (section.parents) {
         const ownerOf = (name) =>
           section.parents.find((parent) =>

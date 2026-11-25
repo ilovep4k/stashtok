@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased - marker picker
+
+- **The Add Marker picker is the add-tag picker minus the sections that describe
+  a person, not a moment.** It draws Category, Content Format, Positions & Acts
+  and Fetish Tags; Ethnicity and Body are hidden. Same section list, same chips,
+  same category drawer — one vocabulary, one filter.
+
 ## Unreleased - caption
 
 - **The hashtag strip is gone from the player.** A clip's tags are something to
