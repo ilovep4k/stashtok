@@ -6356,3 +6356,57 @@ body.stk-fullscreen-mode .stash-tok.stk-feed-fullscreen {
   from { opacity: 0; transform: rotate(-6deg) translateY(6px) scale(0.97); }
   to { opacity: 1; transform: rotate(-3.5deg) translateY(0) scale(1); }
 }
+/* ---------------- page, tab and step transitions ----------------
+   Every page in the shell is a direct child of the fixed flex column, so a tab or
+   route change replaced the whole tree in one commit: a hard cut. `.stk-page-swap`
+   is the wrapper that fades the arriving page in instead. It is driven by a data
+   attribute rather than a React key on purpose — a key would remount the page's own
+   component on every sub-page change and re-run its queries; the attribute is
+   written imperatively and React never touches it (same reasoning as the scroll
+   reveal's data-in above).
+   Opacity only: a transform here would make this element the containing block for
+   every position:fixed layer inside a page (sheets, drawers, the quick menu) and
+   move them all for the length of the animation. */
+.stk-page-swap {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .stk-page-swap[data-swap] { animation: stk-page-fade 180ms linear both; }
+  /* the five bottom-bar tabs are tapped tens of times a day: shorter, still a fade */
+  .stk-page-swap.stk-tab-swap[data-swap] { animation-duration: 120ms; }
+}
+@keyframes stk-page-fade { from { opacity: 0; } to { opacity: 1; } }
+
+/* the setup wizard is first-run only, so its steps may move as well as fade */
+@media (prefers-reduced-motion: no-preference) {
+  .stk-setup-body { animation: stk-step-in 200ms cubic-bezier(0.23, 1, 0.32, 1) both; }
+  .stk-setup-body.stk-step-back { animation-name: stk-step-in-back; }
+}
+@keyframes stk-step-in { from { opacity: 0; transform: translateX(10px); } to { opacity: 1; transform: none; } }
+@keyframes stk-step-in-back { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: none; } }
+
+/* ---------------- icon states ----------------
+   The nav and rail icons changed colour and glow instantly: the bar gave no
+   feedback on the most-tapped surface in the app and the active icon popped. */
+.stk-nav button,
+.stk-rail button {
+  transition: color 140ms cubic-bezier(0.23, 1, 0.32, 1),
+              transform 120ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+.stk-nav button svg,
+.stk-rail button svg { transition: filter 200ms cubic-bezier(0.23, 1, 0.32, 1); }
+.stk-nav button:active { transform: scale(0.94); }
+
+/* the play/pause glyph swaps while the circle is already fading; keyed in JS, so
+   the entrance runs on every swap instead of teleporting the path */
+@media (prefers-reduced-motion: no-preference) {
+  .stk-pause svg { animation: stk-glyph-in 120ms cubic-bezier(0.23, 1, 0.32, 1) both; }
+}
+@keyframes stk-glyph-in { from { opacity: 0; transform: scale(0.92); } to { opacity: 1; transform: none; } }
+
+/* Reduced motion needs no separate block here: every animation above is gated
+   behind prefers-reduced-motion: no-preference, and the two colour transitions
+   are not motion. */

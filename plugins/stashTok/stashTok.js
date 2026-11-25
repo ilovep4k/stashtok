@@ -6341,7 +6341,9 @@ void main() {
         h(
           "div",
           { className: "stk-pause" + (!playing && ready ? " stk-show" : "") },
-          h(Icon, { name: playing ? "pause" : "play", size: 32 })
+          /* keyed so the glyph remounts and its entrance runs on every swap: the
+             path would otherwise teleport inside the circle */
+          h(Icon, { key: playing ? "pause" : "play", name: playing ? "pause" : "play", size: 32 })
         ),
 
         heartBurst > 0 &&
@@ -7285,6 +7287,33 @@ void main() {
   ];
   /* Feed is fixed, then the four slots render in order */
   const DEFAULT_NAV_SLOTS = ["discover", "performers", "favorites", "settings"];
+
+  /* The bottom bar's own tabs: tapped tens of times a day, so they get the shorter
+     fade. Everything else (a profile, a settings section, the clip page) is an
+     occasional arrival and gets the full one. */
+  const NAV_TABS = ["home", "performers", "discover", "search", "favorites", "tags", "folders", "markers"];
+
+  /* Fades the arriving page in. The animation is restarted through a data attribute
+     instead of a React key: a key would remount the page's own component on every
+     sub-page change (a settings section, a tag's own page) and re-run its queries.
+     React does not manage this attribute, so the imperative write survives — the
+     same trap the scroll reveal's data-in documents. */
+  function PageSwap({ swapKey, tab, children }) {
+    const ref = useRef(null);
+    useLayoutEffect(() => {
+      const el = ref.current;
+      if (!el) return;
+      el.removeAttribute("data-swap");
+      /* force a reflow so the same attribute re-adds as a new animation */
+      void el.offsetWidth;
+      el.dataset.swap = "1";
+    }, [swapKey]);
+    return h(
+      "div",
+      { ref, className: "stk-page-swap" + (tab ? " stk-tab-swap" : "") },
+      children
+    );
+  }
 
   function NavButton({ active, icon, label, onClick, onLongPress }) {
     const timer = useRef(0);
@@ -10625,18 +10654,24 @@ void main() {
       };
     }, [query, sort, favoritesOnly]);
 
+    /* the list and the profile are two pages of this tab: fade between them
+       instead of cutting */
     if (selected) {
-      return h(PerformerProfile, {
-        performerId: selected.id,
-        onBack: () => {
-          setSelected(null);
-          if (onBack) onBack();
-        },
-        onPlay: (payload) => onPick(selected, payload),
-        onOpenTag,
-        prefs,
-        favoritesOnly: !!favoritesOnly,
-      });
+      return h(
+        PageSwap,
+        { swapKey: "profile:" + selected.id, tab: false },
+        h(PerformerProfile, {
+          performerId: selected.id,
+          onBack: () => {
+            setSelected(null);
+            if (onBack) onBack();
+          },
+          onPlay: (payload) => onPick(selected, payload),
+          onOpenTag,
+          prefs,
+          favoritesOnly: !!favoritesOnly,
+        })
+      );
     }
 
     const SORTS = [
@@ -10650,6 +10685,9 @@ void main() {
     const sortLabel = (SORTS.find((entry) => entry[0] === sort) || SORTS[0])[1];
 
     return h(
+      PageSwap,
+      { swapKey: "list", tab: false },
+      h(
       "div",
       { className: "stk-page", onContextMenu: (event) => event.preventDefault() },
       h("div", { className: "stk-page-head" },
@@ -10849,6 +10887,7 @@ void main() {
               )
             )
           ))
+    )
     );
   }
 
@@ -14299,6 +14338,8 @@ function TagsPage({ onPick, onMarkers, onBack }) {
 
   function SetupWizard({ cfg, loaded, onDone, onSkip }) {
     const [step, setStep] = useState(0);
+    /* which way the next step comes from: 1 forward, -1 back */
+    const [dir, setDir] = useState(1);
     const [source, setSource] = useState(cfg.source === "markers" ? "markers" : "scenes");
     const [minDuration, setMinDuration] = useState(
       cfg.minDuration == null ? 10 : Number(cfg.minDuration)
@@ -14389,8 +14430,14 @@ function TagsPage({ onPick, onMarkers, onBack }) {
       };
     }, [id]);
 
-    const next = () => setStep((n) => Math.min(SETUP_STEPS.length - 1, n + 1));
-    const back = () => (step === 0 ? onSkip() : setStep((n) => Math.max(0, n - 1)));
+    /* the step body slides in from the side you are travelling towards, so Back
+       reads as going back rather than as another forward step */
+    const next = () => { setDir(1); setStep((n) => Math.min(SETUP_STEPS.length - 1, n + 1)); };
+    const back = () => {
+      if (step === 0) { onSkip(); return; }
+      setDir(-1);
+      setStep((n) => Math.max(0, n - 1));
+    };
 
     async function finish() {
       setSaving(true);
@@ -14621,7 +14668,8 @@ function TagsPage({ onPick, onMarkers, onBack }) {
           ? h("button", { type: "button", className: "stk-setup-skip", onClick: onSkip }, "Skip")
           : h("span", { className: "stk-setup-skip stk-ghost" }, "")
       ),
-      h("div", { className: "stk-setup-body" }, body()),
+      /* keyed by step so the body remounts and its entrance runs per step */
+      h("div", { key: id, className: "stk-setup-body" + (dir < 0 ? " stk-step-back" : "") }, body()),
       h(
         "div",
         { className: "stk-setup-foot" },
@@ -16338,6 +16386,20 @@ function TagsPage({ onPick, onMarkers, onBack }) {
       });
     }
 
+    /* What the shell is showing — the key the page wrapper fades on. Only identity
+       changes belong here: a sub-page swap inside one tab must fade without
+       remounting the page's component. */
+    const pageSwapKey = [
+      tab,
+      settingsRoute,
+      clipScene || "",
+      favRow || "",
+      tagProfile ? tagProfile.id : "",
+      folderView ? folderView.folder : "",
+      folderProfile || "",
+      duo ? "duo" : "",
+    ].join("|");
+
     const feedOptionRows = [
       {
         id: "all",
@@ -16498,7 +16560,11 @@ function TagsPage({ onPick, onMarkers, onBack }) {
                 "Gooners Delight"
               )
             )
-          : body,
+          : h(
+              PageSwap,
+              { swapKey: pageSwapKey, tab: NAV_TABS.indexOf(tab) >= 0 },
+              body
+            ),
 
         /* one settings entry point for every screen that isn't the feed itself */
         tab !== "settings" && tab !== "ops" &&
