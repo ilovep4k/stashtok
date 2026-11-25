@@ -698,6 +698,10 @@
      pan. Returns the painted rect in viewport pixels, transform included. */
   function paintedRect(video) {
     const rect = video.getBoundingClientRect();
+    /* in cover mode the picture fills the element and is cropped by the stage, so
+       the whole element box is picture — there are no bars to grab */
+    if (video.classList && video.classList.contains("stk-active") &&
+        video.closest && video.closest(".stk-fill")) return rect;
     const vw = video.videoWidth || 0;
     const vh = video.videoHeight || 0;
     if (!vw || !vh) return rect;
@@ -3061,6 +3065,9 @@ void main() {
     autoScrollRef.current = autoScroll;
     /* true while the current transform came from the crop cycle, not a pinch */
     const cropZoomRef = useRef(false);
+    /* the scale at which the picture exactly covers the stage, cached: a gesture
+       calls applyTransform on every pointermove and coverScale() reads layout */
+    const coverRef = useRef(1);
     const cropRefreshRef = useRef(null);
     const cropBadgeTimer = useRef(null);
     const rafRef = useRef(0);
@@ -3429,6 +3436,8 @@ void main() {
       setStreamFallback(false);
       setDuration(0);
       setTime((item && Number(item.startAt)) || 0);
+      /* the previous clip's cover framing must not survive the next one */
+      setFillMode(false);
       /* reset the user's pinch AND put the clip's framing back: a prewarmed clip
          fires canplay before it becomes active, so waiting for that event here
          left every second clip uncropped */
@@ -3741,13 +3750,57 @@ void main() {
       }
     }, []);
 
+    /* A frame that exactly fills the stage is drawn with object-fit:cover instead
+       of a scale transform. Scaling the full-pane element by the cover factor makes
+       the compositor allocate a layer at the scaled size — on a 1360x900 pane at
+       2x that is ~49 megapixels per frame, most of it pillarbox that gets clipped
+       away. object-fit:cover keeps the composited layer at stage size and lets the
+       sampler do the crop: the same picture for ~10x fewer composited pixels. Only
+       a pinch or a pan leaves this path. */
+    const [fillMode, setFillMode] = useState(false);
+    const fillModeRef = useRef(false);
+    fillModeRef.current = fillMode;
+
+    /* the object-fit is an inline style owned by React, so the handoff has to be a
+       render, not a class: this runs in the same commit as the object-fit change,
+       which is why the picture never jumps between the two framings */
+    useLayoutEffect(() => {
+      const video = activeVideo();
+      if (!video) return;
+      if (fillMode) {
+        video.style.transition = "none";
+        video.style.transform = "";
+      }
+    }, [fillMode]);
+
     const applyTransform = useCallback((animate) => {
       const video = activeVideo();
       if (!video) return;
       const { s, x, y } = tf.current;
-      video.style.transform = `translate3d(${x}px, ${y}px, 0) scale(${s})`;
-      /* a zoom step eases; a drag or a pinch must follow the finger exactly */
-      video.style.transition = animate ? "transform 240ms cubic-bezier(.22,1,.36,1)" : "none";
+      const atCover =
+        Math.abs(s - coverRef.current) < 0.004 && Math.abs(x) < 0.5 && Math.abs(y) < 0.5;
+      if (atCover) {
+        if (animate) {
+          /* keep the ease on the transform, then hand the finished frame over */
+          video.style.transition = "transform 240ms cubic-bezier(.22,1,.36,1)";
+          video.style.transform = `translate3d(${x}px, ${y}px, 0) scale(${s})`;
+          let fallback = 0;
+          const done = () => {
+            video.removeEventListener("transitionend", done);
+            window.clearTimeout(fallback);
+            setFillMode(true);
+          };
+          fallback = window.setTimeout(done, 260);
+          video.addEventListener("transitionend", done, { once: true });
+        } else {
+          setFillMode(true);
+        }
+      } else {
+        setFillMode(false);
+        video.style.transform = `translate3d(${x}px, ${y}px, 0) scale(${s})`;
+        /* a zoom step eases; a drag or a pinch must follow the finger exactly */
+        video.style.transition = animate ? "transform 240ms cubic-bezier(.22,1,.36,1)" : "none";
+      }
       setZoom(s);
     }, []);
 
@@ -3828,6 +3881,8 @@ void main() {
            mid-grab, which is what made a zoomed pan snap to 1x a beat later */
         if (!reset && userZoomed()) return;
         const kind = cropKind();
+        /* refresh the cached cover scale: metadata, resize and rotation all land here */
+        coverRef.current = coverScale();
         const s = kind ? cropScaleFor(mode, kind) : 1;
         /* canplay fires again on every re-buffer, and this runs from it: without
            this guard a grab on a cropped clip snapped back to centre mid-pan.
@@ -4077,6 +4132,9 @@ void main() {
       if (!item) return;
       setTagOpen(true);
       setTagFilter("");
+      setTagQueue([]);
+      setTagSugg([]);
+      setTagSuggSel(-1);
       if (!Object.keys(tagOptions).length) {
         resolveTagNames(TAG_VOCABULARY)
           .then((ids) => {

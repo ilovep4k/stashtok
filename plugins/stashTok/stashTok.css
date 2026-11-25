@@ -151,6 +151,12 @@
   cursor: pointer;
 }
 .stk-rail button svg { width: 26px; height: 26px; filter: drop-shadow(0 1px 3px rgba(0,0,0,.7)); }
+/* no browser focus box around a rail glyph: tapping the heart drew a white
+   outlined square over the video */
+.stk-rail button:focus,
+.stk-rail button:focus-visible,
+.stk-page-back:focus { outline: none; }
+.stk-rail button { -webkit-tap-highlight-color: transparent; }
 .stk-rail .stk-on { color: #ff2d55; }
 /* the "more" quick action: a thin white circle with three dots inside, so it
    reads as a button next to the bare glyphs around it */
@@ -1066,8 +1072,9 @@
 }
 .stk-stage { -webkit-tap-highlight-color: transparent; }
 
-/* double-tap fill */
-.stk-fill .stk-video { object-fit: cover; }
+/* The "fill" framing is an inline object-fit:cover on the active video, set from
+   React (applyTransform), so it keeps the composited layer at stage size instead of
+   scaling a full-pane layer. A class cannot win against that inline style. */
 
 /* hidden preloaders for the next two items */
 .stk-preload {
@@ -1098,6 +1105,7 @@
 .stk-sort-menu {
   display: flex;
   flex-wrap: wrap;
+  justify-content: flex-start;
   gap: 6px;
   padding: 8px 12px 0;
 }
