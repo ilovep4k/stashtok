@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased - modals
+
+- **Every dialog dims the page by 50% and nothing else.** One scrim colour
+  (`rgba(0,0,0,.5)`) for the sheets, the popups, the people menu, the profile
+  menu, the drawer, the picker and the stage's right-click menu — and no
+  `backdrop-filter` anywhere, so the video behind a dialog no longer smears.
+- **No translucent panels**: the people menu, channel menu, category popups,
+  rail menu, right-click menu, drawer and picker all have a solid fill
+  (`#141416`); the sheets keep their own `#101010`.
+
 ## Unreleased - markers on the fly
 
 - **`M` adds a marker at the playhead** instead of toggling mute (mute stays a

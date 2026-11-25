@@ -5555,3 +5555,36 @@ body.stk-fullscreen-mode .stash-tok.stk-feed-fullscreen {
   outline-offset: 0;
   box-shadow: none;
 }
+
+/* ---------- modals: one scrim, opaque panels, no blur ------------------
+   Every dialog dims the page by exactly 50% and draws nothing through itself:
+   no backdrop-filter anywhere (it blurred the video behind a sheet and made
+   the panel read as transparent on a bright frame), and every panel has a
+   solid fill so text never sits on live video. `.stk-sheet` is already a
+   solid #101010 and needs no override; these are the panels that were
+   translucent or frosted. */
+.stk-sheet-backdrop,
+.stk-pop-backdrop,
+.stk-people-backdrop,
+.stk-profile-menu-backdrop,
+.stk-drawer-scrim,
+.stk-pick-backdrop,
+.stk-ctx-backdrop,
+.stk-rail-backdrop {
+  background: rgba(0, 0, 0, .5);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.stk-pop,
+.stk-people,
+.stk-chan-menu,
+.stk-rail-menu,
+.stk-ctx-menu,
+.stk-drawer,
+.stk-pick,
+.stk-menu-pop {
+  background: #141416;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
