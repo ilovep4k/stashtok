@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased - thumb seeks, and a Marker at the scrub
+
+- **Double tap the edge of the video to jump 5 s.** The stage is cut into three stripes: the outer two are seek zones (200 px, or 33 % of the width on a phone, so the middle stripe always survives) and a double tap in one moves the playhead ∓5 s and leaves a ring with the step on that half. The middle stripe keeps the portrait crop cycle. Two taps that straddle two stripes are swallowed rather than reframing anything. Settings → Appearance → "Double-tap edges to seek" turns it off.
+- **Scrub, push up, let go: add a marker without leaving the timeline.** 96 px of upward travel while scrubbing arms a **＋ Marker** bubble above the playhead with the in point frozen at that frame; the same thumb lands on it and releasing opens the marker sheet at that time. The bubble is hit-tested with 30 px of slack and turns solid red while the finger is on it. It never steals the pointer, so a scrub that does not arm still ends as a plain scrub.
+
+## Unreleased - markers by name
+
+- **The markers page lists names, not markers.** It loaded 300 markers and drew a row each — "Blowjob" forty times over. It now loads titles only (13k is ~320 KB and a third of a second), folds them into name + count and draws one pill per name, most-used first, with search and `+ 40 more`. Tapping a pill plays that name as its own feed (`#/markers/name/<name>`) — every marker sharing it, in random order, each from its own in point.
+- **`ops/marker-names.py` consolidated the names the pills exposed.** wario went from 552 distinct titles to 211: case and spacing (`blowjob` / `Blow Job` / `Blowjob`), scrape noise (`_AI`, `[TsTrade]`), camera suffixes (`- POV`, `sideview`, `frontview`), performer prefixes (`Scarlett doggy`), and aliases onto the tag vocabulary's spelling (`Doggystyle` → `Doggy Style`, `Deep Throat` → `Deepthroat`, `Titty Fuck` → `Titfuck`, `Spoon` → `Spooning`, `Pile Driver` → `Piledriver`, `Pussy Licking` → `Pussy Eating`). 5,256 markers rewritten.
+- **Nothing is untitled any more.** The 1,152 blank markers were each named after their primary tag (`ops/marker-names.py --fill-untitled`), which every one of them had: 254 became Blowjob, 130 Doggy Style, 100 Cowgirl, 91 Titfuck, 86 Reverse Cowgirl, 43 Missionary, and so on down to one-offs. Generated names (`Marker 7`, `Chapter 12`) also get their primary tag rather than staying blank. wario now reads 13,418 markers under 211 names, zero untitled.
+- **A number that is the point survives**: `Doggy 9` stays `Doggy 9`, `2nd cumshot` becomes `Second Cumshot`, and a leading number is never read as a performer name.
+- Titles were backed up before the rewrite: `~/backups/{wario,of}-marker-titles-2026-11-25.json`.
+
 ## Unreleased - marker picker
 
 - **The Add Marker picker is the add-tag picker minus the sections that describe

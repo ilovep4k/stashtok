@@ -87,6 +87,15 @@
   const TAP_WAIT_MS = 300;
   /* a second tap up to here is a double tap and zooms; after this it is a new tap */
   const DOUBLE_TAP_MS = 500;
+  /* a double tap inside the outer stripe of the stage is a −5 s / +5 s seek,
+     the phone's stand-in for an arrow key. The stripe is 200 px on a laptop and
+     33 % of the width on anything narrower: 200 px of a 390 px phone would leave
+     no centre to double tap for the crop cycle. */
+  const EDGE_ZONE_PX = 200;
+  const EDGE_ZONE_RATIO = 0.33;
+  const SEEK_STEP = 5;
+  /* how far up the scrub bar the finger travels before the Marker bubble arms */
+  const MARKER_LIFT_PX = 96;
 
   /* ------------------------------------------------------------------ */
   /* icons                                                              */
@@ -579,10 +588,12 @@
 
   const FLAG_TAG_FALLBACK = "stashtok-delete";
 
-  let flagTagId = null;
+  /* keyed by name: the tag can be renamed in setup, and a single cached id
+     would keep flagging scenes with the name the user just replaced */
+  const flagTagIds = {};
 
   async function ensureFlagTag(name) {
-    if (flagTagId) return flagTagId;
+    if (flagTagIds[name]) return flagTagIds[name];
     const found = await gql(
       `query StashTokFindFlagTag($q: String) { findTags(filter: { q: $q, per_page: 20 }) { tags { id name } } }`,
       { q: name }
@@ -591,15 +602,15 @@
       (tag) => tag.name.toLowerCase() === name.toLowerCase()
     );
     if (exact) {
-      flagTagId = exact.id;
-      return flagTagId;
+      flagTagIds[name] = exact.id;
+      return flagTagIds[name];
     }
     const created = await gql(
       `mutation StashTokMakeFlagTag($name: String!) { tagCreate(input: { name: $name }) { id name } }`,
       { name }
     );
-    flagTagId = created.tagCreate.id;
-    return flagTagId;
+    flagTagIds[name] = created.tagCreate.id;
+    return flagTagIds[name];
   }
 
   async function flagScene(scene, cfg) {
@@ -1810,7 +1821,37 @@
       // 10s keeps 2-second clips out without cutting whole folders
       minDuration: raw.minDuration == null ? 10 : Number(raw.minDuration),
       /* "" = auto-guess from the port, "off" = always use Stash's own images */
+      thumbBase: typeof raw.thumbBase === "string" ? raw.thumbBase : "",
+      /* written by the setup wizard: this *server* has been configured */
+      setupDone: raw.setupDone === true,
+      /* any key at all means somebody has been here before: an upgraded
+         installation must not be handed the first-run wizard */
+      serverConfigured: Object.keys(raw || {}).length > 0,
     };
+  }
+
+  /* ---- per-server configuration ------------------------------------- *
+   * Everything in stashTok.yml belongs to one Stash instance: a second
+   * server starts with an empty map and falls back to the coded defaults.
+   * These two helpers are how the setup wizard reads and writes it.
+   * configurePlugin REPLACES the plugin's whole map, so always send the
+   * current one merged with the changes, never just the changes.        */
+
+  async function readServerSettings() {
+    const data = await gql("{ configuration { plugins } }");
+    return pluginSettingsFrom(data && data.configuration) || {};
+  }
+
+  async function writeServerSettings(changes) {
+    const current = await readServerSettings();
+    const next = Object.assign({}, current, changes);
+    await gql(
+      `mutation StashTokConfigure($id: ID!, $in: Map!) {
+        configurePlugin(plugin_id: $id, input: $in)
+      }`,
+      { id: PLUGIN_ID, in: next }
+    );
+    return next;
   }
 
   function defaultFeed() {
@@ -2011,6 +2052,9 @@
 
   /* in-app preferences (the plugin's own config lives in Stash's settings page) */
   const PREFS_KEY = "stashTok.prefs.v1";
+  /* did this device already have prefs before this build loaded? the merged
+     defaults look identical to a first run, so the stored key is the only tell */
+  let PREFS_SEEN = false;
   const PREF_DEFAULTS = {
     performerSort: "filesize",
     performerImages: true,
@@ -2023,6 +2067,9 @@
        drag is how a thumb slips while swiping, and the seek it caused read as the
        clip jumping on its own. The scrub bar is opened by tapping the caption. */
     dragScrub: false,
+    /* double tap the left/right stripe of the stage to seek ∓5 s, the phone's
+       arrow keys. On by default; the centre still steps the crop. */
+    edgeSeek: true,
     mono: false,
     /* hover a grid tile to play its file: off by default — it streams the real
        scene and seeks every second, which is real work for a decoration */
@@ -2049,6 +2096,8 @@
     /* Feed is fixed on the far left, then four slots:
        Feed | Discover | Performers | Favorites | Settings */
     navSlots: ["discover", "performers", "favorites", "settings"],
+    /* set by the setup wizard: this device has finished (or skipped) setup */
+    setupDone: false,
   };
 
   /* one-time: earlier builds stored a sort per performer, which kept resurrecting
@@ -2074,7 +2123,12 @@
   function migratePrefs() {
     let parsed = {};
     try {
-      parsed = JSON.parse(window.localStorage.getItem(PREFS_KEY) || "{}") || {};
+      const stored = window.localStorage.getItem(PREFS_KEY);
+      /* an upgrade keeps every device's existing prefs, so the presence of the
+         key is what tells a returning user from a first-run one — the merged
+         defaults alone would look identical */
+      if (stored) PREFS_SEEN = true;
+      parsed = JSON.parse(stored || "{}") || {};
     } catch (e) {
       parsed = {};
     }
@@ -2088,6 +2142,20 @@
     if (merged.navDefaultsV !== 4) {
       merged.navSlots = DEFAULT_NAV_SLOTS.slice();
       merged.navDefaultsV = 4;
+      savePrefs(merged);
+    }
+    /* Markers belong to the sidebar next to Tags now that they can be created
+       from the player. A slot list that has tags but no markers gains one right
+       after tags; the bar is flex, so five slots just tighten rather than break. */
+    if (merged.navMarkerV !== 1) {
+      const slots = (Array.isArray(merged.navSlots) ? merged.navSlots : DEFAULT_NAV_SLOTS.slice()).slice();
+      if (!slots.includes("markers")) {
+        const at = slots.indexOf("tags");
+        if (at >= 0) slots.splice(at + 1, 0, "markers");
+        else slots.push("markers");
+      }
+      merged.navSlots = slots;
+      merged.navMarkerV = 1;
       savePrefs(merged);
     }
     /* hover previews shipped on by default for one build; the preview stream
@@ -3023,6 +3091,12 @@ void main() {
     const [streamFallback, setStreamFallback] = useState(false);
     const [failCount, setFailCount] = useState(0);
     const lastTimePush = useRef(0);
+    /* where the playhead actually was, kept outside the video element: iOS wipes
+       currentTime when it evicts the buffer for a backgrounded tab */
+    const lastPosRef = useRef(0);
+    /* the reload-in-flight for a seek on an evicted video, and its timer */
+    const reloadRef = useRef(null);
+    const reloadTimerRef = useRef(0);
     /* the phone sleeping mid-clip is the complaint this exists for: hold the
        display while a clip is actually running, let go the moment it stops */
     const awakeRef = useRef(null);
@@ -3118,6 +3192,13 @@ void main() {
     const [scrubBar, setScrubBar] = useState(false);
     const scrubBarTimer = useRef(0);
     const [tip, setTip] = useState(null);
+    /* the ripple an edge double tap leaves behind: { zone, x, y, delta, at } */
+    const [seekFlash, setSeekFlash] = useState(null);
+    const seekFlashTimer = useRef(0);
+    /* the Marker bubble that a scrub arms when the finger pushes up:
+       { x, at, over } — x is inside the stage, at is the frozen in point */
+    const [markerDrop, setMarkerDrop] = useState(null);
+    const markerDropEl = useRef(null);
     const [scrubTime, setScrubTime] = useState(0);
     const [duration, setDuration] = useState(0);
     const [time, setTime] = useState(0);
@@ -3233,6 +3314,12 @@ void main() {
     const pressTimer = useRef(0);
     const tapTimer = useRef(null);
     const lastTapAt = useRef(0);
+    /* which stripe the first tap of a possible double tap landed in, so two taps
+       in the same stripe are a seek and a stray pair across stripes is not */
+    const lastTapZone = useRef("");
+    /* the scrub bar's own gesture: where the finger started, and whether the
+       upward push has already armed the Marker bubble */
+    const dropRef = useRef(null);
     /* the moment a tap un-zoomed the frame: a second tap inside the same double
        belongs to that gesture and must not fall through to play/pause */
     const swallowTapRef = useRef(0);
@@ -3622,6 +3709,13 @@ void main() {
       setStreamFallback(false);
       setDuration(0);
       setTime((item && Number(item.startAt)) || 0);
+      lastPosRef.current = (item && Number(item.startAt)) || 0;
+      /* a pending reload belongs to the clip we are leaving */
+      reloadRef.current = null;
+      if (reloadTimerRef.current) {
+        window.clearTimeout(reloadTimerRef.current);
+        reloadTimerRef.current = 0;
+      }
       /* the previous clip's cover framing must not survive the next one */
       setFillMode(false);
       /* reset the user's pinch AND put the clip's framing back: a prewarmed clip
@@ -4717,13 +4811,10 @@ void main() {
       }
     }, [markerUndo, unmergeSceneMarker]);
 
-    /* the name is the first thing to fill, so the sheet opens with the caret in
-       the field instead of on the close button useDialog focuses by default */
-    useEffect(() => {
-      if (markerAt == null) return;
-      const el = document.getElementById("stk-marker-name");
-      if (el && el.focus) el.focus();
-    }, [markerAt]);
+    /* No autofocus: a phone raises the keyboard the moment the field takes the
+       caret, and the whole point of this sheet is the prefilled pills — tapping
+       one names the marker without typing at all. The field is there for the
+       occasional custom name, and it still works the moment it is tapped. */
 
     /* desktop keyboard map. Every control has a key that matches what the rest of
        the web uses: space/K play, arrows seek, , and . nudge a frame, digits jump,
@@ -4951,7 +5042,39 @@ void main() {
       };
       const onShow = () => {
         const video = activeVideo();
-        if (wasPlaying && video && video.paused) {
+        if (!video) {
+          wasPlaying = false;
+          return;
+        }
+        /* iOS throws the media away while the tab is in the background: the
+           element returns with nothing decoded and currentTime at 0, so every
+           later seek is written to a dead element. Bring the source back and
+           restore the playhead before anything else touches it. */
+        if (video.readyState === 0) {
+          const at = lastPosRef.current || 0;
+          const wantResume = wasPlaying;
+          const resume = () => {
+            video.removeEventListener("loadedmetadata", resume);
+            try {
+              video.currentTime = at;
+            } catch (e) {
+              /* ignore */
+            }
+            if (wantResume) {
+              const attempt = video.play();
+              if (attempt && attempt.catch) attempt.catch(() => {});
+            }
+          };
+          video.addEventListener("loadedmetadata", resume);
+          try {
+            video.load();
+          } catch (e) {
+            /* ignore */
+          }
+          wasPlaying = false;
+          return;
+        }
+        if (wasPlaying && video.paused) {
           const attempt = video.play();
           if (attempt && attempt.catch) attempt.catch(() => {});
         }
@@ -4967,6 +5090,45 @@ void main() {
         window.removeEventListener("focus", onShow);
       };
     }, [activeVideo, dropGestures]);
+
+    /* ---- edge stripes: the phone's arrow keys --------------------------
+       The stage is cut in three. The outer stripes are the seek zones — 200 px
+       on a wide screen, a third of the width on a phone, so the centre stripe
+       always survives for the crop cycle. A double tap has to land twice in the
+       SAME stripe: a stray left-then-right pair is not a seek. */
+    function tapZoneAt(clientX, box) {
+      if (!box || !box.width) return "center";
+      const stripe = Math.min(EDGE_ZONE_PX, box.width * EDGE_ZONE_RATIO);
+      const x = clientX - box.left;
+      if (x <= stripe) return "left";
+      if (x >= box.width - stripe) return "right";
+      return "center";
+    }
+
+    /* one seek path, so an arrow key, an edge tap and the scrub bar cannot
+       disagree about where the end of the clip is */
+    function seekTo(seconds) {
+      const video = activeVideo();
+      if (!video) return 0;
+      const fileTotal = Number((item && item.scene.files && item.scene.files[0] && item.scene.files[0].duration) || 0);
+      const liveTotal = isFinite(video.duration) ? video.duration : 0;
+      const total = duration || fileTotal || liveTotal || 0;
+      const next = Math.max(0, Math.min(total ? total - 0.12 : seconds, seconds));
+      applySeek(video, next);
+      setScrubTime(next);
+      setTime(next);
+      return next;
+    }
+
+    function seekBy(delta, zone, x, y) {
+      const video = activeVideo();
+      if (!video) return;
+      seekTo(video.currentTime + delta);
+      setSeekFlash({ zone, delta, x, y, key: Date.now() });
+      window.clearTimeout(seekFlashTimer.current);
+      seekFlashTimer.current = window.setTimeout(() => setSeekFlash(null), 640);
+      buzz(9);
+    }
 
     function onPointerDown(event) {
       if (sheet) return;
@@ -5263,9 +5425,13 @@ void main() {
           swallowTapRef.current = 0;
           return;
         }
+        const box = stageRef.current ? stageRef.current.getBoundingClientRect() : null;
+        const zone = tapZoneAt(event.clientX, box);
         const isDouble = lastTapAt.current && now - lastTapAt.current <= DOUBLE_TAP_MS;
         if (isDouble) {
           lastTapAt.current = 0;
+          const firstZone = lastTapZone.current;
+          lastTapZone.current = "";
           window.clearTimeout(tapTimer.current);
           /* the first tap may already have paused (or resumed) the clip: undo it,
              because two taps mean "zoom", not play/pause */
@@ -5276,10 +5442,26 @@ void main() {
             video.pause();
             setPlaying(false);
           }
+          /* an edge double tap seeks 5 s, the way an arrow key does; the centre
+             keeps the crop cycle. Both taps must land in the same stripe. */
+          if (zone !== "center" && zone === firstZone && (!prefs || prefs.edgeSeek !== false)) {
+            /* keep the ripple inside the stage: a tap 20 px from the edge would
+               otherwise draw half a ring against the cut */
+            const w = box ? box.width : 0;
+            const hgt = box ? box.height : 0;
+            const fx = Math.max(Math.min(56, w / 2), Math.min(w - Math.min(56, w / 2), event.clientX - (box ? box.left : 0)));
+            const fy = Math.max(Math.min(56, hgt / 2), Math.min(hgt - Math.min(56, hgt / 2), event.clientY - (box ? box.top : 0)));
+            seekBy(zone === "right" ? SEEK_STEP : -SEEK_STEP, zone, fx, fy);
+            return;
+          }
+          /* a pair that straddles two stripes is neither: swallow it rather than
+             reframing the picture on a gesture the user did not mean */
+          if (zone !== "center" || firstZone !== "center") return;
           cycleCrop();
           return;
         }
         lastTapAt.current = now;
+        lastTapZone.current = zone;
         tapUndoRef.current = null;
         if (video.paused) {
           /* resuming has to happen inside the gesture or the browser refuses to
@@ -5361,14 +5543,68 @@ void main() {
 
     /* ---- timeline -------------------------------------------------- */
 
+    /* ---- writing a seek ------------------------------------------------
+       iOS drops the media buffer when the tab is backgrounded: the element comes
+       back with readyState 0 and a NaN duration, and a write to currentTime on it
+       is silently ignored. The scrubber still looks alive, because the chapter
+       previews come from the sprite sheet rather than the video, and then the bar
+       snaps back to where the clip was on release because nothing ever moved.
+       Reload the source and seek again once the metadata is back. */
+    function applySeek(video, target) {
+      if (!video) return false;
+      const seek = () => {
+        try {
+          video.currentTime = target;
+          lastPosRef.current = target;
+        } catch (e) {
+          return false;
+        }
+        return true;
+      };
+      if (video.readyState >= 1 && isFinite(video.duration)) return seek();
+      /* one reload at a time: a drag calls this on every move, and a load() per
+         move would restart the request dozens of times a second. Remember the
+         latest target instead and land it when the metadata is back. */
+      reloadRef.current = { el: video, target };
+      if (reloadTimerRef.current) return false;
+      const finish = () => {
+        window.clearTimeout(reloadTimerRef.current);
+        reloadTimerRef.current = 0;
+        video.removeEventListener("loadedmetadata", finish);
+        const job = reloadRef.current;
+        reloadRef.current = null;
+        if (job && job.el === video) {
+          try {
+            video.currentTime = job.target;
+            lastPosRef.current = job.target;
+          } catch (e) {
+            /* ignore */
+          }
+        }
+      };
+      video.addEventListener("loadedmetadata", finish);
+      reloadTimerRef.current = window.setTimeout(finish, 1500);
+      try {
+        video.load();
+      } catch (e) {
+        /* ignore: a dead element is not worth a crash */
+      }
+      return false;
+    }
+
     function seekAt(clientX) {
       const video = activeVideo();
       const bar = document.querySelector(".stk-timeline-inner");
       const rect = (bar || stageRef.current || document.body).getBoundingClientRect();
       const ratio = clamp((clientX - rect.left) / (rect.width || 1), 0, 1);
-      const total = duration || (video && video.duration) || 0;
+      /* the same total the preview used, and for the same reason: a video with
+         its buffer evicted reports duration NaN, and `duration || video.duration`
+         collapsed to 0, which turned every drag into a seek back to the start */
+      const fileTotal = Number((item && item.scene.files && item.scene.files[0] && item.scene.files[0].duration) || 0);
+      const liveTotal = video && isFinite(video.duration) ? video.duration : 0;
+      const total = duration || fileTotal || liveTotal || 0;
       const target = ratio * total;
-      if (video) video.currentTime = target;
+      if (video) applySeek(video, target);
       setScrubTime(target);
       return target;
     }
@@ -5398,12 +5634,21 @@ void main() {
       scrubBarTimer.current = window.setTimeout(() => setScrubBar(false), 4500);
     }
 
+    /* ---- the Marker bubble ---------------------------------------------
+       Scrubbing is accurate but slow on a phone: the thumb is on the bar, so
+       there is no hand left for a button. Push the finger up instead. 96 px of
+       lift arms a bubble above the playhead, the same finger travels the last
+       few pixels onto it, and letting go opens the marker sheet at the frozen
+       in point. The playhead stops moving the moment the bubble appears, so the
+       marker cannot drift while the thumb is on its way. */
     function onTimelineDown(event) {
       event.stopPropagation();
       event.currentTarget.setPointerCapture(event.pointerId);
       window.clearTimeout(scrubBarTimer.current);
       setScrubBar(true);
       setScrubbing(true);
+      dropRef.current = { y0: event.clientY, at: null, armed: false, over: false, x: 0 };
+      setMarkerDrop(null);
       poke();
       seekFromEvent(event);
     }
@@ -5430,11 +5675,64 @@ void main() {
         sceneId: item && item.scene ? item.scene.id : "",
       });
       if (!scrubbing) return;
+
+      const drop = dropRef.current;
+      if (drop) {
+        if (!drop.armed) {
+          if (drop.y0 - event.clientY >= MARKER_LIFT_PX) {
+            /* freeze the in point where the finger was scrubbing to, and park
+               the bubble right above it */
+            drop.at = seekFromEvent(event);
+            const stage = stageRef.current;
+            const box = stage ? stage.getBoundingClientRect() : { left: 0, width: 0, bottom: 0, height: 0 };
+            drop.x = Math.max(64, Math.min(Math.max(64, box.width - 64), event.clientX - box.left));
+            /* the chapter preview hangs right above the bar, so the pill is
+               parked above its top edge — 210 px clears a 160x90 cell plus the
+               time label with room to spare, and the preview's own height wins
+               when it is taller than that */
+            const preview = document.querySelector(".stk-scrub-preview");
+            const previewTop = preview ? preview.getBoundingClientRect().top : 0;
+            const clear = previewTop ? box.bottom - previewTop + 22 : 0;
+            drop.bottom = Math.max(210, Math.min(clear, (box.height || 720) - 150));
+            drop.armed = true;
+            drop.over = false;
+            setMarkerDrop({ x: drop.x, at: drop.at, over: false, bottom: drop.bottom });
+            buzz(12);
+          }
+        } else {
+          /* the finger is on its way to the bubble: keep the playhead still and
+             only test the hit. 14 px of slack is the whole point — the bubble
+             arms below the finger, so the highlight has to mean "travel here",
+             not "you breathed on it". */
+          const el = markerDropEl.current;
+          const box = el ? el.getBoundingClientRect() : null;
+          const over = !!box &&
+            event.clientX >= box.left - 14 && event.clientX <= box.right + 14 &&
+            event.clientY >= box.top - 14 && event.clientY <= box.bottom + 14;
+          if (over !== drop.over) {
+            drop.over = over;
+            if (over) buzz(8);
+            setMarkerDrop((cur) => (cur ? Object.assign({}, cur, { over }) : cur));
+          }
+        }
+        return;
+      }
+
       seekFromEvent(event);
     }
 
     function onTimelineUp(event) {
       event.stopPropagation();
+      const drop = dropRef.current;
+      dropRef.current = null;
+      setMarkerDrop(null);
+      setScrubPreview(null);
+      if (drop && drop.armed && drop.over && drop.at != null) {
+        setScrubbing(false);
+        buzz(14);
+        openMarkerSheet(drop.at);
+        return;
+      }
       setScrubbing(false);
       if (scrubBar) {
         window.clearTimeout(scrubBarTimer.current);
@@ -5467,6 +5765,7 @@ void main() {
       const now = performance.now();
       if (now - lastTimePush.current < 180) return;
       lastTimePush.current = now;
+      lastPosRef.current = video.currentTime;
       setTime(video.currentTime);
       if (!duration && video.duration) setDuration(video.duration);
     };
@@ -5996,6 +6295,38 @@ void main() {
             );
           })(),
 
+        /* the edge double tap leaves a ring and ±5 s on the half it fired on */
+        seekFlash &&
+          h(
+            "div",
+            {
+              key: seekFlash.key,
+              className: "stk-seek-flash stk-seek-" + seekFlash.zone,
+              style: { left: `${seekFlash.x}px`, top: `${seekFlash.y}px` },
+            },
+            h(
+              "div",
+              { className: "stk-seek-ring" },
+              h(Icon, { name: seekFlash.zone === "right" ? "chevron" : "back", size: 20 }),
+              h("span", { className: "stk-seek-delta" }, (seekFlash.delta > 0 ? "+" : "\u2212") + Math.abs(seekFlash.delta) + "s")
+            )
+          ),
+
+        /* the Marker bubble a scrub arms: it hangs above the playhead and the
+           finger is already on its way up to it */
+        markerDrop &&
+          h(
+            "div",
+            {
+              ref: markerDropEl,
+              className: "stk-marker-drop" + (markerDrop.over ? " stk-over" : ""),
+              style: { left: `${markerDrop.x}px`, bottom: `${markerDrop.bottom || 210}px` },
+            },
+            h("span", { className: "stk-marker-drop-icon" }, h(Icon, { name: "plus", size: 16 })),
+            h("span", { className: "stk-marker-drop-label" }, "Marker"),
+            h("span", { className: "stk-marker-drop-time" }, fmtTime(markerDrop.at))
+          ),
+
         onBack &&
           (spec.origin && ["performer", "folder", "tag", "markers", "clip", "favorites"].indexOf(spec.origin.kind) >= 0) &&
           /* same control, same corner as the profile page: the player is embedded in
@@ -6452,6 +6783,25 @@ void main() {
               h("i", { className: "stk-rail-plus", "aria-hidden": "true" }, "+")
             )
           ),
+          /* add a marker: the same shape as add-tag, one row below it, so the
+             rail reads heart → tag → marker → more */
+          h(
+            "button",
+            {
+              className: "stk-rail-markerbtn",
+              title: "Add marker",
+              onClick: (event) => {
+                event.stopPropagation();
+                openMarkerSheet();
+              },
+            },
+            h(
+              "span",
+              { className: "stk-rail-icoplus" },
+              h(Icon, { name: "chapter", size: 26 }),
+              h("i", { className: "stk-rail-plus", "aria-hidden": "true" }, "+")
+            )
+          ),
           /* more: a circle with three dots, the shape the user asked for, and no
              caption — the rail is icons only */
           h(
@@ -6700,11 +7050,27 @@ void main() {
                 markerBusy ? "Saving…" : "Create marker"
               ),
             },
+            /* the frame itself, as a snapshot: the in point is easier to trust
+               when you can see it, and a polaroid reads as "this moment" rather
+               than as another control competing with the pills */
+            item &&
+              item.scene &&
+              h(
+                "figure",
+                { className: "stk-marker-snap" },
+                h("img", {
+                  className: "stk-marker-snap-img",
+                  src: `/scene/${item.scene.id}/screenshot?t=${Math.max(0, Math.round(Number(markerAt) || 0))}`,
+                  alt: "",
+                  draggable: false,
+                  loading: "eager",
+                })
+              ),
             h("label", { className: "stk-marker-label", htmlFor: "stk-marker-name" }, "Marker Name"),
             h("input", {
               id: "stk-marker-name",
               className: "stk-tag-search stk-marker-input",
-              placeholder: "Type a name or pick one below…",
+              placeholder: "Type any tag or a new name…",
               value: markerName,
               onChange: (event) => {
                 setMarkerName(event.target.value);
@@ -6722,7 +7088,11 @@ void main() {
               "div",
               { className: "stk-tag-scroll" },
               h(TagSections, {
-                sections: MARKER_TAG_SECTIONS,
+                /* typing is the override: a name outside the four marker
+                   sections (an ethnicity, a body tag, or something the library
+                   has never seen) is searched across the whole vocabulary and
+                   is still creatable as-is */
+                sections: markerTyping ? TAG_SHEET_SECTIONS : MARKER_TAG_SECTIONS,
                 query: markerTyping ? markerName : "",
                 shown: markerShown,
                 onMore: (sectionId, total) => showMore(sectionId, total, setMarkerShown),
@@ -11759,63 +12129,56 @@ void main() {
      screen as chips, and sorts what it got by tag then title, so the list reads
      grouped by tag instead of as one long stream. Tapping a marker drops into
      the feed at that marker's in point. */
-  function MarkersPage({ onBack, onPick, onPlayTag }) {
-    const [rows, setRows] = useState(null);
+  /* ---- markers, by name ----------------------------------------------- *
+   * One row per marker was a wall of near-identical entries ("Blowjob" forty
+   * times, "blowjob" twelve, "Blow Job" nine). What the page is good for is the
+   * set: every marker sharing a name, played as one reel. So the page loads
+   * titles only — 13k of them is ~300 KB and a third of a second — folds them
+   * into name + count, and draws pills. Tapping a pill plays that name's
+   * collection; nothing per-marker is listed. */
+  const MARKER_PILL_PAGE = 40;
+
+  function MarkersPage({ onBack, onPlayTag, onPlayName }) {
+    const [names, setNames] = useState(null);
     const [query, setQuery] = useState("");
+    const [limit, setLimit] = useState(MARKER_PILL_PAGE);
 
     useEffect(() => {
       let alive = true;
-      setRows(null);
-      gql(
-        `query StashTokAllMarkers($q: String) {
-          findSceneMarkers(
-            filter: { per_page: 300, sort: "title", q: $q }
-          ) {
-            count
-            scene_markers {
-              id title seconds end_seconds primary_tag { id name }
-              scene { id title paths { screenshot } files { duration } }
-            }
-          }
-        }`,
-        { q: query.trim() || null }
-      )
+      gql(`query StashTokMarkerNames { findSceneMarkers(filter: { per_page: -1 }) { count scene_markers { title } } }`)
         .then((data) => {
           if (!alive) return;
-          const list = ((data.findSceneMarkers && data.findSceneMarkers.scene_markers) || []).filter(
-            (marker) => marker.scene && marker.scene.files && marker.scene.files.length
-          );
-          setRows(
-            list.slice().sort((a, b) => {
-              const ta = ((a.primary_tag && a.primary_tag.name) || "~").toLowerCase();
-              const tb = ((b.primary_tag && b.primary_tag.name) || "~").toLowerCase();
-              if (ta !== tb) return ta < tb ? -1 : 1;
-              return String(a.title || "").toLowerCase().localeCompare(String(b.title || "").toLowerCase());
-            })
-          );
+          const found = (data.findSceneMarkers && data.findSceneMarkers.scene_markers) || [];
+          const total = (data.findSceneMarkers && data.findSceneMarkers.count) || found.length;
+          const seen = {};
+          const list = [];
+          let untitled = 0;
+          found.forEach((marker) => {
+            const name = String(marker.title || "").trim();
+            if (!name) {
+              untitled += 1;
+              return;
+            }
+            const key = name.toLowerCase();
+            if (!seen[key]) {
+              seen[key] = { key, name, n: 0 };
+              list.push(seen[key]);
+            }
+            seen[key].n += 1;
+          });
+          list.sort((x, y) => y.n - x.n || x.name.localeCompare(y.name));
+          setNames({ list, total, untitled });
         })
-        .catch(() => alive && setRows([]));
+        .catch(() => alive && setNames({ list: [], total: 0, untitled: 0 }));
       return () => {
         alive = false;
       };
-    }, [query]);
+    }, []);
 
-    /* the chips come from the page itself: the tags that actually have markers
-       in this library, most-used first. Tapping one opens that tag's marker feed
-       — every marker with the same primary tag, each playing from its own in
-       point — which is the compilation this page exists for. */
-    const chips = [];
-    const seen = {};
-    (rows || []).forEach((marker) => {
-      const tag = marker.primary_tag || null;
-      if (!tag || !tag.id) return;
-      if (!seen[tag.id]) {
-        seen[tag.id] = { id: tag.id, name: tag.name, n: 0 };
-        chips.push(seen[tag.id]);
-      }
-      seen[tag.id].n += 1;
-    });
-    chips.sort((a, b) => b.n - a.n || a.name.localeCompare(b.name));
+    const needle = query.trim().toLowerCase();
+    const shown = names
+      ? names.list.filter((row) => !needle || row.name.toLowerCase().includes(needle))
+      : [];
 
     return h(
       "div",
@@ -11826,51 +12189,168 @@ void main() {
       ),
       h("input", {
         type: "search",
-        placeholder: "Search markers",
+        className: "stk-tag-search",
+        placeholder: "Search marker names",
         value: query,
-        onChange: (event) => setQuery(event.currentTarget.value),
-        style: { width: "100%", marginBottom: "10px", padding: "9px 11px", borderRadius: "10px", background: "#171717", border: "1px solid #2a2a2a", color: "#fff" },
+        onChange: (event) => {
+          setQuery(event.currentTarget.value);
+          setLimit(MARKER_PILL_PAGE);
+        },
       }),
+      names
+        ? h(
+            "p",
+            { className: "stk-sub" },
+            names.total.toLocaleString() + " markers \u00b7 " + names.list.length + " names" +
+              (names.untitled ? " \u00b7 " + names.untitled.toLocaleString() + " untitled" : "")
+          )
+        : null,
       h(
         "div",
-        { className: "stk-chips", style: { marginBottom: "10px" } },
+        { className: "stk-chips stk-marker-pills" },
         h(
           "button",
-          { className: "stk-chip", onClick: () => onPlayTag && onPlayTag(null) },
+          { className: "stk-chip stk-chip-primary", onClick: () => onPlayTag && onPlayTag(null) },
           "Play all markers"
         ),
-        chips.map((chip) =>
+        shown.slice(0, limit).map((row) =>
           h(
             "button",
             {
-              key: chip.id,
+              key: row.key,
               className: "stk-chip",
-              title: "Play every marker tagged " + chip.name,
-              onClick: () => onPlayTag && onPlayTag({ id: chip.id, name: chip.name }),
+              title: "Play every marker named " + row.name,
+              onClick: () => onPlayName && onPlayName(row.name),
             },
-            chip.name,
-            h("b", { className: "stk-chip-n" }, String(chip.n))
+            row.name,
+            h("b", { className: "stk-chip-n" }, String(row.n))
+          )
+        ),
+        shown.length > limit
+          ? h(
+              "button",
+              { className: "stk-chip stk-chip-more", onClick: () => setLimit((cur) => cur + MARKER_PILL_PAGE) },
+              "+ " + Math.min(MARKER_PILL_PAGE, shown.length - limit) + " more"
+            )
+          : shown.length > MARKER_PILL_PAGE
+          ? h(
+              "button",
+              { className: "stk-chip stk-chip-more", onClick: () => setLimit(MARKER_PILL_PAGE) },
+              "Show less"
+            )
+          : null
+      ),
+      !names
+        ? h("div", { className: "stk-state" }, h("div", { className: "stk-spinner" }))
+        : !shown.length
+        ? h("div", { className: "stk-state" }, query.trim() ? "No marker names match this search" : "No markers yet")
+        : null
+    );
+  }
+
+  /* one tag's own page: a discovery wall for that tag instead of a jump
+     straight into the feed. A tag click used to start a feed of whole scenes,
+     which is not what a tag means — a scene is the unit you land on, and the
+     ordering chips decide what the grid shows. Play turns the order you just
+     picked into the feed, and tapping a tile starts it at that scene. */
+  function TagPage({ tagId, name, onBack, onPlay }) {
+    const [tag, setTag] = useState(null);
+    const [scenes, setScenes] = useState(null);
+    const [total, setTotal] = useState(null);
+    const [sort, setSort] = useState("date");
+
+    const ORDERS = [
+      { id: "date", label: "Latest", sort: "date", dir: "DESC" },
+      { id: "random", label: "Random", sort: "random", dir: "DESC" },
+      { id: "rating", label: "Top rated", sort: "rating", dir: "DESC" },
+      { id: "duration", label: "Longest", sort: "duration", dir: "DESC" },
+    ];
+    const order = ORDERS.filter((row) => row.id === sort)[0] || ORDERS[0];
+
+    useEffect(() => {
+      let alive = true;
+      setScenes(null);
+      /* the tag id is inlined as a quoted string: a MultiCriterionInput value is
+         [String!], not [ID!], so a variable typed ID fails the whole query */
+      const idLiteral = JSON.stringify(String(tagId).replace(/\D/g, ""));
+      gql(
+        `query StashTokTagPage($sort: String, $dir: SortDirectionEnum) {
+          findTag(id: ${idLiteral}) { id name scene_count scene_marker_count description }
+          findScenes(filter: { per_page: 48, sort: $sort, direction: $dir }, scene_filter: { tags: { value: [${idLiteral}], modifier: INCLUDES } }) {
+            count
+            scenes { id title rating100 paths { screenshot } files { duration } }
+          }
+        }`,
+        { sort: order.sort, dir: order.dir }
+      )
+        .then((data) => {
+          if (!alive) return;
+          setTag(data.findTag);
+          setScenes((data.findScenes && data.findScenes.scenes) || []);
+          setTotal((data.findScenes && data.findScenes.count) || 0);
+        })
+        .catch(() => alive && setScenes([]));
+      return () => {
+        alive = false;
+      };
+    }, [tagId, sort]);
+
+    const label = (tag && tag.name) || name || "Tag";
+    return h(
+      "div",
+      { className: "stk-page" },
+      h(
+        "div",
+        { className: "stk-page-head" },
+        h("button", { className: "stk-page-back", title: "Back", onClick: onBack }, h(Icon, { name: "back", size: 19 })),
+        h("span", { className: "stk-page-title stk-page-title-lg" }, label)
+      ),
+      h(
+        "p",
+        { className: "stk-sub" },
+        total == null
+          ? " "
+          : fmtCount(total) + " scenes" +
+            (tag && tag.scene_marker_count ? " \u00b7 " + fmtCount(tag.scene_marker_count) + " markers" : "")
+      ),
+      h(
+        "div",
+        { className: "stk-chips" },
+        h(
+          "button",
+          {
+            className: "stk-chip stk-chip-primary",
+            onClick: () => onPlay({ id: tagId, name: label }, order.sort),
+          },
+          h(Icon, { name: "play", size: 15 }),
+          "Play " + order.label.toLowerCase()
+        ),
+        ORDERS.map((row) =>
+          h(
+            "button",
+            {
+              key: row.id,
+              className: "stk-chip" + (row.id === sort ? " stk-chip-on" : ""),
+              onClick: () => setSort(row.id),
+            },
+            row.label
           )
         )
       ),
-      !rows
+      !scenes
         ? h("div", { className: "stk-state" }, h("div", { className: "stk-spinner" }))
-        : !rows.length
-        ? h("div", { className: "stk-state" }, query.trim() ? "No markers match this search" : "No markers yet")
+        : !scenes.length
+        ? h("div", { className: "stk-state" }, "No scenes carry this tag yet")
         : h(
             "div",
-            null,
-            rows.map((marker) => {
-              const at = Number(marker.seconds) || 0;
-              return h(
-                "button",
-                { key: marker.id, className: "stk-marker-row", onClick: () => onPick(marker) },
-                h(Icon, { name: "chapter", size: 13 }),
-                h("span", { style: { color: "#9ad", fontSize: "11px" } }, (marker.primary_tag && marker.primary_tag.name) || "untagged"),
-                h("span", { style: { flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, marker.title || "(untitled)"),
-                h("b", null, Math.floor(at / 60) + ":" + String(Math.floor(at % 60)).padStart(2, "0"))
-              );
-            })
+            { className: "stk-grid" },
+            scenes.map((scene) =>
+              h(SceneCard, {
+                key: scene.id,
+                scene,
+                onOpen: (picked) => onPlay({ id: tagId, name: label }, order.sort, picked),
+              })
+            )
           )
     );
   }
@@ -12741,7 +13221,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
 
   const SETTINGS_GROUPS = [
     { id: "Preferences", rank: 1, rows: ["feeds", "performer", "genders", "blur", "lock"] },
-    { id: "App Settings", rank: 2, rows: ["appearance", "navigation", "operations", "about"] },
+    { id: "App Settings", rank: 2, rows: ["server", "appearance", "navigation", "operations", "about"] },
   ];
 
   /* titles double as the shell's page header, so keep them here */
@@ -12754,6 +13234,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
     genders: "Show performers",
     appearance: "Appearance",
     navigation: "Navigation",
+    server: "This Server",
     about: "About",
   };
 
@@ -13316,7 +13797,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
     onDeleteFeed = () => {}, onDraftFeed = () => {}, onBack = () => {},
     feedDraft = null, section = "", onSection = () => {},
     pin, onSetPin = () => {}, onClearPin = () => {}, sfw, onToggleSfw = () => {},
-    prefs = {}, setPref = () => {}, onOpenHistory, onOpenOps = () => {} }) {
+    prefs = {}, setPref = () => {}, onOpenHistory, onOpenOps = () => {}, onRunSetup = () => {} }) {
     const [draft, setDraft] = useState("");
     const [saved, setSaved] = useState(false);
     const [pinEntry, setPinEntry] = useState(false);
@@ -13347,6 +13828,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
       lock: { icon: "lock", title: "Privacy Lock" },
       appearance: { icon: "image", title: "Appearance" },
       navigation: { icon: "menu", title: "Navigation" },
+      server: { icon: "gear", title: "This Server" },
       operations: { icon: "ops", title: "Stash Operations" },
       about: { icon: "info", title: "About" },
     };
@@ -13547,7 +14029,39 @@ function TagsPage({ onPick, onMarkers, onBack }) {
           h(PrefRow, { title: "Show file path", hint: "Print the folder path under the caption in the feed" },
             h(PrefToggle, { label: "Show path", on: !!prefs.showPath, onChange: (value) => setPref("showPath", value) })),
           h(PrefRow, { title: "Drag-scrub the stage", hint: "Press and sweep sideways across the video to seek. Off by default — a sideways thumb at the end of a swipe was seeking the clip. Tap the caption to open the scrub bar instead." },
-            h(PrefToggle, { label: "Drag-scrub", on: prefs.dragScrub === true, onChange: (value) => setPref("dragScrub", value) }))
+            h(PrefToggle, { label: "Drag-scrub", on: prefs.dragScrub === true, onChange: (value) => setPref("dragScrub", value) })),
+          h(PrefRow, { title: "Double-tap edges to seek", hint: "A double tap in the outer stripe of the video jumps 5 seconds back or forward, like an arrow key, and leaves a ring on that half. The middle stripe still steps the portrait crop. Stripe = 200 px, or a third of the width on a phone." },
+            h(PrefToggle, { label: "Edge seek", on: prefs.edgeSeek !== false, onChange: (value) => setPref("edgeSeek", value) }))
+        );
+      }
+      if (section === "server") {
+        const serverCfg = cfg || {};
+        const thumbLabel = serverCfg.thumbBase === "off"
+          ? "Stash images"
+          : serverCfg.thumbBase
+          ? String(serverCfg.thumbBase).replace(/^https?:\/\//, "")
+          : THUMB_BASE
+          ? String(THUMB_BASE).replace(/^https?:\/\//, "") + " (auto)"
+          : "Stash images";
+        const minLabel = Number(serverCfg.minDuration) > 0
+          ? "under " + serverCfg.minDuration + "s skipped"
+          : "no minimum";
+        return h(React.Fragment, null,
+          h("p", { className: "stk-set-block-sub" },
+            "These are stored on this Stash server, so every instance you run keeps its own. A new server starts from the defaults until setup runs there."),
+          h("section", { className: "stk-set-block" },
+            h("h4", { className: "stk-set-block-head" }, "Server defaults"),
+            h("dl", { className: "stk-setup-summary" },
+              h("div", null, h("dt", null, "Plays"), h("dd", null, serverCfg.source === "markers" ? "Markers" : "All scenes")),
+              h("div", null, h("dt", null, "Short clips"), h("dd", null, minLabel)),
+              h("div", null, h("dt", null, "Flag tag"), h("dd", null, serverCfg.flagTag || FLAG_TAG_FALLBACK)),
+              h("div", null, h("dt", null, "Thumbnails"), h("dd", null, thumbLabel))
+            )
+          ),
+          !serverCfg.setupDone && h("p", { className: "stk-set-block-sub" }, "Setup has not been completed on this server."),
+          h("button", { type: "button", className: "stk-btn stk-primary", onClick: () => onRunSetup() }, "Run setup again"),
+          h("p", { className: "stk-sub" },
+            "Feed definitions, the privacy lock and every appearance switch stay in this browser. Only the settings above are shared by every device that opens this server.")
         );
       }
       if (section === "navigation") {
@@ -13561,7 +14075,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
       }
       return h(React.Fragment, null,
         h("p", { className: "stk-sub" }, "Hearts are written to Stash as rating100. Any rated scene appears in the Favorites feed, and in Stash's own rating filter. Feed definitions live in this browser only."),
-        h("p", { className: "stk-sub" }, "Long-press the middle of the video for actions · hold the right side to fast-forward · hold the left to rewind · pinch to zoom · long-press then drag to move the frame · double-tap to step the crop."),
+        h("p", { className: "stk-sub" }, "Long-press the middle of the video for actions · hold the right side to fast-forward · hold the left to rewind · pinch to zoom · long-press then drag to move the frame · double-tap the middle to step the crop · double-tap the left or right edge to jump 5 s · scrub the bar, then push up for a Marker."),
         h("h4", { className: "stk-set-sub-head" }, "Playback"),
         h(PlaybackSettings, { prefs, setPref, onOpenHistory, sfw, expanded: true })
       );
@@ -13731,23 +14245,426 @@ function TagsPage({ onPick, onMarkers, onBack }) {
   }
 
   /* ------------------------------------------------------------------ */
-  /* root                                                               */
+  /* first-run setup                                                     */
   /* ------------------------------------------------------------------ */
 
-  function usePluginConfig() {
-    const [cfg, setCfg] = useState(() => readConfig(null));
+  /* A new installation — new server, or a server whose plugin config is still
+     empty — has nothing worth showing until one thing is answered: what does
+     the feed play from? Everything else here is a default the user can change
+     later, so the wizard never blocks, and Skip leaves the coded defaults in
+     place. Each step writes to the server on the last tap, not per step, so a
+     half-finished run leaves the config exactly as it found it. */
+
+  const SETUP_STEPS = ["welcome", "source", "duration", "flag", "thumbs", "done"];
+
+  const DURATION_OPTIONS = [
+    { value: 0, label: "Off", note: "Play everything, however short" },
+    { value: 5, label: "5s", note: "Anything under 5 seconds is skipped" },
+    { value: 10, label: "10s", note: "Recommended — drops 2-second clips" },
+    { value: 30, label: "30s", note: "Only clips worth half a minute" },
+    { value: 60, label: "60s", note: "Only real scenes" },
+  ];
+
+  function SetupDots({ index }) {
+    return h(
+      "div",
+      { className: "stk-setup-dots", "aria-hidden": "true" },
+      SETUP_STEPS.slice(1, -1).map((id, i) =>
+        h("span", { key: id, className: "stk-setup-dot" + (i <= index - 1 ? " stk-on" : "") })
+      )
+    );
+  }
+
+  function SetupCard({ on, title, note, detail, badge, disabled, onClick }) {
+    return h(
+      "button",
+      {
+        type: "button",
+        className: "stk-setup-card" + (on ? " stk-on" : "") + (disabled ? " stk-off" : ""),
+        onClick: disabled ? undefined : onClick,
+        "aria-pressed": !!on,
+        disabled: !!disabled,
+      },
+      h(
+        "span",
+        { className: "stk-setup-card-head" },
+        h("span", { className: "stk-setup-card-title" }, title),
+        badge ? h("span", { className: "stk-setup-card-badge" }, badge) : null
+      ),
+      note ? h("span", { className: "stk-setup-card-note" }, note) : null,
+      detail ? h("span", { className: "stk-setup-card-detail" }, detail) : null,
+      on ? h("span", { className: "stk-setup-card-check" }, h(Icon, { name: "check", size: 15 })) : null
+    );
+  }
+
+  function SetupWizard({ cfg, loaded, onDone, onSkip }) {
+    const [step, setStep] = useState(0);
+    const [source, setSource] = useState(cfg.source === "markers" ? "markers" : "scenes");
+    const [minDuration, setMinDuration] = useState(
+      cfg.minDuration == null ? 10 : Number(cfg.minDuration)
+    );
+    const [flagTag, setFlagTag] = useState(cfg.flagTag || FLAG_TAG_FALLBACK);
+    const [useThumbs, setUseThumbs] = useState(cfg.thumbBase !== "off");
+    const [counts, setCounts] = useState(null);
+    const [probe, setProbe] = useState("idle");
+    const [tagState, setTagState] = useState("idle"); /* idle | found | new */
+    const [saving, setSaving] = useState(false);
+    const [error, setError] = useState("");
+    const id = SETUP_STEPS[step];
+
+    /* the library in one round-trip: the choice between scenes and markers is
+       only meaningful next to how many of each this server actually has */
     useEffect(() => {
       let alive = true;
-      gql("{ configuration { plugins } }")
+      gql(
+        `query StashTokSetupCounts {
+          findScenes(filter: { per_page: 0 }) { count }
+          findSceneMarkers(filter: { per_page: 0 }) { count }
+          findPerformers(filter: { per_page: 0 }) { count }
+        }`
+      )
         .then((data) => {
-          if (alive) setCfg(readConfig({ plugins: data.configuration && data.configuration.plugins }));
+          if (!alive || !data) return;
+          setCounts({
+            scenes: (data.findScenes && data.findScenes.count) || 0,
+            markers: (data.findSceneMarkers && data.findSceneMarkers.count) || 0,
+            performers: (data.findPerformers && data.findPerformers.count) || 0,
+          });
         })
         .catch(() => {});
       return () => {
         alive = false;
       };
     }, []);
-    return cfg;
+
+    /* does the delete-flag tag already exist here? says whether flagging will
+       file scenes under something the user recognises or mint a new tag */
+    useEffect(() => {
+      if (id !== "flag") return undefined;
+      const name = (flagTag || "").trim();
+      if (!name) {
+        setTagState("idle");
+        return undefined;
+      }
+      let alive = true;
+      const timer = window.setTimeout(() => {
+        gql(
+          `query StashTokSetupTag($q: String) { findTags(filter: { q: $q, per_page: 20 }) { tags { id name } } }`,
+          { q: name }
+        )
+          .then((data) => {
+            if (!alive) return;
+            const list = (data.findTags && data.findTags.tags) || [];
+            const hit = list.some((tag) => tag.name.toLowerCase() === name.toLowerCase());
+            setTagState(hit ? "found" : "new");
+          })
+          .catch(() => alive && setTagState("idle"));
+      }, 350);
+      return () => {
+        alive = false;
+        window.clearTimeout(timer);
+      };
+    }, [id, flagTag]);
+
+    /* thumbnail sidecar: the port guess covers 9997/9998 only, so a fresh
+       server on another port silently loses it — say so instead of pretending */
+    useEffect(() => {
+      if (id !== "thumbs") return undefined;
+      if (!THUMB_BASE) {
+        setProbe("none");
+        return undefined;
+      }
+      let alive = true;
+      setProbe("checking");
+      const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+      const timer = window.setTimeout(() => controller && controller.abort(), 2500);
+      fetch(THUMB_BASE + "/healthz", controller ? { signal: controller.signal } : undefined)
+        .then((res) => alive && setProbe(res && res.ok ? "ok" : "down"))
+        .catch(() => alive && setProbe("down"))
+        .then(() => window.clearTimeout(timer));
+      return () => {
+        alive = false;
+        window.clearTimeout(timer);
+        if (controller) controller.abort();
+      };
+    }, [id]);
+
+    const next = () => setStep((n) => Math.min(SETUP_STEPS.length - 1, n + 1));
+    const back = () => (step === 0 ? onSkip() : setStep((n) => Math.max(0, n - 1)));
+
+    async function finish() {
+      setSaving(true);
+      setError("");
+      try {
+        await writeServerSettings({
+          source,
+          minDuration: Number(minDuration) || 0,
+          flagTag: (flagTag || "").trim() || FLAG_TAG_FALLBACK,
+          /* "off" always uses Stash's own images; "" keeps the port guess */
+          thumbBase: useThumbs ? (cfg.thumbBase === "off" ? "" : cfg.thumbBase || "") : "off",
+          setupDone: true,
+        });
+        onDone();
+      } catch (err) {
+        setError(String((err && (err.message || err)) || "Could not save to Stash."));
+        setSaving(false);
+      }
+    }
+
+    const countLine = (n) => (counts == null ? "…" : Number(n || 0).toLocaleString());
+
+    function body() {
+      if (id === "welcome") {
+        return h(
+          React.Fragment,
+          null,
+          h("div", { className: "stk-setup-mark" }, "S"),
+          h("h1", { className: "stk-setup-title" }, "StashTok"),
+          h(
+            "p",
+            { className: "stk-setup-sub" },
+            "A social media-inspired way to view all your scenes."
+          ),
+          counts &&
+            h(
+              "p",
+              { className: "stk-setup-meta" },
+              countLine(counts.scenes) + " scenes · " +
+                countLine(counts.markers) + " markers · " +
+                countLine(counts.performers) + " performers"
+            )
+        );
+      }
+
+      if (id === "source") {
+        return h(
+          React.Fragment,
+          null,
+          h("h1", { className: "stk-setup-title" }, "What should a feed play?"),
+          h("p", { className: "stk-setup-sub" }, "First, let's set up your For You feed. You can change it later."),
+          h(
+            "div",
+            { className: "stk-setup-cards" },
+            h(SetupCard, {
+              on: source === "scenes",
+              title: "All scenes",
+              badge: "Recommended",
+              note: "Every video from start to finish.",
+              detail: countLine(counts && counts.scenes) + " scenes",
+              onClick: () => setSource("scenes"),
+            }),
+            h(SetupCard, {
+              on: source === "markers",
+              title: "Markers only",
+              note: "The moments you tagged — skips the lead-in.",
+              detail: counts && counts.markers === 0 ? "No markers on this server yet" : countLine(counts && counts.markers) + " markers",
+              disabled: !!counts && counts.markers === 0,
+              onClick: () => setSource("markers"),
+            })
+          ),
+          counts && counts.markers === 0 &&
+            h("p", { className: "stk-setup-hint" }, "Markers come from Stash: add a few and this option opens up.")
+        );
+      }
+
+      if (id === "duration") {
+        return h(
+          React.Fragment,
+          null,
+          h("h1", { className: "stk-setup-title" }, "Skip the very short clips"),
+          h("p", { className: "stk-setup-sub" }, "Anything under the limit drops out of every feed. The Shorts feed ignores this."),
+          h(
+            "div",
+            { className: "stk-setup-chips" },
+            DURATION_OPTIONS.map((option) =>
+              h(
+                "button",
+                {
+                  key: option.value,
+                  type: "button",
+                  className: "stk-setup-chip" + (Number(minDuration) === option.value ? " stk-on" : ""),
+                  onClick: () => setMinDuration(option.value),
+                  "aria-pressed": Number(minDuration) === option.value,
+                },
+                option.label
+              )
+            )
+          ),
+          h(
+            "p",
+            { className: "stk-setup-hint" },
+            (DURATION_OPTIONS.find((option) => option.value === Number(minDuration)) || {}).note || ""
+          )
+        );
+      }
+
+      if (id === "flag") {
+        return h(
+          React.Fragment,
+          null,
+          h("h1", { className: "stk-setup-title" }, "Where do flagged scenes go?"),
+          h(
+            "p",
+            { className: "stk-setup-sub" },
+            "Flagging hides a scene from the feed and tags it in Stash. Nothing is deleted here — you review the tag in Stash."
+          ),
+          h("input", {
+            className: "stk-setup-input",
+            value: flagTag,
+            spellCheck: false,
+            autoCapitalize: "off",
+            autoCorrect: "off",
+            onChange: (event) => setFlagTag(event.currentTarget.value),
+            placeholder: FLAG_TAG_FALLBACK,
+            "aria-label": "Deletion flag tag name",
+          }),
+          h(
+            "p",
+            { className: "stk-setup-hint" },
+            tagState === "found"
+              ? "This tag already exists on this server — flagged scenes join it."
+              : tagState === "new"
+              ? "No such tag yet: it is created the first time you flag something."
+              : "The tag is created on demand, so nothing changes until you use it."
+          )
+        );
+      }
+
+      if (id === "thumbs") {
+        return h(
+          React.Fragment,
+          null,
+          h("h1", { className: "stk-setup-title" }, "Thumbnails"),
+          h(
+            "p",
+            { className: "stk-setup-sub" },
+            "A small service beside Stash renders 320 px tiles. Without it grids use Stash's own full-size images: it works, it is just slower."
+          ),
+          h(
+            "div",
+            { className: "stk-setup-status stk-" + probe },
+            h("span", { className: "stk-setup-dot-live" }),
+            probe === "checking" && "Checking…",
+            probe === "ok" && "Service found at " + String(THUMB_BASE || "").replace(/^https?:\/\//, ""),
+            probe === "down" && "No answer from " + String(THUMB_BASE || "").replace(/^https?:\/\//, ""),
+            probe === "none" && "No thumbnail service detected on this server",
+            probe === "idle" && "Not checked yet"
+          ),
+          h(
+            "div",
+            { className: "stk-setup-toggle-row" },
+            h("span", null, "Use thumbnails"),
+            h(PrefToggle, {
+              label: "Use thumbnails",
+              on: useThumbs,
+              onChange: (value) => setUseThumbs(value),
+            })
+          ),
+          probe === "none" &&
+            h(
+              "p",
+              { className: "stk-setup-hint" },
+              "Set the service URL in Stash → Settings → Plugins → StashTok if you run one on another port."
+            )
+        );
+      }
+
+      const sourceLabel = source === "markers" ? "Markers" : "All scenes";
+      const durationLabel =
+        Number(minDuration) === 0 ? "No minimum" : "Under " + minDuration + "s skipped";
+      return h(
+        React.Fragment,
+        null,
+        h("div", { className: "stk-setup-mark stk-ok" }, h(Icon, { name: "check", size: 26 })),
+        h("h1", { className: "stk-setup-title" }, "Ready"),
+        h("p", { className: "stk-setup-sub" }, "Saved to this server the moment you tap Start watching. Change any of it later in Settings → This Server."),
+        h(
+          "dl",
+          { className: "stk-setup-summary" },
+          h("div", null, h("dt", null, "Plays"), h("dd", null, sourceLabel)),
+          h("div", null, h("dt", null, "Short clips"), h("dd", null, durationLabel)),
+          h("div", null, h("dt", null, "Flag tag"), h("dd", null, (flagTag || "").trim() || FLAG_TAG_FALLBACK)),
+          h("div", null, h("dt", null, "Thumbnails"), h("dd", null, useThumbs ? (THUMB_BASE ? "Service" : "Stash images") : "Stash images"))
+        ),
+        error && h("p", { className: "stk-setup-error", role: "alert" }, error)
+      );
+    }
+
+    const primary =
+      id === "welcome"
+        ? "Get started"
+        : id === "done"
+        ? saving
+          ? "Saving…"
+          : "Start watching"
+        : "Next";
+
+    return h(
+      "div",
+      { className: "stk-setup", role: "dialog", "aria-modal": "true", "aria-label": "StashTok setup" },
+      h(
+        "div",
+        { className: "stk-setup-top" },
+        h(
+          "button",
+          {
+            type: "button",
+            className: "stk-setup-back",
+            onClick: back,
+            title: id === "welcome" ? "Skip setup" : "Back",
+            "aria-label": id === "welcome" ? "Skip setup" : "Back",
+          },
+          h(Icon, { name: id === "welcome" ? "x" : "back", size: 18 })
+        ),
+        h(SetupDots, { index: step }),
+        id !== "welcome" && id !== "done"
+          ? h("button", { type: "button", className: "stk-setup-skip", onClick: onSkip }, "Skip")
+          : h("span", { className: "stk-setup-skip stk-ghost" }, "")
+      ),
+      h("div", { className: "stk-setup-body" }, body()),
+      h(
+        "div",
+        { className: "stk-setup-foot" },
+        h(
+          "button",
+          {
+            type: "button",
+            className: "stk-setup-cta",
+            disabled: saving || !loaded || (id === "source" && counts && counts.markers === 0 && source === "markers"),
+            onClick: id === "done" ? finish : next,
+          },
+          primary
+        )
+      )
+    );
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* root                                                               */
+  /* ------------------------------------------------------------------ */
+
+  function usePluginConfig() {
+    const [cfg, setCfg] = useState(() => readConfig(null));
+    /* `loaded` gates the setup wizard: until this server's map has come back
+       there is no way to tell a fresh instance from a configured one */
+    const [loaded, setLoaded] = useState(false);
+    const [nonce, setNonce] = useState(0);
+    useEffect(() => {
+      let alive = true;
+      gql("{ configuration { plugins } }")
+        .then((data) => {
+          if (!alive) return;
+          setCfg(readConfig({ plugins: data.configuration && data.configuration.plugins }));
+          setLoaded(true);
+        })
+        .catch(() => {
+          if (alive) setLoaded(true);
+        });
+      return () => {
+        alive = false;
+      };
+    }, [nonce]);
+    return { cfg, loaded, reload: () => setNonce((n) => n + 1) };
   }
 
 
@@ -13817,11 +14734,15 @@ function TagsPage({ onPick, onMarkers, onBack }) {
   }
 
   function StashTokApp() {
-    const baseCfg = usePluginConfig();
+    const { cfg: baseCfg, loaded: cfgLoaded, reload: reloadCfg } = usePluginConfig();
     /* thumbnails: explicit setting wins, "off" disables, otherwise guess from the port */
     const thumbSetting = baseCfg.thumbBase;
     THUMB_BASE = thumbSetting === "off" ? "" : thumbSetting || guessThumbBase();
     const [prefs, setPrefs] = useState(loadPrefs);
+    /* setup owns the screen on a server that has never been configured and on
+       a device that has never finished it. Both flags are set by the wizard;
+       either one alone is enough to keep it away. */
+    const [setupOpen, setSetupOpen] = useState(false);
     const [navPicker, setNavPicker] = useState(null);
     const [feedOptions, setFeedOptions] = useState(false);
 
@@ -13907,7 +14828,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
       };
     }, []);
     /* settings moved into the drawer, so a slot still pointing at it becomes Tags */
-    const navSlots = (prefs.navSlots && prefs.navSlots.length === 4 ? prefs.navSlots : DEFAULT_NAV_SLOTS)
+    const navSlots = (prefs.navSlots && prefs.navSlots.length >= 4 ? prefs.navSlots : DEFAULT_NAV_SLOTS)
       .map((id) => (id === "settings" ? "tags" : id));
 
     function runNav(id) {
@@ -13916,6 +14837,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
       setFolderProfile(null);
       setFolderView(null);
       setPerformersOpen(false);
+      setTagProfile(null);
       if (id === "performers") {
         setPerformerFilter(null);
         setTab("performers");
@@ -13977,6 +14899,36 @@ function TagsPage({ onPick, onMarkers, onBack }) {
         return next;
       });
     }, []);
+
+    /* the decision waits for this server's config: before it arrives baseCfg is
+       the coded default, which looks exactly like a fresh installation.
+       A server with any saved key, or a device that already had prefs, is an
+       existing installation — an upgrade must not suddenly own the screen. */
+    useEffect(() => {
+      if (!cfgLoaded) return;
+      if (baseCfg.serverConfigured || PREFS_SEEN) return;
+      setSetupOpen(true);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [cfgLoaded]);
+
+    function finishSetup() {
+      setPref("setupDone", true);
+      setSetupOpen(false);
+      reloadCfg();
+      /* a new source changes what every feed asks for, so start clean */
+      setRefreshKey((n) => n + 1);
+    }
+
+    /* Skip means "the defaults are fine, stop asking" — it marks the server and
+       this device as done and writes no settings at all. */
+    async function skipSetup() {
+      finishSetup();
+      try {
+        await writeServerSettings({ setupDone: true });
+      } catch (err) {
+        /* offline or a read-only Stash: the device flag is enough for now */
+      }
+    }
     const [sfw, setSfw] = useState(() => {
       try {
         return window.localStorage.getItem(SFW_KEY) === "1";
@@ -14112,6 +15064,8 @@ function TagsPage({ onPick, onMarkers, onBack }) {
     const [performersOpen, setPerformersOpen] = useState(false);
 
     const [performerFilter, setPerformerFilter] = useState(null);
+    /* one tag's own page: the Tags tab shows it in place of the list */
+    const [tagProfile, setTagProfile] = useState(null);
     /* the favourites page opens a performer filtered to the scenes you hearted */
     const [favOnlyProfile, setFavOnlyProfile] = useState(false);
     /* applyRoute and resolvePerformerSlug are captured once (empty deps), so they
@@ -14229,6 +15183,21 @@ function TagsPage({ onPick, onMarkers, onBack }) {
         setTab("markers");
         return;
       }
+      /* /tagpage/<id>/<name> is that tag's own page */
+      if (rest.indexOf("tagpage/") === 0) {
+        const tail = rest.slice("tagpage/".length);
+        const slash = tail.indexOf("/");
+        const id = String(slash === -1 ? tail : tail.slice(0, slash)).replace(/\D/g, "");
+        const name = slash === -1 ? "" : decodeURIComponent(tail.slice(slash + 1));
+        if (!id) {
+          setTab("tags");
+          return;
+        }
+        setPerformerFilter(null);
+        setTagProfile({ id, name: name || "Tag" });
+        setTab("tags");
+        return;
+      }
       /* /tag/<id>/<name> is one tag's scenes: the same page Stash serves as
          /tags/<id>/scenes, so a reload lands on the feed and not on the list */
       if (rest.indexOf("tag/") === 0) {
@@ -14294,6 +15263,27 @@ function TagsPage({ onPick, onMarkers, onBack }) {
          the route so the feed is identifiable before its first page lands */
       if (rest.indexOf("markers/") === 0) {
         const parts = rest.split("/");
+        /* /markers/name/<name> is a marker-NAME collection: every marker that
+           shares the name, played as one reel */
+        if (parts[1] === "name") {
+          let markerName = "";
+          try {
+            markerName = decodeURIComponent(parts.slice(2).join("/"));
+          } catch (err) {
+            markerName = "";
+          }
+          setPerformerFilter(null);
+          setActiveFeed({
+            id: "markername-" + markerName.toLowerCase(),
+            name: markerName || "Markers",
+            type: "markers",
+            markerTitle: markerName,
+            sort: "random",
+            origin: { kind: "markers" },
+          });
+          setTab("home");
+          return;
+        }
         const id = (parts[1] || "").replace(/\D/g, "");
         let tagName = "";
         try {
@@ -14456,6 +15446,45 @@ function TagsPage({ onPick, onMarkers, onBack }) {
         window.clearTimeout(timer);
         view.removeEventListener("resize", apply);
         window.removeEventListener("orientationchange", apply);
+      };
+    }, [routed]);
+
+    /* ---- the on-screen keyboard -----------------------------------------
+       iOS shrinks visualViewport when the keyboard opens and leaves the layout
+       viewport alone, so a `position: fixed; bottom: 0` sheet keeps its bottom
+       edge underneath the keyboard: its rows paint into the black strip above
+       the keys and the panel looks torn. Publish the visible box as two custom
+       properties and flag the state, so a sheet can ride above the keyboard
+       instead of hanging off the layout viewport. */
+    useEffect(() => {
+      const view = window.visualViewport;
+      if (!view) return undefined;
+      const root = document.documentElement;
+      let frame = 0;
+      const apply = () => {
+        frame = 0;
+        const h = Math.round(view.height || 0);
+        const bottom = Math.round((view.offsetTop || 0) + (view.height || 0));
+        if (h > 0) root.style.setProperty("--stk-vv-h", h + "px");
+        if (bottom > 0) root.style.setProperty("--stk-vv-b", bottom + "px");
+        /* 120 px of shrink cannot be a toolbar: this is a keyboard */
+        const kb = h > 0 && h < (window.innerHeight || 0) - 120;
+        root.classList.toggle("stk-kb", kb);
+      };
+      const soon = () => {
+        if (frame) return;
+        frame = window.setTimeout(apply, 60);
+      };
+      apply();
+      view.addEventListener("resize", soon);
+      view.addEventListener("scroll", soon);
+      return () => {
+        window.clearTimeout(frame);
+        view.removeEventListener("resize", soon);
+        view.removeEventListener("scroll", soon);
+        root.classList.remove("stk-kb");
+        root.style.removeProperty("--stk-vv-h");
+        root.style.removeProperty("--stk-vv-b");
       };
     }, [routed]);
 
@@ -14759,23 +15788,40 @@ function TagsPage({ onPick, onMarkers, onBack }) {
       }
     }
 
-    function openTag(tag) {
+    /* ---- tags ----------------------------------------------------------
+       A tap on a tag opens that tag's own page, not a feed: a feed of whole
+       scenes is what the markers page is for, and a tag click should land on
+       something you can look at. The page's Play button (or a tile) is what
+       starts the feed, in the order the page was showing. */
+    function openTagPage(tag) {
+      if (!tag || tag.id == null) return;
+      const id = String(tag.id);
+      setTagProfile({ id, name: tag.name || "Tag" });
+      setTab("tags");
+      const route = "tagpage/" + id + "/" + encodeURIComponent(tag.name || "");
+      routeClaimRef.current = route;
+      goTo(route);
+    }
+
+    function startTagFeed(tag, sort, scene) {
+      const id = String(tag.id);
       setTagFilter(tag);
       setPerformerFilter(null);
+      setTagProfile(null);
       setActiveFeed({
-        id: "tag-" + tag.id,
+        id: "tag-" + id + (scene ? ":" + scene.id : ""),
         name: tag.name,
         type: "tags",
-        tags: [tag.id],
+        tags: [id],
         tagMode: "OR",
-        /* a tag is a browsing doorway, not a timeline: random by default */
-        sort: "random",
-        origin: { kind: "tag", tagId: String(tag.id), name: tag.name },
+        sort: sort || "random",
+        startSceneId: scene && scene.id ? String(scene.id) : null,
+        origin: { kind: "tag", tagId: id, name: tag.name },
       });
       setTab("home");
       setRefreshKey((n) => n + 1);
       // we just built this feed; the router must not rebuild it from the URL
-      const route = "tag/" + tag.id + "/" + encodeURIComponent(tag.name || "");
+      const route = "tag/" + id + "/" + encodeURIComponent(tag.name || "");
       routeClaimRef.current = route;
       goTo(route);
     }
@@ -14797,6 +15843,27 @@ function TagsPage({ onPick, onMarkers, onBack }) {
       const route = id
         ? "markers/" + id + "/" + encodeURIComponent(tag.name || "")
         : "markers/all/" + encodeURIComponent("All markers");
+      routeClaimRef.current = route;
+      goTo(route);
+    }
+
+    /* the markers page is a wall of names, so a pill opens that name as a feed:
+       every marker sharing it, in random order, each from its own in point */
+    function openMarkerName(name) {
+      const wanted = String(name || "").trim();
+      if (!wanted) return;
+      setPerformerFilter(null);
+      setActiveFeed({
+        id: "markername-" + wanted.toLowerCase(),
+        name: wanted,
+        type: "markers",
+        markerTitle: wanted,
+        sort: "random",
+        origin: { kind: "markers" },
+      });
+      setTab("home");
+      setRefreshKey((n) => n + 1);
+      const route = "markers/name/" + encodeURIComponent(wanted);
       routeClaimRef.current = route;
       goTo(route);
     }
@@ -14879,7 +15946,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
         view: "performers",
         onPick: openProfile,
         onBack: closeProfile,
-        onOpenTag: openTag,
+        onOpenTag: openTagPage,
         onProfileOpen: setProfileOpen,
         initialPerformer: performerFilter,
         prefs,
@@ -14890,7 +15957,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
         view: "discover",
         onPick: openProfile,
         onBack: closeProfile,
-        onOpenTag: openTag,
+        onOpenTag: openTagPage,
         onProfileOpen: setProfileOpen,
         initialPerformer: performerFilter,
         prefs,
@@ -14977,9 +16044,20 @@ function TagsPage({ onPick, onMarkers, onBack }) {
             onPlay: playFavorites,
           });
     } else if (tab === "tags") {
-      body = h(TagsPage, { onPick: openTag, onMarkers: openMarkers, onBack: () => setTab("home") });
+      body = tagProfile
+        ? h(TagPage, {
+            tagId: tagProfile.id,
+            name: tagProfile.name,
+            onBack: () => {
+              setTagProfile(null);
+              routeClaimRef.current = "tags";
+              goTo("tags");
+            },
+            onPlay: startTagFeed,
+          })
+        : h(TagsPage, { onPick: openTagPage, onMarkers: openMarkers, onBack: () => setTab("home") });
     } else if (tab === "markers") {
-      body = h(MarkersPage, { onPick: openMarker, onPlayTag: openMarkers, onBack: () => setTab("home") });
+      body = h(MarkersPage, { onPlayTag: openMarkers, onPlayName: openMarkerName, onBack: () => setTab("home") });
     } else if (tab === "folders") {
       body = h(FoldersPage, {
         onBack: () => setTab("home"),
@@ -15048,7 +16126,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
             goTo(payload && payload.sceneId ? "scene/" + payload.sceneId : "folder/" + encodeURIComponent(folderProfile));
           }
         },
-        onOpenTag: openTag,
+        onOpenTag: openTagPage,
         prefs,
       });
     } else if (tab === "ops") {
@@ -15114,6 +16192,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
           feeds,
           section: settingsRoute,
           onSection: openSection,
+          onRunSetup: () => setSetupOpen(true),
           onOpenOps: () => {
             setTab("ops");
             goTo("ops");
@@ -15160,7 +16239,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
         cfg,
         refreshKey,
         onOpenPerformer: openProfile,
-        onOpenTag: openTag,
+        onOpenTag: openTagPage,
         feeds,
         onBack: () => {
           if (window.history.length > 1) {
@@ -15196,7 +16275,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
           goTo("settings");
         },
         onOpenPerformer: openProfile,
-        onOpenTag: openTag,
+        onOpenTag: openTagPage,
         onDeriveFeed: useFeed,
         onEditFeed: (spec) => setBuilder({ spec }),
         onOpenFolderProfile: (target) => {
@@ -15314,6 +16393,17 @@ function TagsPage({ onPick, onMarkers, onBack }) {
         },
         h("div", { className: "stk-fixed", style: { background: "#101010" } })
       );
+    }
+
+    /* setup takes the whole screen: mounting the feed behind it would fire the
+       first dozen queries for a source the user is about to change */
+    if (setupOpen) {
+      return h(SetupWizard, {
+        cfg: baseCfg,
+        loaded: cfgLoaded,
+        onDone: finishSetup,
+        onSkip: skipSetup,
+      });
     }
 
     return h(
