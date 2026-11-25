@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased - one tag sheet
+
+- **The four tag surfaces are one component.** `TagSheetShell` owns the backdrop, the sheet geometry (fixed `min(78vh, 620px)`), the title bar with its close button, the scrolling body and the footer slot; the callers now supply content only. Before this, body tags had no height and collapsed into a short 100%-wide strip while the tag sheet was a tall panel — same bottom-sheet family, four different shapes.
+- Migrated: **Add tags** (`t`), **Add Marker** (`m`), **More Tags** (`…more`) and the performer's **Body tags**. Measured after: all three openable surfaces report the identical box — top 224, height 620, width 390 on a 390×844 viewport.
+- Nothing about the behaviour moved: the tag field still closes a tag on `,`/Tab and Title-Cases it, the marker sheet still fills its name from a chip, and body tags still queue the `TagSync` job.
+
 ## Unreleased - bulk writes run on the server
 
 - **Body-tag sync is a Stash job, not a browser loop.** `ops/attrSync.js` (plugin task `TagSync`, `interface: js`) applies attributes to every scene and image of a performer inside the Stash process: it keeps writing when the panel is closed, reports real progress in the queue, and can be stopped there.

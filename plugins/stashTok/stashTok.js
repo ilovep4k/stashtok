@@ -767,6 +767,11 @@
   }
 
   const DEFAULT_PERFORMER_SCOPE = { mode: "all", ids: [] };
+  /* Stash keeps ethnicity as a free string on the performer, so a feed needs the
+     value the library actually stores. These are the ones in use here (checked
+     live: Caucasian 1399, Black 769, Mixed 75, Asian 74, Indian 5, Other 5,
+     Middle Eastern 3). */
+  const ETHNICITY_OPTIONS = ["Caucasian", "Black", "Mixed", "Asian", "Indian", "Middle Eastern", "Other"];
 
   /* Stash's GenderEnum. Kept as a list rather than introspected: the enum is
      fixed by the server version, and an unknown value would break the query. */
@@ -925,6 +930,26 @@
         );
       }
     }
+    /* Performer tags are a different table: a scene carries no such tag, so they
+       cannot ride in `tags` (a value there matches nothing, or a same-named scene
+       tag, and silently narrows the feed to a lie). `performer_tags` is Stash's
+       own criterion for "one of the performers carries this tag". */
+    const ptagSel = spec.performerTags || {};
+    const ptagIds = (ptagSel.tags || []).filter(Boolean);
+    if (ptagIds.length) {
+      const modifier = ptagSel.mode === "AND" ? "INCLUDES_ALL" : "INCLUDES";
+      parts.push(
+        `performer_tags: { value: [${ptagIds.map((id) => `"${id}"`).join(",")}], modifier: ${modifier} }`
+      );
+    }
+    /* The performer's own attributes (ethnicity today) live in `performers_filter`,
+       which is a semi-join on the scene's performers and ANDs with everything else:
+       "Asian performers AND oil AND big tits" is exactly this pair of clauses. */
+    if (spec.performerEthnicity) {
+      parts.push(
+        `performers_filter: { ethnicity: { value: ${JSON.stringify(spec.performerEthnicity)}, modifier: EQUALS } }`
+      );
+    }
     const tagSel = effectiveTags(spec, cfg);
     if (tagSel.tags.length) {
       const modifier = tagSel.mode === "AND" ? "INCLUDES_ALL" : "INCLUDES";
@@ -1007,6 +1032,8 @@
       POOL_EPOCH, spec.type || "foryou", spec.direction || "",
       Number(minDur) || 0, Number(windowDays) || 0, spec.performerId || "",
       spec.pathIncludes || "", effectiveTags(spec, cfg).tags.join(","), spec.tagMode || "",
+      ((spec.performerTags || {}).tags || []).join("."), (spec.performerTags || {}).mode || "",
+      spec.performerEthnicity || "",
       (() => { const algo = effectiveAlgo(spec, cfg); return ["performers", "favorites", "recent"].filter((k) => algo[k]).join("+"); })(),
       (() => {
         const scope = effectivePerformers(spec, cfg);
@@ -6584,34 +6611,23 @@ void main() {
 
         tagsOpen &&
           h(
-            React.Fragment,
-            null,
-            h("div", { className: "stk-sheet-backdrop", onClick: () => setTagsOpen(false) }),
+            TagSheetShell,
+            { title: "More Tags", onClose: () => setTagsOpen(false), extraClass: "stk-moretags-sheet" },
             h(
               "div",
-              { className: "stk-sheet stk-moretags-sheet", onClick: (event) => event.stopPropagation() },
-              h(
-                "h3",
-                null,
-                h("span", null, "More Tags"),
-                h("button", { className: "stk-btn", onClick: () => setTagsOpen(false), "aria-label": "Close" }, h(Icon, { name: "x", size: 16 }))
-              ),
-              h(
-                "div",
-                { className: "stk-moretags-list" },
-                tags.map((tag) =>
-                  h(
-                    "button",
-                    {
-                      key: tag.id,
-                      className: "stk-tagpill",
-                      onClick: () => {
-                        setTagsOpen(false);
-                        onOpenTag(tag);
-                      },
+              { className: "stk-moretags-list" },
+              tags.map((tag) =>
+                h(
+                  "button",
+                  {
+                    key: tag.id,
+                    className: "stk-tagpill",
+                    onClick: () => {
+                      setTagsOpen(false);
+                      onOpenTag(tag);
                     },
-                    "#" + tag.name.replace(/\s+/g, "-").toLowerCase()
-                  )
+                  },
+                  "#" + tag.name.replace(/\s+/g, "-").toLowerCase()
                 )
               )
             )
@@ -6646,34 +6662,40 @@ void main() {
            and whatever is in the field is what gets created. */
         markerAt != null &&
           h(
-            React.Fragment,
-            null,
-            h("div", { className: "stk-sheet-backdrop", onClick: () => setMarkerAt(null) }),
+            TagSheetShell,
+            {
+              title: "Add Marker",
+              subtitle: "In point " + fmtTime(markerAt),
+              onClose: () => setMarkerAt(null),
+              dialogRef: markerDialogRef,
+              footer: h(
+                "button",
+                {
+                  className: "stk-btn stk-tag-done",
+                  disabled: markerBusy || !markerName.trim(),
+                  onClick: createMarker,
+                },
+                markerBusy ? "Saving…" : "Create marker"
+              ),
+            },
+            h("label", { className: "stk-marker-label", htmlFor: "stk-marker-name" }, "Marker Name"),
+            h("input", {
+              id: "stk-marker-name",
+              className: "stk-tag-search stk-marker-input",
+              placeholder: "Type a name or pick one below…",
+              value: markerName,
+              onChange: (event) => setMarkerName(event.target.value),
+              onKeyDown: (event) => {
+                if (event.key !== "Enter") return;
+                event.preventDefault();
+                createMarker();
+              },
+            }),
+            h("h4", { className: "stk-marker-pre" }, "Prefilled Names"),
+            h("p", { className: "stk-tag-note" }, "Use the below tags to automatically name the Marker"),
             h(
               "div",
-              { className: "stk-sheet stk-tag-sheet stk-marker-sheet", ref: markerDialogRef, onClick: (event) => event.stopPropagation() },
-              h(
-                "h3",
-                null,
-                h("span", null, "Add Marker"),
-                h("button", { className: "stk-btn", onClick: () => setMarkerAt(null), "aria-label": "Close" }, h(Icon, { name: "x", size: 16 }))
-              ),
-              h("p", { className: "stk-marker-at" }, "In point ", h("b", null, fmtTime(markerAt))),
-              h("label", { className: "stk-marker-label", htmlFor: "stk-marker-name" }, "Marker Name"),
-              h("input", {
-                id: "stk-marker-name",
-                className: "stk-tag-search stk-marker-input",
-                placeholder: "Type a name or pick one below…",
-                value: markerName,
-                onChange: (event) => setMarkerName(event.target.value),
-                onKeyDown: (event) => {
-                  if (event.key !== "Enter") return;
-                  event.preventDefault();
-                  createMarker();
-                },
-              }),
-              h("h4", { className: "stk-marker-pre" }, "Prefilled Names"),
-              h("p", { className: "stk-tag-note" }, "Use the below tags to automatically name the Marker"),
+              { className: "stk-tag-scroll" },
               h(
                 "div",
                 { className: "stk-marker-tags" },
@@ -6701,137 +6723,119 @@ void main() {
                     )
                   )
                 )
-              ),
-              h(
-                "button",
-                {
-                  className: "stk-btn stk-tag-done",
-                  disabled: markerBusy || !markerName.trim(),
-                  onClick: createMarker,
-                },
-                markerBusy ? "Saving…" : "Create marker"
               )
             )
           ),
 
         tagOpen &&
           h(
-            React.Fragment,
-            null,
-            h("div", { className: "stk-sheet-backdrop", onClick: () => setTagOpen(false) }),
-            h(
-              "div",
-              { className: "stk-sheet stk-tag-sheet", ref: tagDialogRef, onClick: (event) => event.stopPropagation() },
-              h(
-                "h3",
-                null,
-                h("span", null, "Add tags"),
-                h("button", { className: "stk-btn", onClick: () => setTagOpen(false) }, h(Icon, { name: "x", size: 16 }))
-              ),
-              h("input", {
-                className: "stk-tag-search",
-                ref: tagInputRef,
-                placeholder: "Type a tag — comma or Tab to add",
-                value: tagFilter,
-                autoComplete: "off",
-                autoCapitalize: "words",
-                spellCheck: false,
-                onChange: (event) => onTagFieldChange(event.target.value),
-                onKeyDown: onTagFieldKey,
-              }),
-              /* the chips closed with , / Tab, and the live suggestions under the
-                 field: clicking one queues it exactly as the library spells it */
-              (tagQueue.length > 0 || tagSugg.length > 0 || tagCreateName) &&
-                h(
-                  "div",
-                  { className: "stk-tagfield" },
-                  tagQueue.length > 0 &&
-                    h(
-                      "div",
-                      { className: "stk-tagqueue" },
-                      tagQueue.map((name) =>
-                        h(
-                          "button",
-                          {
-                            key: name,
-                            type: "button",
-                            className: "stk-queuechip",
-                            title: "Remove",
-                            onClick: () => setTagQueue((prev) => prev.filter((entry) => entry !== name)),
-                          },
-                          name,
-                          h("span", { className: "stk-queuechip-x", "aria-hidden": "true" }, "×")
-                        )
-                      )
-                    ),
-                  (tagSugg.length > 0 || tagCreateName) &&
-                    h(
-                      "div",
-                      { className: "stk-tagsugg", role: "listbox" },
-                      tagCreateName &&
-                        h(
-                          "button",
-                          {
-                            type: "button",
-                            className: "stk-sugg stk-sugg-new",
-                            onMouseDown: (event) => event.preventDefault(),
-                            onClick: () => {
-                              appendTagNames([tagCreateName]);
-                              setTagFilter("");
-                              setTagSugg([]);
-                              setTagSuggSel(-1);
-                            },
-                          },
-                          h("span", { className: "stk-sugg-name" }, "Create “" + tagCreateName + "”"),
-                          h("span", { className: "stk-sugg-count" }, "new")
-                        ),
-                      tagSugg.map((row, rowIndex) => {
-                        const have = sceneTagNames.has(String(row.name).trim().toLowerCase());
-                        return h(
-                          "button",
-                          {
-                            key: row.id,
-                            type: "button",
-                            role: "option",
-                            "aria-selected": rowIndex === tagSuggSel,
-                            className: "stk-sugg" + (rowIndex === tagSuggSel ? " stk-sel" : "") + (have ? " stk-have" : ""),
-                            onMouseDown: (event) => event.preventDefault(),
-                            onClick: () => {
-                              if (have) return;
-                              appendTagNames([row.name]);
-                              setTagFilter("");
-                              setTagSugg([]);
-                              setTagSuggSel(-1);
-                            },
-                          },
-                          h("span", { className: "stk-sugg-name" }, row.name),
-                          h(
-                            "span",
-                            { className: "stk-sugg-count" },
-                            have ? "on scene" : row.scene_count != null ? String(row.scene_count) : ""
-                          )
-                        );
-                      })
-                    )
-                ),
-              h(
-                "div",
-                { className: "stk-tag-scroll" },
-                !tagQuery && ethnicitySection(),
-                TAG_SECTIONS.map((section) => tagSection(section.title, section.tags, section.title)),
-                tagQuery && !tagSectionMatches && h("div", { className: "stk-tag-empty" }, "No tag matches “" + tagFilter.trim() + "”.")
-              ),
-              h(
+            TagSheetShell,
+            {
+              title: "Add tags",
+              onClose: () => setTagOpen(false),
+              dialogRef: tagDialogRef,
+              footer: h(
                 "button",
                 {
                   className: "stk-btn stk-tag-done",
                   disabled: tagBusy,
                   onClick: commitTags,
                 },
-                tagBusy
-                  ? "Saving…"
-                  : "Done" + (tagPending.length ? ` (${tagPending.length})` : "")
-              )
+                tagBusy ? "Saving…" : "Done" + (tagPending.length ? ` (${tagPending.length})` : "")
+              ),
+            },
+            h("input", {
+              className: "stk-tag-search",
+              ref: tagInputRef,
+              placeholder: "Type a tag — comma or Tab to add",
+              value: tagFilter,
+              autoComplete: "off",
+              autoCapitalize: "words",
+              spellCheck: false,
+              onChange: (event) => onTagFieldChange(event.target.value),
+              onKeyDown: onTagFieldKey,
+            }),
+            /* the chips closed with , / Tab, and the live suggestions under the
+               field: clicking one queues it exactly as the library spells it */
+            (tagQueue.length > 0 || tagSugg.length > 0 || tagCreateName) &&
+              h(
+                "div",
+                { className: "stk-tagfield" },
+                tagQueue.length > 0 &&
+                  h(
+                    "div",
+                    { className: "stk-tagqueue" },
+                    tagQueue.map((name) =>
+                      h(
+                        "button",
+                        {
+                          key: name,
+                          type: "button",
+                          className: "stk-queuechip",
+                          title: "Remove",
+                          onClick: () => setTagQueue((prev) => prev.filter((entry) => entry !== name)),
+                        },
+                        name,
+                        h("span", { className: "stk-queuechip-x", "aria-hidden": "true" }, "\u00d7")
+                      )
+                    )
+                  ),
+                (tagSugg.length > 0 || tagCreateName) &&
+                  h(
+                    "div",
+                    { className: "stk-tagsugg", role: "listbox" },
+                    tagCreateName &&
+                      h(
+                        "button",
+                        {
+                          type: "button",
+                          className: "stk-sugg stk-sugg-new",
+                          onMouseDown: (event) => event.preventDefault(),
+                          onClick: () => {
+                            appendTagNames([tagCreateName]);
+                            setTagFilter("");
+                            setTagSugg([]);
+                            setTagSuggSel(-1);
+                          },
+                        },
+                        h("span", { className: "stk-sugg-name" }, "Create \u201c" + tagCreateName + "\u201d"),
+                        h("span", { className: "stk-sugg-count" }, "new")
+                      ),
+                    tagSugg.map((row, rowIndex) => {
+                      const have = sceneTagNames.has(String(row.name).trim().toLowerCase());
+                      return h(
+                        "button",
+                        {
+                          key: row.id,
+                          type: "button",
+                          role: "option",
+                          "aria-selected": rowIndex === tagSuggSel,
+                          className: "stk-sugg" + (rowIndex === tagSuggSel ? " stk-sel" : "") + (have ? " stk-have" : ""),
+                          onMouseDown: (event) => event.preventDefault(),
+                          onClick: () => {
+                            if (have) return;
+                            appendTagNames([row.name]);
+                            setTagFilter("");
+                            setTagSugg([]);
+                            setTagSuggSel(-1);
+                          },
+                        },
+                        h("span", { className: "stk-sugg-name" }, row.name),
+                        h(
+                          "span",
+                          { className: "stk-sugg-count" },
+                          have ? "on scene" : row.scene_count != null ? String(row.scene_count) : ""
+                        )
+                      );
+                    })
+                  )
+              ),
+            h(
+              "div",
+              { className: "stk-tag-scroll" },
+              !tagQuery && ethnicitySection(),
+              TAG_SECTIONS.map((section) => tagSection(section.title, section.tags, section.title)),
+              tagQuery && !tagSectionMatches && h("div", { className: "stk-tag-empty" }, "No tag matches \u201c" + tagFilter.trim() + "\u201d.")
             )
           ),
 
@@ -6970,6 +6974,38 @@ void main() {
       };
     }, [open]);
     return ref;
+  }
+
+  /* ---- one shell for every tag surface ----------------------------------
+     The tag sheet, the marker sheet, the "more tags" list and the performer's
+     body tags are the same object: a bottom sheet with a title, a body that
+     scrolls, and an optional footer action. They had drifted into four shapes
+     (one of them a height-less strip pinned to the bottom), so the geometry and
+     the head live here and each caller only supplies content. */
+  function TagSheetShell({ title, subtitle, note, onClose, dialogRef, extraClass, children, footer }) {
+    return h(
+      React.Fragment,
+      null,
+      h("div", { className: "stk-sheet-backdrop", onClick: onClose }),
+      h(
+        "div",
+        {
+          className: "stk-sheet stk-tag-sheet" + (extraClass ? " " + extraClass : ""),
+          ref: dialogRef,
+          onClick: (event) => event.stopPropagation(),
+        },
+        h(
+          "h3",
+          null,
+          h("span", null, title),
+          h("button", { className: "stk-btn", onClick: onClose, "aria-label": "Close" }, h(Icon, { name: "x", size: 16 }))
+        ),
+        subtitle ? h("p", { className: "stk-tag-note" }, subtitle) : null,
+        note ? h("p", { className: "stk-tag-note" }, note) : null,
+        h("div", { className: "stk-tag-body" }, children),
+        footer ? h("div", { className: "stk-tag-foot" }, footer) : null
+      )
+    );
   }
 
   function FeedPicker({ feeds, current, onPick, onNew, onClose, onOrder, onDetails }) {
@@ -9178,29 +9214,51 @@ void main() {
       return h(
         Portal,
         null,
-        h("div", { className: "stk-sheet-backdrop", onClick: () => setAttrOpen(false) }),
         h(
-          "div",
-          { className: "stk-sheet stk-attr-sheet", onClick: (event) => event.stopPropagation() },
-          h(
-            "h3",
-            null,
-            h("span", null, "Body tags"),
-            h("button", { className: "stk-btn", onClick: () => setAttrOpen(false) }, h(Icon, { name: "x", size: 16 }))
-          ),
-          h(
-            "p",
-            { className: "stk-tag-note" },
-            "Every scene by ",
-            h("b", null, (performer && performer.name) || "this performer"),
-            " — ",
-            total || "…",
-            " scene" + (total === 1 ? "" : "s"),
-            imageTotal ? " and " + imageTotal + " image" + (imageTotal === 1 ? "" : "s") : "",
-            ". Tick what is true of her. Nothing is written until you confirm."
-          ),
+          TagSheetShell,
+          {
+            title: "Body tags",
+            note: h(
+              React.Fragment,
+              null,
+              "Every scene by ",
+              h("b", null, (performer && performer.name) || "this performer"),
+              " \u2014 ",
+              total || "\u2026",
+              " scene" + (total === 1 ? "" : "s"),
+              imageTotal ? " and " + imageTotal + " image" + (imageTotal === 1 ? "" : "s") : "",
+              ". Tick what is true of her. Nothing is written until you confirm."
+            ),
+            onClose: () => setAttrOpen(false),
+            footer: h(
+              "div",
+              { className: "stk-attr-actions" },
+              h(
+                "button",
+                {
+                  type: "button",
+                  className: "stk-btn stk-primary",
+                  disabled: attrBusy || !picks.length || !targets,
+                  onClick: applyAttrs,
+                },
+                attrBusy
+                  ? attrJob
+                    ? "Working\u2026 " + Math.round((attrJob.progress || 0) * 100) + "%"
+                    : "Starting\u2026"
+                  : picks.length
+                  ? "Apply to " + targetLabel
+                  : "Pick attributes"
+              ),
+              attrUndo &&
+                h(
+                  "button",
+                  { type: "button", className: "stk-btn stk-btn-danger", disabled: attrBusy, onClick: undoAttrs },
+                  attrBusy && !attrJob ? "Undoing\u2026" : "Undo"
+                )
+            ),
+          },
           !scenes
-            ? h("p", { className: "stk-sub" }, "Reading scenes…")
+            ? h("p", { className: "stk-sub" }, "Reading scenes\u2026")
             : h(
                 "div",
                 { className: "stk-attr-grid" },
@@ -9214,11 +9272,11 @@ void main() {
                       type: "button",
                       className: "stk-attrchip" + (on ? " stk-on" : "") + (all ? " stk-all" : ""),
                       "aria-pressed": on,
-                      title: attr.kind + (attr.tags.length > 1 ? " → " + attr.tags.join(" + ") : ""),
+                      title: attr.kind + (attr.tags.length > 1 ? " \u2192 " + attr.tags.join(" + ") : ""),
                       onClick: () => toggleAttr(attr.name),
                     },
                     h("span", { className: "stk-attrchip-name" }, attr.name),
-                    h("span", { className: "stk-attrchip-count" }, total ? count + "/" + total : "—")
+                    h("span", { className: "stk-attrchip-count" }, total ? count + "/" + total : "\u2014")
                   );
                 })
               ),
@@ -9237,13 +9295,9 @@ void main() {
                   h(
                     "span",
                     null,
-                    Math.round((attrJob.progress || 0) * 100) + "% — running on the server, safe to close this page"
+                    Math.round((attrJob.progress || 0) * 100) + "% \u2014 running on the server, safe to close this page"
                   ),
-                  h(
-                    "button",
-                    { type: "button", className: "stk-btn stk-btn-danger", onClick: stopAttrJob },
-                    "Stop"
-                  )
+                  h("button", { type: "button", className: "stk-btn stk-btn-danger", onClick: stopAttrJob }, "Stop")
                 )
               )
             : null,
@@ -9254,34 +9308,8 @@ void main() {
             { className: "stk-attr-warn" },
             "This writes across every scene and image of her at once, so it cannot be undone one scene at a time. ",
             attrUndo
-              ? "Undo removes exactly these tags from exactly the rows that were missing them — anything you tag by hand in between comes off too."
+              ? "Undo removes exactly these tags from exactly the rows that were missing them \u2014 anything you tag by hand in between comes off too."
               : "Undo is offered here right after you apply."
-          ),
-          h(
-            "div",
-            { className: "stk-attr-actions" },
-            h(
-              "button",
-              {
-                type: "button",
-                className: "stk-btn stk-primary",
-                disabled: attrBusy || !picks.length || !targets,
-                onClick: applyAttrs,
-              },
-              attrBusy
-                ? attrJob
-                  ? "Working… " + Math.round((attrJob.progress || 0) * 100) + "%"
-                  : "Starting…"
-                : picks.length
-                ? "Apply to " + targetLabel
-                : "Pick attributes"
-            ),
-            attrUndo &&
-              h(
-                "button",
-                { type: "button", className: "stk-btn stk-btn-danger", disabled: attrBusy, onClick: undoAttrs },
-                attrBusy && !attrJob ? "Undoing…" : "Undo"
-              )
           )
         )
       );
@@ -12718,7 +12746,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
     );
   }
 
-  function TagSheet({ title, selected, onToggle, onClose }) {
+  function TagSheet({ title, selected, onToggle, onClose, hint, mode, onMode }) {
     const ref = useDialog(true, onClose);
     return h(
       Portal,
@@ -12728,7 +12756,25 @@ function TagsPage({ onPick, onMarkers, onBack }) {
         "div",
         { className: "stk-pick stk-pick-tags", ref },
         h("h3", { className: "stk-pick-title" }, title),
-        h("p", { className: "stk-pick-hint" }, "Leave every tag off to mean All Tags."),
+        h("p", { className: "stk-pick-hint" }, hint || "Leave every tag off to mean All Tags."),
+        /* only meaningful with two or more picks, and the same switch the scene tag
+           list has: INCLUDES_ALL is Stash's spelling of "all of these" */
+        onMode && h(
+          "div",
+          { className: "stk-pick-mode" },
+          [["OR", "Any of these"], ["AND", "All of these"]].map((pair) =>
+            h(
+              "button",
+              {
+                key: pair[0],
+                type: "button",
+                className: "stk-tagpill" + (mode === pair[0] ? " stk-on" : ""),
+                onClick: () => onMode(pair[0]),
+              },
+              pair[1]
+            )
+          )
+        ),
         h(TagPicker, { selected, onToggle }),
         h("button", { type: "button", className: "stk-pick-done", onClick: onClose },
           selected.length ? `Done — ${selected.length} tag${selected.length === 1 ? "" : "s"}` : "Done — all tags")
@@ -12861,6 +12907,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
       Object.assign({
         name: "", type: "foryou", sort: "random", tags: [], tagMode: "OR", algo: {},
         performerScope: DEFAULT_PERFORMER_SCOPE,
+        performerTags: { tags: [], mode: "OR" }, performerEthnicity: "",
       }, initial || {})
     );
     /* the draft has to survive a trip to the performer picker page */
@@ -12869,8 +12916,13 @@ function TagsPage({ onPick, onMarkers, onBack }) {
     }, [draft]);
     const [picker, setPicker] = useState("");
     const [tagOpen, setTagOpen] = useState(false);
+    const [ptagOpen, setPtagOpen] = useState(false);
     const [savedFilters, setSavedFilters] = useState([]);
     const tags = draft.tags || [];
+    const ptagSel = draft.performerTags || { tags: [], mode: "OR" };
+    const ptagLabel = (ptagSel.tags || []).length
+      ? ptagSel.tags.length + " tag" + (ptagSel.tags.length === 1 ? "" : "s") + (ptagSel.mode === "AND" ? " (all)" : "")
+      : "Any Performer Tag";
     /* Stash's own scene filters are the import path for a library someone has
        already curated: pick one and the feed runs that filter */
     useEffect(() => {
@@ -12945,6 +12997,14 @@ function TagsPage({ onPick, onMarkers, onBack }) {
         h(SettingsChoiceRow, {
           title: "Filter by Tag", value: tagCountLabel(tags),
           onClick: () => setPicker("tags"),
+        }),
+        h(SettingsChoiceRow, {
+          title: "Performer Tags", value: ptagLabel,
+          onClick: () => setPicker("ptags"),
+        }),
+        h(SettingsChoiceRow, {
+          title: "Performer Ethnicity", value: draft.performerEthnicity || "Any",
+          onClick: () => setPicker("peth"),
         }),
         h(SettingsChoiceRow, {
           title: "Performers", value: performerScopeLabel(draft.performerScope),
@@ -13040,6 +13100,42 @@ function TagsPage({ onPick, onMarkers, onBack }) {
       }),
       tagOpen && h(TagSheet, {
         title: "Select Tags", selected: tags, onToggle: toggleTag, onClose: () => setTagOpen(false),
+      }),
+      picker === "ptags" && h(SettingsPicker, {
+        title: "Performer Tags", value: (ptagSel.tags || []).length ? "select" : "all",
+        options: [{ value: "all", label: "Any Performer Tag" }, { value: "select", label: "Select Performer Tags" }],
+        onPick: (value) => {
+          if (value === "all") {
+            setDraft(Object.assign({}, draft, { performerTags: { tags: [], mode: ptagSel.mode } }));
+            return;
+          }
+          setPtagOpen(true);
+        },
+        onClose: () => setPicker(""),
+      }),
+      picker === "peth" && h(SettingsPicker, {
+        title: "Performer Ethnicity", value: draft.performerEthnicity || "",
+        options: [{ value: "", label: "Any ethnicity" }].concat(
+          ETHNICITY_OPTIONS.map((value) => ({ value, label: value }))
+        ),
+        onPick: (value) => setDraft(Object.assign({}, draft, { performerEthnicity: value })),
+        onClose: () => setPicker(""),
+      }),
+      ptagOpen && h(TagSheet, {
+        title: "Performer Tags",
+        hint: "Tags that are on the performer, not on the scene.",
+        selected: ptagSel.tags || [],
+        mode: ptagSel.mode,
+        onMode: (mode) => setDraft(Object.assign({}, draft, { performerTags: { tags: ptagSel.tags || [], mode } })),
+        onToggle: (id) => setDraft(Object.assign({}, draft, {
+          performerTags: {
+            tags: (ptagSel.tags || []).indexOf(id) >= 0
+              ? ptagSel.tags.filter((tag) => tag !== id)
+              : (ptagSel.tags || []).concat([id]),
+            mode: ptagSel.mode,
+          },
+        })),
+        onClose: () => setPtagOpen(false),
       })
     );
   }
