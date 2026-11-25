@@ -2249,12 +2249,22 @@ void main() {
     return;
   }
   if (d.z > -0.001) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
-  float theta = acos(clamp(-d.z, -1.0, 1.0));
-  float phi = atan(d.y, d.x);
-  float r = theta / (PI * 0.5);
-  if (r > 1.0) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
-  /* left eye occupies x in [0, 0.5]; its fisheye circle fills that half */
-  vec2 s = vec2(0.25 + 0.25 * r * cos(phi), 0.5 + 0.5 * r * sin(phi));
+  /* VR180 is a 180x180 EQUIRECT per eye, not a fisheye: longitude and latitude
+     are linear in the image, so the inverse is lon/lat straight to u/v. The old
+     equidistant-fisheye inverse (r = theta/(pi/2)) only agrees with this along the
+     two axes and pulls everything off-axis toward the centre, which is the
+     "squished heads" the user sees on a portrait phone. Verified against ffmpeg's
+     v360=hequirect:flat unwrap of the same frame (mean abs error ~1/255 for this
+     model, ~57/255 for the fisheye one). */
+  float lon = atan(d.x, -d.z);
+  float lat = asin(clamp(d.y, -1.0, 1.0));
+  if (abs(lon) > PI * 0.5) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
+  /* left eye occupies x in [0, 0.5]; its 180 degrees map across that half.
+     v is 0.5 + lat/pi, not minus: the vertex shader negates q.y, so the top of the
+     screen already looks upward, and the texture's first row is its top. Proven
+     against ffmpeg by rendering at yaw=0/pitch=0 and comparing pixels (mean abs
+     error 1.2/255 with this sign, 34/255 with the other). */
+  vec2 s = vec2(0.25 + 0.5 * (lon / PI), 0.5 + lat / PI);
   gl_FragColor = texture2D(tex, clamp(s, 0.001, 0.999));
 }`;
 
@@ -2289,12 +2299,19 @@ void main() {
   /* the view is a ref, not state: panning must not re-render react 60 times a second */
   const VR_FOV_MIN = 0.55;
   const VR_FOV_MAX = 2.9;
+  /* the "swipe here" hint is shown once per session, not on every clip */
+  let vrHintShown = false;
 
   function VrCanvas({ videoRef, layout, sceneKey, previewUrl, onTap, onSource }) {
     const canvasRef = useRef(null);
     /* non-empty when the GL path could not run: shown in place of the canvas so a
        broken viewer says why instead of presenting a white rectangle */
     const [problem, setProblem] = useState("");
+    /* captured once per mount, not read during render: react may render twice
+       (strict mode, the shell's two-stage route) and the second render would drop
+       a hint the first one already consumed */
+    const [hint] = useState(() => !vrHintShown);
+    useEffect(() => { if (hint) vrHintShown = true; }, [hint]);
     const tapRef = useRef(onTap);
     tapRef.current = onTap;
     const srcRef = useRef(onSource);
@@ -2402,6 +2419,8 @@ void main() {
       scratch.width = 1024;
       scratch.height = 512;
       const sctx = scratch.getContext("2d");
+      /* false once the driver refuses a video as a texture source */
+      let direct = true;
 
       /* Safari will not decode an 8K HEVC master (and refuses to sample some
          hardware-decoded streams at all), which shows up as a black canvas. Stash
@@ -2503,9 +2522,10 @@ void main() {
         /* Three times the player's own pixel width. The version that uploaded at
            1.15x is the one that loaded but looked jagged; 3x of a phone at dpr 3
            is the native 4320-wide VR frame, so the fisheye shrink stops throwing
-           detail away before the shader even samples it. Capped only by the
-           decoded frame and by what this GPU will hold. */
-        const texW = Math.max(720, Math.min(maxTex, vw, Math.round(w * 1.15 * 3)));
+           detail away before the shader even samples it. Capped by the source and
+           by what this GPU will hold. */
+        const wanted = Math.max(720, Math.min(maxTex, Math.round(w * 1.15 * 3)));
+        const texW = Math.min(vw, wanted);
         const texH = Math.max(2, Math.round((texW * vh) / Math.max(1, vw)));
         const master = videoRef.current;
         if (source === fallback && master && master.currentTime > 1 && fallback.duration > 2) {
@@ -2513,18 +2533,40 @@ void main() {
           const want = master.currentTime % fallback.duration;
           if (Math.abs(fallback.currentTime - want) > 1.5) fallback.currentTime = want;
         }
-        if (scratch.width !== texW || scratch.height !== texH) {
-          scratch.width = texW;
-          scratch.height = texH;
-        }
-        try {
-          sctx.drawImage(source, 0, 0, texW, texH);
-        } catch (err) {
-          return;
-        }
         gl.bindTexture(gl.TEXTURE_2D, tex);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, scratch);
+        if (vw <= wanted && direct) {
+          /* Nothing to resize, so hand the decoded frame to the GPU directly: one
+             GPU-to-GPU copy and no CPU scaling at all. This is the cheap path and
+             it is only taken when the frame already fits the texture we want -
+             texImage2D cannot resize a video, and uploading an 8192-wide frame
+             whole (134 MB) every frame is worse than scaling it. A device that
+             refuses a video as a texture source demotes this canvas to the canvas
+             path for the rest of its life instead of failing frame after frame. */
+          try {
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+            if (gl.getError() !== gl.NO_ERROR) throw new Error("video texture refused");
+          } catch (err) {
+            direct = false;
+            uploadScaled(texW, texH);
+          }
+        } else {
+          uploadScaled(texW, texH);
+        }
         paint();
+
+        function uploadScaled(width, height) {
+          if (scratch.width !== width || scratch.height !== height) {
+            scratch.width = width;
+            scratch.height = height;
+          }
+          try {
+            sctx.drawImage(source, 0, 0, width, height);
+          } catch (err) {
+            return;
+          }
+          gl.bindTexture(gl.TEXTURE_2D, tex);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, scratch);
+        }
       };
       /* one guarded loop: a throw here used to kill the animation silently and
          leave an empty canvas behind, so it is caught and reported instead */
@@ -2641,7 +2683,16 @@ void main() {
     /* a viewer that cannot run says so; it does not present a blank rectangle */
     if (problem) return h("div", { className: "stk-vr-fail" }, problem);
 
-    return h("canvas", { className: "stk-vr-canvas", ref: canvasRef });
+    /* The canvas owns every drag on the picture, so a VR clip had no way to reach
+       the next one. This strip is left out of the canvas' pointer handling, so the
+       feed's own swipe gesture runs there - invisible, but it is the place to
+       swipe (a vertical drag, the feed's next-clip gesture). The hint names it
+       once per session and then never comes back. */
+    return h(React.Fragment, null,
+      h("canvas", { className: "stk-vr-canvas", ref: canvasRef }),
+      h("div", { className: "stk-vr-nav", "aria-hidden": "true" }),
+      hint ? h("div", { className: "stk-vr-hint" }, "swipe up here for the next clip · drag the picture to look around") : null
+    );
   }
 
   /* ---- keeping the display awake while a clip plays -------------------

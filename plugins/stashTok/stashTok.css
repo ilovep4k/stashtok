@@ -2762,6 +2762,44 @@ body.stk-clip-mode .stk-gear-fab { display: none; }
   line-height: 1.45;
 }
 
+/* the invisible band that takes the feed's swipe gesture in VR: the canvas owns
+   the whole picture, so this is the only place a horizontal swipe can advance */
+.stk-vr-nav {
+  position: absolute;
+  left: 0;
+  right: 0;
+  /* clears the 44px timeline grab band and stays under .stk-info (z 31) */
+  bottom: 44px;
+  height: 96px;
+  z-index: 29;
+  touch-action: none;
+}
+
+/* names the band once per session, then fades away and never returns */
+.stk-vr-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 148px;
+  transform: translateX(-50%);
+  z-index: 29;
+  pointer-events: none;
+  padding: 5px 11px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.62);
+  color: #e8e8e8;
+  font-size: 11px;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  animation: stk-vr-hint 4.5s ease forwards;
+}
+
+@keyframes stk-vr-hint {
+  0% { opacity: 0; }
+  10% { opacity: 1; }
+  75% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
 /* ---- timeline scrubber sprite (desktop hover) ---- */
 .stk-scrub-preview {
   position: absolute;
