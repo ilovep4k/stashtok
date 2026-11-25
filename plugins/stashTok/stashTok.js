@@ -12769,7 +12769,18 @@ function TagsPage({ onPick, onMarkers, onBack }) {
                 key: pair[0],
                 type: "button",
                 className: "stk-tagpill" + (mode === pair[0] ? " stk-on" : ""),
-                onClick: () => onMode(pair[0]),
+                /* on press, not on click: the autocomplete's outside-press handler
+                   closes its menu and re-renders the sheet, which replaces this node
+                   between mousedown and mouseup — the click never lands, so the
+                   first tap on a mode pill did nothing */
+                onMouseDown: (event) => {
+                  event.preventDefault();
+                  onMode(pair[0]);
+                },
+                onTouchStart: (event) => {
+                  event.preventDefault();
+                  onMode(pair[0]);
+                },
               },
               pair[1]
             )
@@ -12919,6 +12930,9 @@ function TagsPage({ onPick, onMarkers, onBack }) {
     const [ptagOpen, setPtagOpen] = useState(false);
     const [savedFilters, setSavedFilters] = useState([]);
     const tags = draft.tags || [];
+    const tagLabel = tags.length
+      ? tagCountLabel(tags) + ((draft.tagMode || "OR") === "AND" ? " (all)" : "")
+      : tagCountLabel(tags);
     const ptagSel = draft.performerTags || { tags: [], mode: "OR" };
     const ptagLabel = (ptagSel.tags || []).length
       ? ptagSel.tags.length + " tag" + (ptagSel.tags.length === 1 ? "" : "s") + (ptagSel.mode === "AND" ? " (all)" : "")
@@ -12937,9 +12951,12 @@ function TagsPage({ onPick, onMarkers, onBack }) {
     const sortEntry = FEED_SORT_UI.find((entry) => entry[0] === (draft.sort || "random")) || FEED_SORT_UI[0];
 
     function toggleTag(id) {
-      setDraft(Object.assign({}, draft, {
-        tags: tags.indexOf(id) >= 0 ? tags.filter((tag) => tag !== id) : tags.concat([id]),
-      }));
+      setDraft((cur) => {
+        const list = cur.tags || [];
+        return Object.assign({}, cur, {
+          tags: list.indexOf(id) >= 0 ? list.filter((tag) => tag !== id) : list.concat([id]),
+        });
+      });
     }
 
     return h(
@@ -12995,7 +13012,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
           onClick: () => setPicker("window"),
         }),
         h(SettingsChoiceRow, {
-          title: "Filter by Tag", value: tagCountLabel(tags),
+          title: "Filter by Tag", value: tagLabel,
           onClick: () => setPicker("tags"),
         }),
         h(SettingsChoiceRow, {
@@ -13099,7 +13116,14 @@ function TagsPage({ onPick, onMarkers, onBack }) {
         onClose: () => setPicker(""),
       }),
       tagOpen && h(TagSheet, {
-        title: "Select Tags", selected: tags, onToggle: toggleTag, onClose: () => setTagOpen(false),
+        title: "Select Tags", selected: tags, onToggle: toggleTag,
+        /* the same switch the performer tags get: "oil and big tits" is a scene
+           tag list in AND mode, which is INCLUDES_ALL */
+        mode: draft.tagMode || "OR",
+        /* functional update: the sheet is a child of this render, and a click that
+           lands before the parent re-renders would otherwise write a stale draft */
+        onMode: (mode) => setDraft((cur) => Object.assign({}, cur, { tagMode: mode })),
+        onClose: () => setTagOpen(false),
       }),
       picker === "ptags" && h(SettingsPicker, {
         title: "Performer Tags", value: (ptagSel.tags || []).length ? "select" : "all",
@@ -13126,15 +13150,20 @@ function TagsPage({ onPick, onMarkers, onBack }) {
         hint: "Tags that are on the performer, not on the scene.",
         selected: ptagSel.tags || [],
         mode: ptagSel.mode,
-        onMode: (mode) => setDraft(Object.assign({}, draft, { performerTags: { tags: ptagSel.tags || [], mode } })),
-        onToggle: (id) => setDraft(Object.assign({}, draft, {
-          performerTags: {
-            tags: (ptagSel.tags || []).indexOf(id) >= 0
-              ? ptagSel.tags.filter((tag) => tag !== id)
-              : (ptagSel.tags || []).concat([id]),
-            mode: ptagSel.mode,
-          },
-        })),
+        onMode: (mode) => setDraft((cur) => {
+          const sel = cur.performerTags || { tags: [], mode: "OR" };
+          return Object.assign({}, cur, { performerTags: { tags: sel.tags || [], mode } });
+        }),
+        onToggle: (id) => setDraft((cur) => {
+          const sel = cur.performerTags || { tags: [], mode: "OR" };
+          const list = sel.tags || [];
+          return Object.assign({}, cur, {
+            performerTags: {
+              tags: list.indexOf(id) >= 0 ? list.filter((tag) => tag !== id) : list.concat([id]),
+              mode: sel.mode || "OR",
+            },
+          });
+        }),
         onClose: () => setPtagOpen(false),
       })
     );
