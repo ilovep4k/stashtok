@@ -1568,6 +1568,19 @@
   );
   const MARKER_TAG_NAMES = MARKER_TAG_SECTIONS.reduce((all, section) => all.concat(section.tags), []);
 
+  /* Attributes belong to a person, not a clip: they are the tags the performer
+     page may push across every scene of a performer. Ethnicity carries the
+     scene-side pair Black → Black + Ebony, which is why an attribute is a list
+     of scene tags and not a single name. */
+  const SYNC_ATTRS = ETHNICITY_TAGS.map((eth) => ({
+    name: eth.name, kind: "Ethnicity", tags: eth.scene.slice(),
+  })).concat(
+    TAG_SECTIONS.filter((section) => section.title === "Body Tags").reduce(
+      (all, section) => all.concat(section.tags.map((name) => ({ name, kind: "Body", tags: [name] }))),
+      []
+    )
+  );
+
   /* one request resolves the whole vocabulary: aliased findTags per name, exact
      case-insensitive match. Tags the library has never seen resolve to null and
      are created only when the user actually picks them. */
@@ -1604,6 +1617,72 @@
       cache[key] = found[name];
     }
     return cache[key];
+  }
+
+  /* ---- free text → tags ---------------------------------------------- *
+     Typing is the fast path: "oil, outside, tv" is three tags, and one the
+     library has never seen is created on the spot. Casing is normalised to
+     Title Case because tag names are read by eye in the feed, but an existing
+     tag always wins the lookup, so typing "bbc" lands on "BBC" instead of
+     spawning "Bbc". */
+  const TAG_ACRONYMS = {
+    tv: "TV", vr: "VR", pov: "POV", dp: "DP", bbc: "BBC", bbw: "BBW",
+    bdsm: "BDSM", milf: "MILF", gilf: "GILF", hd: "HD", ai: "AI", of: "OF",
+  };
+
+  function titleTagName(raw) {
+    const words = String(raw == null ? "" : raw).replace(/\s+/g, " ").trim().split(" ");
+    return words
+      .filter(Boolean)
+      .map((word) => {
+        const lower = word.toLowerCase();
+        if (TAG_ACRONYMS[lower]) return TAG_ACRONYMS[lower];
+        /* anything the user capitalised on purpose keeps its shape: "iPhone"
+           must not come back as "Iphone" */
+        if (/[A-Z]/.test(word.slice(1))) return word;
+        return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+      })
+      .join(" ")
+      /* a word that is only punctuation is not a tag: it arrived from a stray
+         separator, and creating "Oil," as a tag name would be a mess to undo.
+         Only the edges are trimmed — inner hyphens and apostrophes are part of
+         real names. */
+      .replace(/^[^A-Za-z0-9]+/, "")
+      .replace(/[^A-Za-z0-9)]+$/, "");
+  }
+
+  /* one typed string is a list: commas (typed or pasted, with or without a
+     trailing space) and newlines both separate tags */
+  function splitTagInput(text) {
+    const seen = {};
+    return String(text == null ? "" : text)
+      .split(/[,\n]/)
+      .map((chunk) => titleTagName(chunk))
+      .filter((name) => {
+        if (!name) return false;
+        const key = name.toLowerCase();
+        if (seen[key]) return false;
+        seen[key] = true;
+        return true;
+      });
+  }
+
+  /* autocomplete source: the library's own tags, best-used first. The client
+     filter is case-insensitive anywhere in the name, so "tits" finds both
+     "Big Tits" and "Natural Tits". */
+  async function searchTagNames(q, limit) {
+    const query = String(q == null ? "" : q).trim();
+    if (!query) return [];
+    const data = await gql(
+      `query StashTokTagSuggest($q: String!, $n: Int!) {
+        findTags(filter: { q: $q, per_page: $n, sort: "scenes_count", direction: DESC },
+                 tag_filter: { name: { value: $q, modifier: INCLUDES } }) {
+          tags { id name scene_count }
+        }
+      }`,
+      { q: query, n: limit || 12 }
+    );
+    return (data.findTags && data.findTags.tags) || [];
   }
 
   /* Ethnicity thumbnails: the named performer first, else the best-known
@@ -2814,6 +2893,15 @@ void main() {
     const [tagOptions, setTagOptions] = useState({});
     const [tagPicked, setTagPicked] = useState({});
     const [tagFilter, setTagFilter] = useState("");
+    /* free-text queue: what the user typed and committed with , / Tab, before
+       "Done" writes any of it. Names, not ids: a tag that does not exist yet is
+       only created at write time. */
+    const [tagQueue, setTagQueue] = useState([]);
+    const [tagSugg, setTagSugg] = useState([]);
+    const [tagSuggSel, setTagSuggSel] = useState(-1);
+    const tagInputRef = useRef(null);
+    const tagSuggTimer = useRef(0);
+    const tagSuggSeq = useRef(0);
     const [tagBusy, setTagBusy] = useState(false);
     const [ethThumbs, setEthThumbs] = useState({});
     const [ethBusy, setEthBusy] = useState("");
@@ -4119,36 +4207,125 @@ void main() {
       [item, ethBusy, mergeSceneTags, noteUndo]
     );
 
+    /* ---- free-text entry -----------------------------------------------
+       `T` opens the sheet with the caret already in the field. Comma or Tab
+       closes the word into a chip and readies the field for the next one, so
+       "oil, outdoors, tv" types five tags without leaving the keyboard. Names
+       are title-cased as they are typed and resolved against the library at
+       write time, which is where a tag that does not exist yet gets created. */
+    const appendTagNames = useCallback((names) => {
+      const add = (names || []).filter(Boolean);
+      if (!add.length) return;
+      setTagQueue((prev) => {
+        const have = {};
+        prev.forEach((name) => {
+          have[name.toLowerCase()] = true;
+        });
+        const extra = add.filter((name) => {
+          if (have[name.toLowerCase()]) return false;
+          have[name.toLowerCase()] = true;
+          return true;
+        });
+        return extra.length ? prev.concat(extra) : prev;
+      });
+    }, []);
+
+    const commitTagField = useCallback(() => {
+      const names = splitTagInput(tagFilter);
+      if (!names.length) {
+        /* a field holding only separators is not a tag: clear it so the next
+           word starts clean instead of "Oilwith" */
+        if (tagFilter) setTagFilter("");
+        return false;
+      }
+      appendTagNames(names);
+      setTagFilter("");
+      setTagSugg([]);
+      setTagSuggSel(-1);
+      return true;
+    }, [tagFilter, appendTagNames]);
+
+    /* the sheet opens on the field, not on the close button useDialog focuses */
+    useEffect(() => {
+      if (!tagOpen) return undefined;
+      const timer = window.setTimeout(() => {
+        const el = tagInputRef.current;
+        if (el && el.focus) el.focus();
+      }, 40);
+      return () => window.clearTimeout(timer);
+    }, [tagOpen]);
+
+    /* autocomplete: debounced library lookup, and a sequence guard so a slow
+       response for "oi" cannot overwrite the list for "oil" */
+    useEffect(() => {
+      if (!tagOpen) {
+        setTagSugg([]);
+        return undefined;
+      }
+      const q = tagFilter.trim();
+      if (!q) {
+        setTagSugg([]);
+        setTagSuggSel(-1);
+        return undefined;
+      }
+      const seq = tagSuggSeq.current + 1;
+      tagSuggSeq.current = seq;
+      const timer = window.setTimeout(() => {
+        searchTagNames(q, 10)
+          .then((rows) => {
+            if (tagSuggSeq.current !== seq) return;
+            setTagSugg(rows);
+            setTagSuggSel(-1);
+          })
+          .catch(() => undefined);
+      }, 130);
+      return () => window.clearTimeout(timer);
+    }, [tagFilter, tagOpen]);
+
     const commitTags = useCallback(async () => {
       const picked = Object.keys(tagPicked).filter((name) => tagPicked[name]);
-      if (!item || !item.scene || !picked.length) {
+      /* a name typed but not yet closed with a comma still counts: hitting Done
+         right after typing must not silently drop it */
+      const pending = splitTagInput(tagFilter);
+      const names = [];
+      const seen = {};
+      pending.concat(tagQueue, picked).forEach((name) => {
+        const key = String(name).trim().toLowerCase();
+        if (!key || seen[key]) return;
+        seen[key] = true;
+        names.push(String(name).trim());
+      });
+      if (!item || !item.scene || !names.length) {
         setTagOpen(false);
         return;
       }
       setTagBusy(true);
       try {
         const ids = [];
-        for (let i = 0; i < picked.length; i += 1) {
-          ids.push(await ensureTagId(picked[i], tagIdCache.current));
+        for (let i = 0; i < names.length; i += 1) {
+          ids.push(await ensureTagId(names[i], tagIdCache.current));
         }
         const hadScene = new Set((item.scene.tags || []).map((tag) => String(tag.id)));
         await addSceneTags(item.scene.id, ids);
-        mergeSceneTags(item.scene.id, picked.map((name, i) => ({ id: ids[i], name })));
+        mergeSceneTags(item.scene.id, names.map((name, i) => ({ id: ids[i], name })));
         noteUndo({
           sceneId: item.scene.id,
           sceneTagIds: ids.filter((id) => !hadScene.has(String(id))),
           performerId: null,
           performerTagIds: [],
-          label: picked.length === 1 ? picked[0] : picked.length + " tags",
+          label: names.length === 1 ? names[0] : names.length + " tags",
         });
         setTagPicked({});
+        setTagQueue([]);
+        setTagFilter("");
+        setTagSugg([]);
         setTagOpen(false);
       } catch (err) {
         setError(String(err.message || err));
       } finally {
         setTagBusy(false);
       }
-    }, [item, tagPicked, mergeSceneTags, noteUndo]);
+    }, [item, tagPicked, tagQueue, tagFilter, mergeSceneTags, noteUndo]);
 
     /* ---- markers -------------------------------------------------------
        A Stash SceneMarker is a start point (seconds) plus a primary tag; the
@@ -4364,6 +4541,11 @@ void main() {
              where it is a visible control instead of a hidden shortcut. */
           event.preventDefault();
           openMarkerSheet();
+        } else if (key === "t" || key === "T") {
+          /* T tags the clip: the sheet opens with the caret in the field, so
+             "oil, outdoors, tv" is five tags without touching the pointer */
+          event.preventDefault();
+          if (!tagOpen) openTagSheet();
         } else if (key === "r" || key === "R") {
           event.preventDefault();
           refreshFeed();
@@ -4376,7 +4558,7 @@ void main() {
       window.addEventListener("keydown", onKey);
       return () => window.removeEventListener("keydown", onKey);
     }, [desktop, goNext, goPrev, toggleHeart, flagCurrent, vrMode, sheet, quick, items, refreshFeed, onSearch, onBack,
-      fullscreen, exitFullscreen, openMarkerSheet]);
+      fullscreen, exitFullscreen, openMarkerSheet, openTagSheet, tagOpen]);
 
     /* ---- scrubber sprites -----------------------------------------
        Stash already renders a sprite sheet plus a WebVTT index for scenes with
@@ -5073,6 +5255,82 @@ void main() {
       (section) => !tagQuery || section.tags.some((name) => name.toLowerCase().includes(tagQuery))
     );
 
+    /* what the typed word would become if committed: shown as a "Create …" row
+       when the library has no exact match, and it is also what , / Tab adds */
+    const tagQueueLower = new Set(tagQueue.map((name) => name.toLowerCase()));
+    const tagCreateName = (() => {
+      const typed = titleTagName(tagFilter);
+      if (!typed) return "";
+      const key = typed.toLowerCase();
+      if (tagQueueLower.has(key) || sceneTagNames.has(key)) return "";
+      if (tagSugg.some((row) => String(row.name).trim().toLowerCase() === key)) return "";
+      const inVocab = TAG_VOCABULARY.some((name) => name.toLowerCase() === key);
+      return inVocab ? "" : typed;
+    })();
+
+    function queueSuggestion(name) {
+      appendTagNames([name]);
+      setTagFilter("");
+      setTagSugg([]);
+      setTagSuggSel(-1);
+    }
+
+    /* everything the Done button is about to write: typed, queued, ticked */
+    const tagPending = splitTagInput(tagFilter)
+      .concat(tagQueue, Object.keys(tagPicked).filter((name) => tagPicked[name]))
+      .filter((name, at, all) => all.findIndex((other) => other.toLowerCase() === name.toLowerCase()) === at);
+
+    /* separators are read from the value, not from the keydown: the browser
+       inserts the comma *after* its keydown, so handling it there queued the
+       word and then left the comma sitting in the field. Whatever comma
+       arrives, the text before the last one becomes chips and the tail stays
+       as the word still being typed. */
+    function onTagFieldChange(raw) {
+      const value = String(raw == null ? "" : raw);
+      if (/[,\n]/.test(value)) {
+        const parts = value.split(/[,\n]/);
+        const tail = parts.pop().replace(/^[,\s]+/, "");
+        const names = parts.map(titleTagName).filter(Boolean);
+        if (names.length) appendTagNames(names);
+        setTagFilter(tail);
+        if (!tail) setTagSugg([]);
+        setTagSuggSel(-1);
+        return;
+      }
+      setTagFilter(value);
+      setTagSuggSel(-1);
+    }
+
+    /* comma closes a tag, Tab closes a tag, Enter takes the highlighted
+       suggestion else closes the tag (or writes the sheet when the field is
+       already empty). Backspace on an empty field takes the last chip back. */
+    function onTagFieldKey(event) {
+      const key = event.key;
+      if (key === "Tab") {
+        event.preventDefault();
+        commitTagField();
+      } else if (key === "Enter") {
+        event.preventDefault();
+        const highlighted = tagSuggSel >= 0 ? tagSugg[tagSuggSel] : null;
+        if (highlighted) queueSuggestion(highlighted.name);
+        else if (tagCreateName) queueSuggestion(tagCreateName);
+        else if (splitTagInput(tagFilter).length) commitTagField();
+        else commitTags();
+      } else if (key === "ArrowDown") {
+        event.preventDefault();
+        setTagSuggSel((cur) => Math.min(tagSugg.length - 1, cur + 1));
+      } else if (key === "ArrowUp") {
+        event.preventDefault();
+        setTagSuggSel((cur) => Math.max(-1, cur - 1));
+      } else if (key === "Escape") {
+        event.preventDefault();
+        setTagOpen(false);
+      } else if (key === "Backspace" && !tagFilter && tagQueue.length) {
+        event.preventDefault();
+        setTagQueue((prev) => prev.slice(0, -1));
+      }
+    }
+
     function tagChip(name) {
       const already = sceneTagNames.has(name.trim().toLowerCase());
       const on = already || !!tagPicked[name];
@@ -5277,7 +5535,10 @@ void main() {
                 onTimeUpdate: active ? onTimeUpdate : undefined,
                 onPlay: active ? () => setPlaying(true) : undefined,
                 onPause: active ? () => setPlaying(false) : undefined,
-                onEnded: active ? (autoScroll ? goNext : loopCurrent) : undefined,
+                /* a sheet over the stage means the user is typing, not watching:
+                   auto-scroll must not advance to the next clip mid-sentence, or
+                   the tags land on the clip that replaced the one on screen */
+                onEnded: active ? (autoScroll && !tagOpen && !sheet ? goNext : loopCurrent) : undefined,
                 onError: active
                   ? (event) => {
                       event.currentTarget.classList.remove("stk-frame-ready");
@@ -6265,10 +6526,90 @@ void main() {
               ),
               h("input", {
                 className: "stk-tag-search",
-                placeholder: "Filter tags…",
+                ref: tagInputRef,
+                placeholder: "Type a tag — comma or Tab to add",
                 value: tagFilter,
-                onChange: (event) => setTagFilter(event.target.value),
+                autoComplete: "off",
+                autoCapitalize: "words",
+                spellCheck: false,
+                onChange: (event) => onTagFieldChange(event.target.value),
+                onKeyDown: onTagFieldKey,
               }),
+              /* the chips closed with , / Tab, and the live suggestions under the
+                 field: clicking one queues it exactly as the library spells it */
+              (tagQueue.length > 0 || tagSugg.length > 0 || tagCreateName) &&
+                h(
+                  "div",
+                  { className: "stk-tagfield" },
+                  tagQueue.length > 0 &&
+                    h(
+                      "div",
+                      { className: "stk-tagqueue" },
+                      tagQueue.map((name) =>
+                        h(
+                          "button",
+                          {
+                            key: name,
+                            type: "button",
+                            className: "stk-queuechip",
+                            title: "Remove",
+                            onClick: () => setTagQueue((prev) => prev.filter((entry) => entry !== name)),
+                          },
+                          name,
+                          h("span", { className: "stk-queuechip-x", "aria-hidden": "true" }, "×")
+                        )
+                      )
+                    ),
+                  (tagSugg.length > 0 || tagCreateName) &&
+                    h(
+                      "div",
+                      { className: "stk-tagsugg", role: "listbox" },
+                      tagCreateName &&
+                        h(
+                          "button",
+                          {
+                            type: "button",
+                            className: "stk-sugg stk-sugg-new",
+                            onMouseDown: (event) => event.preventDefault(),
+                            onClick: () => {
+                              appendTagNames([tagCreateName]);
+                              setTagFilter("");
+                              setTagSugg([]);
+                              setTagSuggSel(-1);
+                            },
+                          },
+                          h("span", { className: "stk-sugg-name" }, "Create “" + tagCreateName + "”"),
+                          h("span", { className: "stk-sugg-count" }, "new")
+                        ),
+                      tagSugg.map((row, rowIndex) => {
+                        const have = sceneTagNames.has(String(row.name).trim().toLowerCase());
+                        return h(
+                          "button",
+                          {
+                            key: row.id,
+                            type: "button",
+                            role: "option",
+                            "aria-selected": rowIndex === tagSuggSel,
+                            className: "stk-sugg" + (rowIndex === tagSuggSel ? " stk-sel" : "") + (have ? " stk-have" : ""),
+                            onMouseDown: (event) => event.preventDefault(),
+                            onClick: () => {
+                              if (have) return;
+                              appendTagNames([row.name]);
+                              setTagFilter("");
+                              setTagSugg([]);
+                              setTagSuggSel(-1);
+                            },
+                          },
+                          h("span", { className: "stk-sugg-name" }, row.name),
+                          h(
+                            "span",
+                            { className: "stk-sugg-count" },
+                            have ? "on scene" : row.scene_count != null ? String(row.scene_count) : ""
+                          )
+                        );
+                      })
+                    )
+                ),
               h(
                 "div",
                 { className: "stk-tag-scroll" },
@@ -6285,9 +6626,7 @@ void main() {
                 },
                 tagBusy
                   ? "Saving…"
-                  : "Done" + (Object.keys(tagPicked).filter((key) => tagPicked[key]).length
-                      ? ` (${Object.keys(tagPicked).filter((key) => tagPicked[key]).length})`
-                      : "")
+                  : "Done" + (tagPending.length ? ` (${tagPending.length})` : "")
               )
             )
           ),
@@ -7747,6 +8086,16 @@ void main() {
     const [menuOpen, setMenuOpen] = useState(false);
     const profileMenuRef = useDialog(menuOpen, () => setMenuOpen(false));
     const [dupes, setDupes] = useState(null);
+    /* body & ethnicity attributes: a reviewed, manual sync across every scene
+       of this performer. Nothing here runs on its own — a scene tag never
+       propagates without the confirmation on this panel. */
+    const [attrOpen, setAttrOpen] = useState(false);
+    const [attrScenes, setAttrScenes] = useState(null);
+    const [attrPick, setAttrPick] = useState({});
+    const [attrBusy, setAttrBusy] = useState(false);
+    const [attrError, setAttrError] = useState("");
+    const [attrUndo, setAttrUndo] = useState(null);
+    const [attrDone, setAttrDone] = useState("");
     /* ids of the duplicate tags, resolved once; empty list = no exclusion */
     const [dupeTags, setDupeTags] = useState([]);
     const [stuck, setStuck] = useState(false);
@@ -8279,6 +8628,265 @@ void main() {
     /* the same page in Stash, so a performer or a folder can be curated there */
     const stashLink = stashHref(isFolder ? { folder } : { performerId });
 
+    /* ---- attribute sync ------------------------------------------------ *
+       The performer is the authority for body and ethnicity tags; a single
+       scene is not. This panel is the review step: it counts how many of that
+       performer's scenes already carry each attribute, the user confirms, and
+       only then does it go everywhere. A two-performer scene is exactly why
+       this is manual — the tag that scene needs is not the tag of one person. */
+    async function loadAttrScenes(pid) {
+      const rows = [];
+      let page = 1;
+      for (;;) {
+        const data = await gql(
+          `query StashTokPerfAttrScenes($id: ID!, $page: Int!) {
+            findScenes(filter: { per_page: 250, page: $page },
+                       scene_filter: { performers: { value: [$id], modifier: INCLUDES } }) {
+              count
+              scenes { id tags { id name } }
+            }
+          }`,
+          { id: pid, page }
+        );
+        const found = (data && data.findScenes) || {};
+        const batch = found.scenes || [];
+        batch.forEach((row) => rows.push(row));
+        if (!batch.length || rows.length >= (found.count || 0) || page >= 40) break;
+        page += 1;
+      }
+      return rows;
+    }
+
+    function attrHave(attr, scene) {
+      const have = new Set(((scene && scene.tags) || []).map((tag) => String(tag.name).trim().toLowerCase()));
+      return attr.tags.every((name) => have.has(name.toLowerCase()));
+    }
+
+    function attrCount(attr, scenes) {
+      return (scenes || []).filter((scene) => attrHave(attr, scene)).length;
+    }
+
+    function openAttrs() {
+      if (isFolder || !performerId) return;
+      setMenuOpen(false);
+      setAttrOpen(true);
+      setAttrDone("");
+      setAttrError("");
+      if (attrScenes) return;
+      loadAttrScenes(performerId)
+        .then((rows) => setAttrScenes(rows))
+        .catch((err) => {
+          setAttrError(String((err && err.message) || err));
+          setAttrScenes([]);
+        });
+    }
+
+    function toggleAttr(name) {
+      setAttrPick((prev) => Object.assign({}, prev, { [name]: !prev[name] }));
+    }
+
+    async function applyAttrs() {
+      const picks = SYNC_ATTRS.filter((attr) => attrPick[attr.name]);
+      if (!picks.length || attrBusy || !performerId || !attrScenes) return;
+      setAttrBusy(true);
+      setAttrError("");
+      setAttrDone("");
+      setAttrUndo(null);
+      try {
+        const cache = {};
+        const ids = {};
+        const names = [];
+        picks.forEach((attr) => attr.tags.forEach((name) => {
+          if (names.indexOf(name) < 0) names.push(name);
+        }));
+        for (const name of names) ids[name] = await ensureTagId(name, cache);
+        /* the snapshot is what makes undo honest: only the scenes that did not
+           have the tag are recorded, so undo takes back exactly this write */
+        const plan = picks.map((attr) => ({
+          name: attr.name,
+          tagIds: attr.tags.map((name) => ids[name]),
+          sceneIds: attrScenes.filter((scene) => !attrHave(attr, scene)).map((scene) => String(scene.id)),
+        }));
+        const allTagIds = [];
+        plan.forEach((entry) => entry.tagIds.forEach((id) => {
+          if (allTagIds.indexOf(id) < 0) allTagIds.push(id);
+        }));
+        const targets = [];
+        plan.forEach((entry) => entry.sceneIds.forEach((id) => {
+          if (targets.indexOf(id) < 0) targets.push(id);
+        }));
+        /* the performer carries them too: the attribute is a fact about her,
+           which is the whole reason it can be pushed to her scenes at all */
+        await addPerformerTags(performerId, allTagIds);
+        for (let at = 0; at < targets.length; at += 200) {
+          await gql(
+            `mutation StashTokAttrSync($ids: [ID!]!, $tags: [ID!]!) {
+              bulkSceneUpdate(input: { ids: $ids, tag_ids: { ids: $tags, mode: ADD } }) { id }
+            }`,
+            { ids: targets.slice(at, at + 200), tags: allTagIds }
+          );
+        }
+        /* the local copy follows the write, so the counts show the new truth */
+        const stamp = picks.map((attr) => ({ attr, tags: attr.tags.map((name) => ({ id: ids[name], name })) }));
+        setAttrScenes((prev) => (prev || []).map((scene) => {
+          const have = new Set((scene.tags || []).map((tag) => String(tag.name).trim().toLowerCase()));
+          const add = [];
+          stamp.forEach(({ attr, tags }) => {
+            if (attr.tags.every((name) => have.has(name.toLowerCase()))) return;
+            tags.forEach((tag) => {
+              const key = String(tag.name).toLowerCase();
+              if (have.has(key)) return;
+              have.add(key);
+              add.push(tag);
+            });
+          });
+          return add.length ? Object.assign({}, scene, { tags: (scene.tags || []).concat(add) }) : scene;
+        }));
+        setAttrUndo({ performerId, plan });
+        setAttrPick({});
+        setAttrDone("Added " + picks.map((attr) => attr.name).join(", ") + " to " + targets.length +
+          " scene" + (targets.length === 1 ? "" : "s") + ".");
+      } catch (err) {
+        setAttrError(String((err && err.message) || err));
+      } finally {
+        setAttrBusy(false);
+      }
+    }
+
+    async function undoAttrs() {
+      const snap = attrUndo;
+      if (!snap || attrBusy) return;
+      setAttrBusy(true);
+      setAttrError("");
+      setAttrDone("");
+      try {
+        for (const entry of snap.plan) {
+          for (let at = 0; at < entry.sceneIds.length; at += 200) {
+            await gql(
+              `mutation StashTokAttrUndo($ids: [ID!]!, $tags: [ID!]!) {
+                bulkSceneUpdate(input: { ids: $ids, tag_ids: { ids: $tags, mode: REMOVE } }) { id }
+              }`,
+              { ids: entry.sceneIds.slice(at, at + 200), tags: entry.tagIds }
+            );
+          }
+        }
+        const allTagIds = [];
+        snap.plan.forEach((entry) => entry.tagIds.forEach((id) => {
+          if (allTagIds.indexOf(id) < 0) allTagIds.push(id);
+        }));
+        await removePerformerTags(snap.performerId, allTagIds);
+        setAttrScenes(await loadAttrScenes(snap.performerId));
+        setAttrUndo(null);
+        setAttrDone("Removed again.");
+      } catch (err) {
+        setAttrError(String((err && err.message) || err));
+      } finally {
+        setAttrBusy(false);
+      }
+    }
+
+    function attrSheet() {
+      const scenes = attrScenes;
+      const total = scenes ? scenes.length : 0;
+      const picks = SYNC_ATTRS.filter((attr) => attrPick[attr.name]);
+      const targets = scenes
+        ? scenes.filter((scene) => picks.some((attr) => !attrHave(attr, scene))).length
+        : 0;
+      /* what is on some of her scenes and not others is the interesting row:
+         it sorts first, so the panel reads as "these are the ones to settle" */
+      const rows = SYNC_ATTRS
+        .map((attr) => ({ attr, count: attrCount(attr, scenes) }))
+        .sort((a, b) => {
+          const aPartial = scenes && a.count > 0 && a.count < total ? 0 : 1;
+          const bPartial = scenes && b.count > 0 && b.count < total ? 0 : 1;
+          if (aPartial !== bPartial) return aPartial - bPartial;
+          if (b.count !== a.count) return b.count - a.count;
+          return a.attr.name.localeCompare(b.attr.name);
+        });
+      return h(
+        Portal,
+        null,
+        h("div", { className: "stk-sheet-backdrop", onClick: () => setAttrOpen(false) }),
+        h(
+          "div",
+          { className: "stk-sheet stk-attr-sheet", onClick: (event) => event.stopPropagation() },
+          h(
+            "h3",
+            null,
+            h("span", null, "Body tags"),
+            h("button", { className: "stk-btn", onClick: () => setAttrOpen(false) }, h(Icon, { name: "x", size: 16 }))
+          ),
+          h(
+            "p",
+            { className: "stk-tag-note" },
+            "Every scene by ",
+            h("b", null, (performer && performer.name) || "this performer"),
+            " — ",
+            total || "…",
+            " scene" + (total === 1 ? "" : "s"),
+            ". Tick what is true of her. Nothing is written until you confirm."
+          ),
+          !scenes
+            ? h("p", { className: "stk-sub" }, "Reading scenes…")
+            : h(
+                "div",
+                { className: "stk-attr-grid" },
+                rows.map(({ attr, count }) => {
+                  const on = !!attrPick[attr.name];
+                  const all = total > 0 && count === total;
+                  return h(
+                    "button",
+                    {
+                      key: attr.name,
+                      type: "button",
+                      className: "stk-attrchip" + (on ? " stk-on" : "") + (all ? " stk-all" : ""),
+                      "aria-pressed": on,
+                      title: attr.kind + (attr.tags.length > 1 ? " → " + attr.tags.join(" + ") : ""),
+                      onClick: () => toggleAttr(attr.name),
+                    },
+                    h("span", { className: "stk-attrchip-name" }, attr.name),
+                    h("span", { className: "stk-attrchip-count" }, total ? count + "/" + total : "—")
+                  );
+                })
+              ),
+          attrError ? h("p", { className: "stk-attr-error" }, attrError) : null,
+          attrDone ? h("p", { className: "stk-attr-done" }, attrDone) : null,
+          h(
+            "p",
+            { className: "stk-attr-warn" },
+            "This writes to every scene at once, so it cannot be undone one scene at a time. ",
+            attrUndo
+              ? "Undo removes exactly these tags from exactly the scenes that were missing them — anything you tag by hand in between comes off too."
+              : "Undo is offered here right after the write."
+          ),
+          h(
+            "div",
+            { className: "stk-attr-actions" },
+            h(
+              "button",
+              {
+                type: "button",
+                className: "stk-btn stk-primary",
+                disabled: attrBusy || !picks.length || !targets,
+                onClick: applyAttrs,
+              },
+              attrBusy
+                ? "Working…"
+                : picks.length
+                ? "Apply to " + targets + " scene" + (targets === 1 ? "" : "s")
+                : "Pick attributes"
+            ),
+            attrUndo &&
+              h(
+                "button",
+                { type: "button", className: "stk-btn stk-btn-danger", disabled: attrBusy, onClick: undoAttrs },
+                "Undo"
+              )
+          )
+        )
+      );
+    }
+
     /* the tiles on screen right now: the same filter the grid renders with */
     function visibleScenes() {
       return folderPick
@@ -8321,6 +8929,10 @@ void main() {
           !isFolder &&
             row("dupes", "dupe", "Detect duplicates", null, () => {
               scanDuplicates();
+            }),
+          !isFolder &&
+            row("attrs", "tag", "Body tags", "Sync across every scene", () => {
+              openAttrs();
             }),
           handleText &&
             !isFolder &&
@@ -8865,6 +9477,8 @@ void main() {
             h("button", { type: "button", className: "stk-xbtn", style: { marginTop: 12 }, onClick: () => setDupes(null) }, "Close")
           )
         ),
+
+      attrOpen && attrSheet(),
 
       viewer && h(ImageViewer, { image: viewer.image, items: viewer.items, index: viewer.index, rect: viewer.rect, onClose: () => setViewer(null) }),
       photoAction &&

@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased - typing tags
+
+- **`T` tags the clip you are watching**: the sheet opens with the caret in the
+  field, so the whole flow is keyboard. Comma or Tab closes the word into a pink
+  chip and readies the field for the next one; Enter takes the highlighted
+  suggestion, else closes the word, else writes the sheet. Backspace on an empty
+  field takes the last chip back.
+- **Names are title-cased as you type** ("oil" → "Oil", "tv" → "TV"), existing
+  tags win their own casing, and a name the library has never seen is created on
+  the spot — so "oil, outside, tv, glasses, hair," is five tags in one line.
+- **Autocomplete over the real library**: 130 ms debounced `findTags`, a
+  `Create "X"` row when nothing matches, and "on scene" on suggestions the clip
+  already has.
+- **The feed no longer advances under an open sheet** — a clip that ended while
+  you were typing used to replace the scene, so the tags landed on the next clip.
+- **Body tags on the performer page** (⋯ → *Body tags*): every body/ethnicity
+  attribute with an `n/total` count, partial ones first. Nothing writes until you
+  tick and confirm; applying adds the attribute to every scene of that performer
+  *and* to the performer, and **Undo** removes exactly the tags that write added —
+  it is a snapshot, not a marker tag.
+
 ## Unreleased - modals
 
 - **Every dialog dims the page by 50% and nothing else.** One scrim colour
