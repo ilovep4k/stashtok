@@ -3320,6 +3320,39 @@ img.stk-scrub-cell {
   overscroll-behavior: contain;
   padding-bottom: 4px;
 }
+/* "+ 8 more": quiet until touched, so it never competes with a real tag */
+.stk-morepill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px dashed rgba(255, 255, 255, 0.22);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.55);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.stk-morepill:active { background: rgba(255, 255, 255, 0.07); color: #fff; }
+
+/* Category: two exclusive pills, and the drawer of children they own */
+.stk-catpill { font-weight: 600; }
+.stk-cat-drawer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 8px 0 0 10px;
+  padding-left: 10px;
+  border-left: 2px solid rgba(255, 255, 255, 0.12);
+  animation: stk-drawer 160ms ease-out;
+}
+.stk-kidchip { font-size: 12.5px; }
+@keyframes stk-drawer {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: none; }
+}
+
 .stk-tag-section { margin: 0 0 16px; }
 .stk-tag-section h4 {
   margin: 0 0 8px;

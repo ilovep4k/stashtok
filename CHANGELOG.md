@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased - one tag schema
+
+- **Six sections, in this order: Ethnicity, Category, Content Format, Body, Positions & Acts, Fetish Tags.** The scene sheet, the marker sheet and the performer body-tag panel all read the same lists (`TAG_SHEET_SECTIONS`), so a tag cannot mean one thing on a clip and something else on a performer.
+- **Category is the one exclusive pair.** `Solo` and `Sextape` cannot both be on; each owns a drawer (`Striptease/Toys/Shower`, `BG/GG/Group/Cuckold`). Picking a child implies its parent, switching parents clears the previous parent's children, and an orphaned child can no longer be saved — verified: Solo+Toys → switch → Sextape+GG writes exactly `Sextape` + `GG` and `Toys` never touches the scene.
+- **Pagination by 8** on Positions & Acts and Fetish Tags, in popularity order rather than alphabetical: `+ 8 more` grows the row, `Show less` collapses it to 8, selections survive. Typing in the search field overrides the collapse and searches every hidden tag (found `Piledriver` while the section was showing 8).
+- **The sheet opens with no network at all.** It used to fetch the whole vocabulary and 9 ethnicity thumbnails on open — 4.36 MB decoded as the modal appeared, which is what made it chug. Ethnicity is now a text pill, and ids are resolved on commit. Measured open time: 71 ms → 14 ms, images 9 → 0.
+- **Taxonomy edits:** Positions & Acts loses `Gangbang`, `Group Sex`, `Threesome`, `Lesbian`, `VR`, `Webcam`; Fetish loses `Cuckold`; `Cuckhold` is created as `Cuckold`. Ethnicity is now Asian, Ebony, Latina, White, Middle Eastern, Indian (Ebony still writes `Black` + `Ebony`, and still tags the performer when she has no ethnicity yet). Body is Big Tits, Big Ass, Curvy, Petite, Fit / Athletic.
+
 ## Unreleased - one tag sheet
 
 - **The four tag surfaces are one component.** `TagSheetShell` owns the backdrop, the sheet geometry (fixed `min(78vh, 620px)`), the title bar with its close button, the scrolling body and the footer slot; the callers now supply content only. Before this, body tags had no height and collapsed into a short 100%-wide strip while the tag sheet was a tall panel — same bottom-sheet family, four different shapes.

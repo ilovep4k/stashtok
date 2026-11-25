@@ -1557,68 +1557,82 @@
     return ((found && found.tags) || []).map((tag) => String(tag.id));
   }
 
-  /* ---- tag vocabulary ------------------------------------------------ *
-     The feed's tag sheet is laid out like the Discover page: a section
-     heading, then the tags under it. Ethnicity is the one section that also
-     writes to the performer, and Black carries Ebony on the scene as well.
-     Names follow ThePornDB's PerformerEthnicityEnum (ASIAN, BLACK, CAUCASIAN,
-     INDIAN, LATIN, MIDDLE_EASTERN, MIXED, OTHER) in the order the user uses;
-     OTHER is left out because it says nothing about a clip. */
+  /* ---- tag schema ---------------------------------------------------- *
+     One taxonomy for every tagging surface: the scene sheet, the marker sheet
+     and the performer's body-tag panel all read these lists, so a tag cannot
+     mean one thing here and something else there.
+
+     Order is deliberate. Ethnicity and Category describe the person and the
+     production, Content Format and Body are flat multi-selects, and Positions
+     and Fetish are in popularity order — the first eight carry most of the
+     tagging, the rest reveal eight at a time. */
   const ETHNICITY_TAGS = [
-    { name: "Black", performer: ["Black"], scene: ["Black", "Ebony"], thumb: "Audrey Jaymes", ethnicity: "Black" },
-    { name: "White", performer: ["White"], scene: ["White"], thumb: "Amy Reid", ethnicity: "Caucasian" },
-    { name: "Latin", performer: ["Latin"], scene: ["Latin"], thumb: "Jenaveve Jolie", ethnicity: "Latin" },
-    { name: "Asian", performer: ["Asian"], scene: ["Asian"], thumb: "Katsuni", ethnicity: "Asian" },
-    { name: "Indian", performer: ["Indian"], scene: ["Indian"], thumb: "", ethnicity: "Indian" },
-    { name: "Middle Eastern", performer: ["Middle Eastern"], scene: ["Middle Eastern"], thumb: "", ethnicity: "Middle Eastern" },
-    { name: "Mixed", performer: ["Mixed"], scene: ["Mixed"], thumb: "", ethnicity: "Mixed" },
+    { name: "Asian", performer: ["Asian"], scene: ["Asian"] },
+    /* Black and Ebony travel together: the library tags both on a black scene */
+    { name: "Ebony", performer: ["Black", "Ebony"], scene: ["Black", "Ebony"] },
+    { name: "Latina", performer: ["Latina"], scene: ["Latina"] },
+    { name: "White", performer: ["White"], scene: ["White"] },
+    { name: "Middle Eastern", performer: ["Middle Eastern"], scene: ["Middle Eastern"] },
+    { name: "Indian", performer: ["Indian"], scene: ["Indian"] },
   ];
 
-  const TAG_SECTIONS = [
-    {
-      title: "Body Tags",
-      tags: ["Big Ass", "Big Tits", "Curvy", "Fake Tits", "Mature", "MILF", "Muscular", "Natural Tits",
-        "Petite", "Piercings", "Pregnant", "Skinny", "Small Tits", "Tattoos", "Big Dick"],
-    },
-    {
-      title: "Positions & Acts",
-      tags: ["69", "Anal", "Blowjob", "Cowgirl", "Cumshot", "Deepthroat", "Doggy Style", "Double Penetration",
-        "Facial", "Gangbang", "Group Sex", "Handjob", "Lesbian", "Missionary", "Piledriver", "Prone Bone",
-        "Reverse Cowgirl", "Spooning", "Squirting", "Standing", "Threesome", "Titfuck", "VR", "Webcam"],
-    },
-    {
-      title: "Fetish Tags",
-      tags: ["BBC", "BDSM", "Blindfold", "Bondage", "Choking", "Collar", "Cuckold", "Domination",
-        "Exhibitionism", "Face Slapping", "Femdom", "Foot Fetish", "Interracial", "Latex", "Leather",
-        "Raceplay", "Roleplay", "Spanking", "Submission", "Voyeur"],
-    },
+  /* Category is the one mutually exclusive pair, and each parent owns a drawer
+     of children: picking a child implies its parent, switching parents clears
+     the other parent's children so an orphan tag can never be saved. */
+  const CATEGORY_TAGS = {
+    Solo: ["Striptease", "Toys", "Shower"],
+    Sextape: ["BG", "GG", "Group", "Cuckold"],
+  };
+  const CATEGORY_PARENTS = Object.keys(CATEGORY_TAGS);
+
+  const CONTENT_TAGS = ["Full Scene", "Short Clip", "Livestream", "Compilation"];
+  const BODY_TAGS = ["Big Tits", "Big Ass", "Curvy", "Petite", "Fit / Athletic"];
+
+  const POSITION_TAGS = [
+    "Doggy Style", "Missionary", "Cowgirl", "Reverse Cowgirl", "Blowjob", "Anal", "Facial", "Cumshot",
+    "Prone Bone", "Standing", "Titfuck", "Handjob", "Deepthroat", "69", "Spooning", "Squirting",
+    "Double Penetration", "Piledriver",
+  ];
+  const FETISH_TAGS = [
+    "BDSM", "Bondage", "Choking", "Domination", "Submission", "Roleplay", "Foot Fetish", "Interracial",
+    "BBC", "Femdom", "Spanking", "Exhibitionism", "Voyeur", "Blindfold", "Latex", "Leather",
+    "Collar", "Face Slapping", "Raceplay",
   ];
 
-  const TAG_VOCABULARY = TAG_SECTIONS.reduce(
-    (all, section) => all.concat(section.tags),
-    ETHNICITY_TAGS.reduce((all, eth) => all.concat(eth.performer, eth.scene), [])
-  );
+  /* the section order is the order the sheet draws them in */
+  const TAG_SHEET_SECTIONS = [
+    { id: "ethnicity", title: "Ethnicity", tags: ETHNICITY_TAGS.map((eth) => eth.name) },
+    { id: "category", title: "Category", parents: CATEGORY_PARENTS, children: CATEGORY_TAGS },
+    { id: "content", title: "Content Format", tags: CONTENT_TAGS },
+    { id: "body", title: "Body", tags: BODY_TAGS },
+    { id: "positions", title: "Positions & Acts", tags: POSITION_TAGS, paged: true },
+    { id: "fetish", title: "Fetish Tags", tags: FETISH_TAGS, paged: true },
+  ];
+  /* how many chips a paged section shows before "+ N more" */
+  const TAG_PAGE = 8;
 
-  /* A marker is named by one tag: positions & acts describe the moment, and the
-     fetish list is the rest of that vocabulary. Body and ethnicity tags describe
-     the performer, so they stay out of the marker picker. */
-  const MARKER_TAG_SECTIONS = TAG_SECTIONS.filter(
-    (section) => section.title === "Positions & Acts" || section.title === "Fetish Tags"
-  );
-  const MARKER_TAG_NAMES = MARKER_TAG_SECTIONS.reduce((all, section) => all.concat(section.tags), []);
+  const TAG_VOCABULARY = TAG_SHEET_SECTIONS.reduce((all, section) => {
+    if (section.parents) {
+      return all.concat(section.parents).concat(
+        section.parents.reduce((kids, parent) => kids.concat(section.children[parent]), [])
+      );
+    }
+    return all.concat(section.tags);
+  }, []);
+
+  /* a marker is named by one tag, and now offers the same six sections */
+  const MARKER_TAG_SECTIONS = TAG_SHEET_SECTIONS;
+  const MARKER_TAG_NAMES = TAG_VOCABULARY;
 
   /* Attributes belong to a person, not a clip: they are the tags the performer
-     page may push across every scene of a performer. Ethnicity carries the
-     scene-side pair Black → Black + Ebony, which is why an attribute is a list
-     of scene tags and not a single name. */
+     page may push across every scene of a performer. Ebony carries its scene
+     pair (Black + Ebony), which is why an attribute is a list of tags rather
+     than a single name. */
   const SYNC_ATTRS = ETHNICITY_TAGS.map((eth) => ({
-    name: eth.name, kind: "Ethnicity", tags: eth.scene.slice(),
-  })).concat(
-    TAG_SECTIONS.filter((section) => section.title === "Body Tags").reduce(
-      (all, section) => all.concat(section.tags.map((name) => ({ name, kind: "Body", tags: [name] }))),
-      []
-    )
-  );
+    name: eth.name,
+    kind: "Ethnicity",
+    tags: eth.scene.slice(),
+  })).concat(BODY_TAGS.map((name) => ({ name, kind: "Body", tags: [name] })));
 
   /* one request resolves the whole vocabulary: aliased findTags per name, exact
      case-insensitive match. Tags the library has never seen resolve to null and
@@ -3022,8 +3036,13 @@ void main() {
     const [card, setCard] = useState(() => PENDING_CARD);
     /* quick tagging straight from the rail */
     const [tagOpen, setTagOpen] = useState(false);
-    const [tagOptions, setTagOptions] = useState({});
     const [tagPicked, setTagPicked] = useState({});
+    /* Category: one exclusive parent, plus the drawer of children it owns */
+    const [tagCat, setTagCat] = useState("");
+    const [tagKids, setTagKids] = useState({});
+    /* how many chips each paged section shows; +8 per tap, reset on close */
+    const [tagShown, setTagShown] = useState({});
+    const [markerShown, setMarkerShown] = useState({});
     const [tagFilter, setTagFilter] = useState("");
     /* free-text queue: what the user typed and committed with , / Tab, before
        "Done" writes any of it. Names, not ids: a tag that does not exist yet is
@@ -3045,6 +3064,18 @@ void main() {
     /* add marker: M (or right-click) freezes the in point, one tag names it */
     const [markerAt, setMarkerAt] = useState(null);
     const [markerName, setMarkerName] = useState("");
+    /* the name field doubles as a search, but only while it is being typed:
+       picking a chip must not filter the sheet down to that one word */
+    const [markerTyping, setMarkerTyping] = useState(false);
+    /* the marker sheet is single-select, so its Category drawer follows the
+       chosen name: a parent is itself, a child inherits its parent */
+    const markerCategory = (() => {
+      const name = markerName.trim().toLowerCase();
+      if (!name) return "";
+      const direct = CATEGORY_PARENTS.find((parent) => parent.toLowerCase() === name);
+      if (direct) return direct;
+      return CATEGORY_PARENTS.find((parent) => CATEGORY_TAGS[parent].some((kid) => kid.toLowerCase() === name)) || "";
+    })();
     const [markerBusy, setMarkerBusy] = useState(false);
     const [markerUndo, setMarkerUndo] = useState(null);
     const markerUndoTimer = useRef(0);
@@ -4284,29 +4315,21 @@ void main() {
       buzz(12);
     }, [item, rating, cfg.heartRating, commitRating]);
 
-    const openTagSheet = useCallback(async () => {
+    /* Opening the sheet does no work at all: no vocabulary request, no
+       thumbnails, no images. Names are resolved when the user commits, so the
+       sheet is on screen before the first frame is painted. */
+    const openTagSheet = useCallback(() => {
       if (!item) return;
       setTagOpen(true);
       setTagFilter("");
       setTagQueue([]);
       setTagSugg([]);
       setTagSuggSel(-1);
-      if (!Object.keys(tagOptions).length) {
-        resolveTagNames(TAG_VOCABULARY)
-          .then((ids) => {
-            Object.keys(ids).forEach((name) => {
-              if (ids[name]) tagIdCache.current[name.toLowerCase()] = ids[name];
-            });
-            setTagOptions(ids);
-          })
-          .catch((err) => setError(String(err.message || err)));
-      }
-      if (!Object.keys(ethThumbs).length) {
-        fetchEthnicityThumbs()
-          .then((rows) => setEthThumbs(rows))
-          .catch(() => undefined);
-      }
-    }, [item, tagOptions, ethThumbs]);
+      setTagPicked({});
+      setTagCat("");
+      setTagKids({});
+      setTagShown({});
+    }, [item]);
 
     /* merge tags into the clip on screen so the caption updates without a refetch */
     const mergeSceneTags = useCallback(
@@ -4497,18 +4520,44 @@ void main() {
     }, [tagFilter, tagOpen]);
 
     const commitTags = useCallback(async () => {
+      /* read the performer here rather than closing over a value declared later
+         in the component: the dependency array is evaluated at render time */
+      const ethPerformer = ((item && item.scene && item.scene.performers) || [])[0] || null;
+      const ethLocked = !!(ethPerformer && String(ethPerformer.ethnicity || "").trim());
       const picked = Object.keys(tagPicked).filter((name) => tagPicked[name]);
+      const kids = Object.keys(tagKids).filter((name) => tagKids[name]);
       /* a name typed but not yet closed with a comma still counts: hitting Done
          right after typing must not silently drop it */
       const pending = splitTagInput(tagFilter);
-      const names = [];
+      const base = [];
       const seen = {};
-      pending.concat(tagQueue, picked).forEach((name) => {
+      pending.concat(tagQueue, picked, tagCat ? [tagCat] : [], kids).forEach((name) => {
         const key = String(name).trim().toLowerCase();
         if (!key || seen[key]) return;
         seen[key] = true;
-        names.push(String(name).trim());
+        base.push(String(name).trim());
       });
+
+      /* an ethnicity chip carries its scene pair (Ebony writes Black + Ebony)
+         and, when the performer has no ethnicity yet, is a fact about her too */
+      const names = [];
+      const sceneSeen = {};
+      const performerNames = [];
+      base.forEach((name) => {
+        const eth = ETHNICITY_TAGS.find((row) => row.name.toLowerCase() === name.toLowerCase());
+        (eth ? eth.scene : [name]).forEach((tagName) => {
+          const key = tagName.trim().toLowerCase();
+          if (!key || sceneSeen[key]) return;
+          sceneSeen[key] = true;
+          names.push(tagName.trim());
+        });
+        if (eth && ethPerformer && !ethLocked) {
+          eth.performer.forEach((tagName) => {
+            if (performerNames.indexOf(tagName) < 0) performerNames.push(tagName);
+          });
+        }
+      });
+
       if (!item || !item.scene || !names.length) {
         setTagOpen(false);
         return;
@@ -4522,24 +4571,35 @@ void main() {
         const hadScene = new Set((item.scene.tags || []).map((tag) => String(tag.id)));
         await addSceneTags(item.scene.id, ids);
         mergeSceneTags(item.scene.id, names.map((name, i) => ({ id: ids[i], name })));
+
+        let performerTagIds = [];
+        if (performerNames.length && ethPerformer && !ethLocked) {
+          for (let i = 0; i < performerNames.length; i += 1) {
+            performerTagIds.push(await ensureTagId(performerNames[i], tagIdCache.current));
+          }
+          await addPerformerTags(ethPerformer.id, performerTagIds);
+        }
+
         noteUndo({
           sceneId: item.scene.id,
           sceneTagIds: ids.filter((id) => !hadScene.has(String(id))),
-          performerId: null,
-          performerTagIds: [],
+          performerId: performerTagIds.length ? ethPerformer.id : null,
+          performerTagIds: performerTagIds,
           label: names.length === 1 ? names[0] : names.length + " tags",
         });
         setTagPicked({});
         setTagQueue([]);
         setTagFilter("");
         setTagSugg([]);
+        setTagCat("");
+        setTagKids({});
         setTagOpen(false);
       } catch (err) {
         setError(String(err.message || err));
       } finally {
         setTagBusy(false);
       }
-    }, [item, tagPicked, tagQueue, tagFilter, mergeSceneTags, noteUndo]);
+    }, [item, tagPicked, tagKids, tagCat, tagQueue, tagFilter, mergeSceneTags, noteUndo]);
 
     /* ---- markers -------------------------------------------------------
        A Stash SceneMarker is a start point (seconds) plus a primary tag; the
@@ -4591,18 +4651,9 @@ void main() {
         setCtxMenu(null);
         setMarkerName("");
         setMarkerAt(Math.round(seconds * 100) / 100);
-        if (!Object.keys(tagOptions).length) {
-          resolveTagNames(MARKER_TAG_NAMES)
-            .then((ids) => {
-              Object.keys(ids).forEach((name) => {
-                if (ids[name]) tagIdCache.current[name.toLowerCase()] = ids[name];
-              });
-              setTagOptions(ids);
-            })
-            .catch(() => undefined);
-        }
+        setMarkerShown({});
       },
-      [item, duration, tagOptions, activeVideo]
+      [item, duration, activeVideo]
     );
 
     const createMarker = useCallback(async () => {
@@ -5470,15 +5521,11 @@ void main() {
        under it. Chips are keyed by tag NAME (the section lists are names; ids
        are resolved when the user commits), and a tag the scene already has
        paints as applied and cannot be picked twice. */
-    const tagQuery = tagFilter.trim().toLowerCase();
     const sceneTagNames = new Set((scene.tags || []).map((tag) => String(tag.name).trim().toLowerCase()));
     const ethnicityPerformer = performers[0] || null;
     /* a filled-in performer ethnicity is authoritative: the scene write leaves it
        alone (Wario is populated, the OF library is not) */
     const ethnicityLocked = !!(ethnicityPerformer && String(ethnicityPerformer.ethnicity || "").trim());
-    const tagSectionMatches = TAG_SECTIONS.some(
-      (section) => !tagQuery || section.tags.some((name) => name.toLowerCase().includes(tagQuery))
-    );
 
     /* what the typed word would become if committed: shown as a "Create …" row
        when the library has no exact match, and it is also what , / Tab adds */
@@ -5502,7 +5549,12 @@ void main() {
 
     /* everything the Done button is about to write: typed, queued, ticked */
     const tagPending = splitTagInput(tagFilter)
-      .concat(tagQueue, Object.keys(tagPicked).filter((name) => tagPicked[name]))
+      .concat(
+        tagQueue,
+        Object.keys(tagPicked).filter((name) => tagPicked[name]),
+        tagCat ? [tagCat] : [],
+        Object.keys(tagKids).filter((name) => tagKids[name])
+      )
       .filter((name, at, all) => all.findIndex((other) => other.toLowerCase() === name.toLowerCase()) === at);
 
     /* separators are read from the value, not from the keydown: the browser
@@ -5556,98 +5608,46 @@ void main() {
       }
     }
 
-    function tagChip(name) {
-      const already = sceneTagNames.has(name.trim().toLowerCase());
-      const on = already || !!tagPicked[name];
-      return h(
-        "button",
-        {
-          key: name,
-          className: "stk-tagpick" + (on ? " stk-on" : "") + (already ? " stk-have" : ""),
-          title: already ? "Already on this scene" : name,
-          disabled: already,
-          onClick: () => setTagPicked((prev) => Object.assign({}, prev, { [name]: !prev[name] })),
-        },
-        name
-      );
+    /* ---- selection ---------------------------------------------------- *
+       Everything except Category is a plain on/off name. Category is the one
+       exclusive pair: picking a parent clears the other parent's children, so a
+       child can never survive its parent, and picking a child implies its
+       parent. */
+    function tagIsOn(name) {
+      return sceneTagNames.has(name.trim().toLowerCase()) || !!tagPicked[name];
     }
 
-    function tagSection(title, names, key) {
-      const shown = names.filter((name) => !tagQuery || name.toLowerCase().includes(tagQuery));
-      if (!shown.length) return null;
-      return h(
-        "div",
-        { key, className: "stk-tag-section" },
-        h("h4", null, title),
-        h("div", { className: "stk-tag-grid" }, shown.map(tagChip))
-      );
+    function toggleTagName(name) {
+      if (sceneTagNames.has(name.trim().toLowerCase())) return;
+      setTagPicked((prev) => Object.assign({}, prev, { [name]: !prev[name] }));
     }
 
-    function ethnicitySection() {
-      return h(
-        "div",
-        { className: "stk-tag-section stk-tag-ethsec" },
-        h("h4", null, "Performer Ethnicity"),
-        h(
-          "p",
-          { className: "stk-tag-note" },
-          !ethnicityPerformer
-            ? "No performer on this scene — only the scene tag will be set."
-            : ethnicityLocked
-            ? h(
-                React.Fragment,
-                null,
-                h("b", null, ethnicityPerformer.name),
-                " is already ",
-                String(ethnicityPerformer.ethnicity),
-                " — only this scene will be tagged."
-              )
-            : h(
-                React.Fragment,
-                null,
-                "Ethnicity will be attributed to ",
-                h("b", null, ethnicityPerformer.name),
-                " as well as this scene."
-              )
-        ),
-        h(
-          "div",
-          { className: "stk-eth-row" },
-          ETHNICITY_TAGS.map((eth) => {
-            const have = eth.scene.filter((name) => sceneTagNames.has(name.trim().toLowerCase())).length;
-            /* all of its scene tags are on: nothing to write, so it reads as set
-               and cannot be tapped again. Some of them: half a ring, a tap adds
-               the rest. */
-            const already = have === eth.scene.length;
-            const partial = !already && have > 0;
-            const busy = ethBusy === eth.name;
-            const thumb = ethThumbs[eth.name];
-            return h(
-              "button",
-              {
-                key: eth.name,
-                className:
-                  "stk-eth" + (already ? " stk-on" : "") + (partial ? " stk-part" : "") + (busy ? " stk-busy" : ""),
-                disabled: !!ethBusy || already,
-                title: already ? "Already tagged" : eth.scene.join(" + "),
-                onClick: () => applyEthnicity(eth),
-              },
-              h(
-                "span",
-                { className: "stk-eth-circle" },
-                thumb && thumb.src
-                  ? h("img", { src: thumb.src, alt: "", loading: "lazy" })
-                  : h("span", { className: "stk-eth-initial" }, eth.name.charAt(0))
-              ),
-              h("span", { className: "stk-eth-label" }, busy ? "Saving…" : eth.name)
-            );
-          })
-        )
-      );
+    function toggleCategory(name) {
+      if (tagCat === name) {
+        setTagCat("");
+        setTagKids({});
+        return;
+      }
+      setTagCat(name);
+      setTagKids({});
     }
 
+    function toggleChild(parent, name) {
+      if (tagCat !== parent) {
+        setTagCat(parent);
+        setTagKids({ [name]: true });
+        return;
+      }
+      setTagKids((prev) => Object.assign({}, prev, { [name]: !prev[name] }));
+    }
 
-
+    function showMore(sectionId, total, setter) {
+      setter((prev) => {
+        const current = prev[sectionId] || TAG_PAGE;
+        const next = current >= total ? TAG_PAGE : Math.min(total, current + TAG_PAGE);
+        return Object.assign({}, prev, { [sectionId]: next });
+      });
+    }
 
     return h(
       "div",
@@ -6684,7 +6684,10 @@ void main() {
               className: "stk-tag-search stk-marker-input",
               placeholder: "Type a name or pick one below…",
               value: markerName,
-              onChange: (event) => setMarkerName(event.target.value),
+              onChange: (event) => {
+                setMarkerName(event.target.value);
+                setMarkerTyping(true);
+              },
               onKeyDown: (event) => {
                 if (event.key !== "Enter") return;
                 event.preventDefault();
@@ -6696,34 +6699,25 @@ void main() {
             h(
               "div",
               { className: "stk-tag-scroll" },
-              h(
-                "div",
-                { className: "stk-marker-tags" },
-                MARKER_TAG_SECTIONS.map((section) =>
-                  h(
-                    "div",
-                    { key: section.title, className: "stk-tag-section" },
-                    h("h4", null, section.title),
-                    h(
-                      "div",
-                      { className: "stk-tag-grid" },
-                      section.tags.map((name) => {
-                        const on = markerName.trim().toLowerCase() === name.toLowerCase();
-                        return h(
-                          "button",
-                          {
-                            key: name,
-                            type: "button",
-                            className: "stk-tagpick" + (on ? " stk-on" : ""),
-                            onClick: () => setMarkerName((cur) => (cur.trim().toLowerCase() === name.toLowerCase() ? "" : name)),
-                          },
-                          name
-                        );
-                      })
-                    )
-                  )
-                )
-              )
+              h(TagSections, {
+                query: markerTyping ? markerName : "",
+                shown: markerShown,
+                onMore: (sectionId, total) => showMore(sectionId, total, setMarkerShown),
+                isOn: (name) => markerName.trim().toLowerCase() === String(name).toLowerCase(),
+                onToggle: (name) => {
+                  setMarkerTyping(false);
+                  setMarkerName((cur) => (cur.trim().toLowerCase() === String(name).toLowerCase() ? "" : name));
+                },
+                category: markerCategory,
+                onCategory: (name) => {
+                  setMarkerTyping(false);
+                  setMarkerName((cur) => (cur.trim().toLowerCase() === String(name).toLowerCase() ? "" : name));
+                },
+                onChild: (parent, name) => {
+                  setMarkerTyping(false);
+                  setMarkerName((cur) => (cur.trim().toLowerCase() === String(name).toLowerCase() ? parent : name));
+                },
+              })
             )
           ),
 
@@ -6833,9 +6827,17 @@ void main() {
             h(
               "div",
               { className: "stk-tag-scroll" },
-              !tagQuery && ethnicitySection(),
-              TAG_SECTIONS.map((section) => tagSection(section.title, section.tags, section.title)),
-              tagQuery && !tagSectionMatches && h("div", { className: "stk-tag-empty" }, "No tag matches \u201c" + tagFilter.trim() + "\u201d.")
+              h(TagSections, {
+                query: tagFilter,
+                shown: tagShown,
+                onMore: (sectionId, total) => showMore(sectionId, total, setTagShown),
+                isOn: tagIsOn,
+                isChildOn: (name) => !!tagKids[name] || sceneTagNames.has(String(name).trim().toLowerCase()),
+                onToggle: toggleTagName,
+                category: tagCat,
+                onCategory: toggleCategory,
+                onChild: toggleChild,
+              })
             )
           ),
 
@@ -6974,6 +6976,124 @@ void main() {
       };
     }, [open]);
     return ref;
+  }
+
+  /* ---- the six sections, drawn the same way everywhere ------------------
+     A section is either a flat chip grid or (Category) a pair of exclusive
+     parents with a child drawer. Paged sections show TAG_PAGE chips and grow
+     eight at a time; a search query overrides the pagination so a hidden tag
+     is never unreachable by typing. */
+  function TagSections({ query, shown, onMore, isOn, isChildOn, onToggle, category, onCategory, onChild }) {
+    const kidOn = isChildOn || isOn;
+    const q = String(query || "").trim().toLowerCase();
+    const matches = (name) => !q || String(name).toLowerCase().includes(q);
+
+    const chip = (name, extraClass) => {
+      const on = isOn(name);
+      return h(
+        "button",
+        {
+          key: name,
+          type: "button",
+          className: "stk-tagpick" + (on ? " stk-on" : "") + (extraClass ? " " + extraClass : ""),
+          "aria-pressed": on,
+          onClick: () => onToggle(name),
+        },
+        name
+      );
+    };
+
+    return TAG_SHEET_SECTIONS.map((section) => {
+      if (section.parents) {
+        const ownerOf = (name) =>
+          section.parents.find((parent) =>
+            (section.children[parent] || []).some((kid) => kid.toLowerCase() === String(name).toLowerCase())
+          ) || "";
+        /* a query surfaces children even with the drawer closed; otherwise the
+           drawer only exists for the selected parent */
+        const kidRows = [];
+        if (q) {
+          section.parents.forEach((parent) => {
+            (section.children[parent] || []).filter(matches).forEach((name) => kidRows.push(name));
+          });
+        } else if (category) {
+          (section.children[category] || []).forEach((name) => kidRows.push(name));
+        }
+        const anyParent = section.parents.some(matches);
+        if (!anyParent && !kidRows.length) return null;
+        return h(
+          "div",
+          { key: section.id, className: "stk-tag-section stk-cat-section" },
+          h("h4", null, section.title),
+          h(
+            "div",
+            { className: "stk-tag-grid" },
+            section.parents.map((name) =>
+              h(
+                "button",
+                {
+                  key: name,
+                  type: "button",
+                  className: "stk-tagpick stk-catpill" + (category === name ? " stk-on" : ""),
+                  "aria-pressed": category === name,
+                  onClick: () => onCategory(name),
+                },
+                name
+              )
+            )
+          ),
+          kidRows.length
+            ? h(
+                "div",
+                { className: "stk-cat-drawer" },
+                kidRows.map((name) =>
+                  h(
+                    "button",
+                    {
+                      key: name,
+                      type: "button",
+                      className: "stk-tagpick stk-kidchip" + (kidOn(name) ? " stk-on" : ""),
+                      "aria-pressed": kidOn(name),
+                      /* a child is picked through its parent, so picking one
+                         always selects the parent it belongs to */
+                      onClick: () => onChild(ownerOf(name), name),
+                    },
+                    name
+                  )
+                )
+              )
+            : null
+        );
+      }
+
+      const all = section.tags.filter(matches);
+      if (!all.length) return null;
+      const limit = section.paged && !q ? Math.min(shown[section.id] || TAG_PAGE, all.length) : all.length;
+      const visible = all.slice(0, limit);
+      const remaining = all.length - limit;
+      return h(
+        "div",
+        { key: section.id, className: "stk-tag-section" },
+        h("h4", null, section.title),
+        h(
+          "div",
+          { className: "stk-tag-grid" },
+          visible.map((name) => chip(name)),
+          section.paged && !q
+            ? h(
+                "button",
+                {
+                  key: "__more",
+                  type: "button",
+                  className: "stk-morepill",
+                  onClick: () => onMore(section.id, all.length),
+                },
+                remaining > 0 ? "+ " + Math.min(TAG_PAGE, remaining) + " more" : "Show less"
+              )
+            : null
+        )
+      );
+    });
   }
 
   /* ---- one shell for every tag surface ----------------------------------
