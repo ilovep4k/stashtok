@@ -3154,6 +3154,9 @@ void main() {
     const pressTimer = useRef(0);
     const tapTimer = useRef(null);
     const lastTapAt = useRef(0);
+    /* the moment a tap un-zoomed the frame: a second tap inside the same double
+       belongs to that gesture and must not fall through to play/pause */
+    const swallowTapRef = useRef(0);
     /* what the first tap of a possible double tap did, so the second can undo it */
     const tapUndoRef = useRef(null);
     const cropModeRef = useRef(cropMode);
@@ -5147,9 +5150,20 @@ void main() {
           window.clearTimeout(cropBadgeTimer.current);
           setCropBadge(cropLabel(cropModeRef.current));
           cropBadgeTimer.current = window.setTimeout(() => setCropBadge(""), 900);
+          /* this tap is the first half of a double tap more often than not, and it
+             is not recorded as one: without the marker the second tap reads as a
+             lone tap and pauses the clip, so un-zooming looked like "two taps
+             pauses". Swallow the partner instead of pausing on it. */
+          swallowTapRef.current = performance.now();
+          window.clearTimeout(tapTimer.current);
+          tapUndoRef.current = null;
           return;
         }
         const now = performance.now();
+        if (swallowTapRef.current && now - swallowTapRef.current <= DOUBLE_TAP_MS) {
+          swallowTapRef.current = 0;
+          return;
+        }
         const isDouble = lastTapAt.current && now - lastTapAt.current <= DOUBLE_TAP_MS;
         if (isDouble) {
           lastTapAt.current = 0;
