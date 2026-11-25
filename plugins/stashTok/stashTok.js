@@ -6342,7 +6342,7 @@ void main() {
           "div",
           { className: "stk-pause" + (!playing && ready ? " stk-show" : "") },
           /* keyed so the glyph remounts and its entrance runs on every swap: the
-             path would otherwise teleport inside the circle */
+             circle is already fading, and an unkeyed path change teleports */
           h(Icon, { key: playing ? "pause" : "play", name: playing ? "pause" : "play", size: 32 })
         ),
 
@@ -7295,11 +7295,14 @@ void main() {
 
   /* Fades the arriving page in. The animation is restarted through a data attribute
      instead of a React key: a key would remount the page's own component on every
-     sub-page change (a settings section, a tag's own page) and re-run its queries.
-     React does not manage this attribute, so the imperative write survives — the
+     sub-page change (settings sections, a tag page) and re-run its queries. React
+     never writes this attribute, so an imperative write survives its renders — the
      same trap the scroll reveal's data-in documents. */
   function PageSwap({ swapKey, tab, children }) {
     const ref = useRef(null);
+    /* layout effect, not effect: the attribute has to be set before the browser
+       paints, or the page shows at full opacity for one frame and then jumps back
+       to the animation's from-state */
     useLayoutEffect(() => {
       const el = ref.current;
       if (!el) return;
@@ -10654,8 +10657,8 @@ void main() {
       };
     }, [query, sort, favoritesOnly]);
 
-    /* the list and the profile are two pages of this tab: fade between them
-       instead of cutting */
+    /* the list and the profile are two pages of this one tab, so the swap between
+       them fades like any other page arrival instead of cutting */
     if (selected) {
       return h(
         PageSwap,
@@ -12292,104 +12295,174 @@ void main() {
      which is not what a tag means — a scene is the unit you land on, and the
      ordering chips decide what the grid shows. Play turns the order you just
      picked into the feed, and tapping a tile starts it at that scene. */
-  function TagPage({ tagId, name, onBack, onPlay }) {
-    const [tag, setTag] = useState(null);
-    const [scenes, setScenes] = useState(null);
-    const [total, setTotal] = useState(null);
-    const [sort, setSort] = useState("date");
+  /* ---- a tag, as a set of rows ----------------------------------------- *
+   * A tag page used to be one flat grid with a sort switch, which says nothing
+   * about a tag: the same 48 scenes whatever you asked for. A tag is a slice of
+   * the library, so the page reads like discovery — a few dozen scenes per row,
+   * each row a different question ("what is newest", "what rates best", "what
+   * else does this tag travel with"), each with its own Play pill. Nothing here
+   * promises a moment inside the video; these are whole scenes that carry the
+   * tag, which is exactly what a tag means. */
+  const TAG_CARD_FIELDS = "id title rating100 paths { screenshot } files { duration }";
 
-    const ORDERS = [
-      { id: "date", label: "Latest", sort: "date", dir: "DESC" },
-      { id: "random", label: "Random", sort: "random", dir: "DESC" },
-      { id: "rating", label: "Top rated", sort: "rating", dir: "DESC" },
-      { id: "duration", label: "Longest", sort: "duration", dir: "DESC" },
-    ];
-    const order = ORDERS.filter((row) => row.id === sort)[0] || ORDERS[0];
+  function TagRow({ title, hint, scenes, onPlay, onOpen, loading }) {
+    if (!loading && (!scenes || !scenes.length)) return null;
+    return h(
+      "section",
+      { className: "stk-row" },
+      h(
+        "div",
+        { className: "stk-row-head" },
+        h("span", { className: "stk-row-title" }, title),
+        hint ? h("span", { className: "stk-row-hint" }, hint) : null,
+        h(
+          "button",
+          { type: "button", className: "stk-row-play", onClick: onPlay, title: "Play this row as a feed" },
+          h(Icon, { name: "play", size: 13 }),
+          "Play"
+        )
+      ),
+      loading
+        ? h("div", { className: "stk-row-strip" }, [0, 1, 2, 3].map((n) => h("div", { key: n, className: "stk-card stk-card-skel" })))
+        : h(
+            "div",
+            { className: "stk-row-strip" },
+            scenes.map((scene) => h(SceneCard, { key: scene.id, scene, onOpen: () => onOpen(scene) }))
+          )
+    );
+  }
+
+  function TagPage({ tagId, name, onBack, onPlay, onPlayPair }) {
+    const [tag, setTag] = useState(null);
+    const [rows, setRows] = useState(null);
+    const [pair, setPair] = useState(null);
+    const [pairScenes, setPairScenes] = useState([]);
 
     useEffect(() => {
       let alive = true;
-      setScenes(null);
+      setRows(null);
+      setPair(null);
       /* the tag id is inlined as a quoted string: a MultiCriterionInput value is
          [String!], not [ID!], so a variable typed ID fails the whole query */
-      const idLiteral = JSON.stringify(String(tagId).replace(/\D/g, ""));
+      const id = JSON.stringify(String(tagId).replace(/\D/g, ""));
+      const slice = (alias, sort, dir) =>
+        `${alias}: findScenes(filter: { per_page: 12, sort: "${sort}", direction: ${dir} },
+           scene_filter: { tags: { value: [${id}], modifier: INCLUDES } }) { scenes { ${TAG_CARD_FIELDS} } }`;
       gql(
-        `query StashTokTagPage($sort: String, $dir: SortDirectionEnum) {
-          findTag(id: ${idLiteral}) { id name scene_count scene_marker_count description }
-          findScenes(filter: { per_page: 48, sort: $sort, direction: $dir }, scene_filter: { tags: { value: [${idLiteral}], modifier: INCLUDES } }) {
-            count
-            scenes { id title rating100 paths { screenshot } files { duration } }
-          }
-        }`,
-        { sort: order.sort, dir: order.dir }
+        `query StashTokTagRows {
+          findTag(id: ${id}) { id name scene_count scene_marker_count description }
+          ${slice("latest", "date", "DESC")}
+          ${slice("shuffle", "random", "DESC")}
+          ${slice("rated", "rating", "DESC")}
+          ${slice("watched", "play_count", "DESC")}
+          ${slice("longest", "duration", "DESC")}
+          cooccur: findScenes(filter: { per_page: 150 },
+            scene_filter: { tags: { value: [${id}], modifier: INCLUDES } }) { scenes { tags { id name } } }
+        }`
       )
         .then((data) => {
           if (!alive) return;
           setTag(data.findTag);
-          setScenes((data.findScenes && data.findScenes.scenes) || []);
-          setTotal((data.findScenes && data.findScenes.count) || 0);
+          setRows([
+            { id: "latest", title: "Latest", hint: "newest first", sort: "date", scenes: data.latest.scenes },
+            { id: "shuffle", title: "Shuffle", hint: "random from the tag", sort: "random", scenes: data.shuffle.scenes },
+            { id: "rated", title: "Top rated", hint: "your stars", sort: "rating", scenes: data.rated.scenes },
+            { id: "watched", title: "Most watched", hint: "by play count", sort: "play_count", scenes: data.watched.scenes },
+            { id: "longest", title: "Longest", hint: "the slow ones", sort: "duration", scenes: data.longest.scenes },
+          ]);
+          /* what this tag keeps company with: counted across its scenes, and the
+             usual wallpaper (All Sex, HD, …) never wins a row */
+          const selfId = String(tagId).replace(/\D/g, "");
+          const skip = new Set(["all sex", "hardcore", "sex", "hd", "amateur", "porn", "straight"]);
+          const seen = {};
+          (data.cooccur.scenes || []).forEach((scene) => {
+            (scene.tags || []).forEach((t) => {
+              const key = String(t.name || "").toLowerCase();
+              /* skip by id as well as by the wallpaper list: matching the id
+                 against a name never fires, and the tag would pair with itself */
+              if (!t.id || String(t.id) === selfId || skip.has(key)) return;
+              if (!seen[t.id]) seen[t.id] = { id: String(t.id), name: t.name, n: 0 };
+              seen[t.id].n += 1;
+            });
+          });
+          const best = Object.keys(seen).map((k) => seen[k]).sort((x, y) => y.n - x.n)[0];
+          if (!best || best.n < 2) return;
+          setPair(best);
+          /* the pair's own row is not this tag's scenes: it is the scenes that
+             carry both, which is a different (and much better) strip */
+          const both = JSON.stringify([String(tagId).replace(/\D/g, ""), best.id]);
+          gql(
+            `query StashTokTagPair {
+              findScenes(filter: { per_page: 12, sort: "random" },
+                scene_filter: { tags: { value: ${both}, modifier: INCLUDES_ALL } }) {
+                scenes { ${TAG_CARD_FIELDS} }
+              }
+            }`
+          )
+            .then((data) => alive && setPairScenes((data.findScenes && data.findScenes.scenes) || []))
+            .catch(() => undefined);
         })
-        .catch(() => alive && setScenes([]));
+        .catch(() => alive && setRows([]));
       return () => {
         alive = false;
       };
-    }, [tagId, sort]);
+    }, [tagId]);
 
     const label = (tag && tag.name) || name || "Tag";
+    const latest = rows && rows.length ? rows[0].scenes : null;
+
     return h(
       "div",
-      { className: "stk-page" },
+      { className: "stk-page stk-tagpage" },
       h(
         "div",
         { className: "stk-page-head" },
         h("button", { className: "stk-page-back", title: "Back", onClick: onBack }, h(Icon, { name: "back", size: 19 })),
-        h("span", { className: "stk-page-title stk-page-title-lg" }, label)
+        h("span", { className: "stk-page-title stk-page-title-lg" }, label),
+        h(
+          "button",
+          { type: "button", className: "stk-row-play stk-page-play", onClick: () => onPlay({ id: tagId, name: label }, "random") },
+          h(Icon, { name: "play", size: 13 }),
+          "Play"
+        )
       ),
       h(
         "p",
         { className: "stk-sub" },
-        total == null
-          ? " "
-          : fmtCount(total) + " scenes" +
-            (tag && tag.scene_marker_count ? " \u00b7 " + fmtCount(tag.scene_marker_count) + " markers" : "")
+        tag
+          ? fmtCount(tag.scene_count) + " scenes" +
+            (tag.scene_marker_count ? " \u00b7 " + fmtCount(tag.scene_marker_count) + " markers" : "")
+          : " "
       ),
-      h(
-        "div",
-        { className: "stk-chips" },
-        h(
-          "button",
-          {
-            className: "stk-chip stk-chip-primary",
-            onClick: () => onPlay({ id: tagId, name: label }, order.sort),
-          },
-          h(Icon, { name: "play", size: 15 }),
-          "Play " + order.label.toLowerCase()
-        ),
-        ORDERS.map((row) =>
-          h(
-            "button",
-            {
-              key: row.id,
-              className: "stk-chip" + (row.id === sort ? " stk-chip-on" : ""),
-              onClick: () => setSort(row.id),
-            },
-            row.label
-          )
-        )
-      ),
-      !scenes
-        ? h("div", { className: "stk-state" }, h("div", { className: "stk-spinner" }))
-        : !scenes.length
+      !rows
+        ? h("div", null, [0, 1].map((n) => h(TagRow, { key: n, title: "", loading: true })))
+        : !latest || !latest.length
         ? h("div", { className: "stk-state" }, "No scenes carry this tag yet")
         : h(
             "div",
-            { className: "stk-grid" },
-            scenes.map((scene) =>
-              h(SceneCard, {
-                key: scene.id,
-                scene,
-                onOpen: (picked) => onPlay({ id: tagId, name: label }, order.sort, picked),
+            null,
+            rows.map((row) =>
+              h(TagRow, {
+                key: row.id,
+                title: row.title,
+                hint: row.hint,
+                scenes: row.scenes,
+                loading: false,
+                onPlay: () => onPlay({ id: tagId, name: label }, row.sort),
+                onOpen: (scene) => onPlay({ id: tagId, name: label }, row.sort, scene),
               })
-            )
+            ),
+            pair && onPlayPair
+              ? h(TagRow, {
+                  key: "pair",
+                  title: "Often with " + pair.name,
+                  hint: "the same scenes, both tags",
+                  scenes: pairScenes,
+                  loading: false,
+                  onPlay: () => onPlayPair([String(tagId), pair.id], label + " + " + pair.name),
+                  onOpen: () => onPlayPair([String(tagId), pair.id], label + " + " + pair.name),
+                })
+              : null
           )
     );
   }
@@ -15147,7 +15220,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
     useEffect(() => {
       const down = (event) => {
         const target = event.target;
-        const host = target && target.closest && target.closest(".stk-tile, .stk-account, .stk-search-row, .stk-cover");
+        const host = target && target.closest && target.closest(".stk-tile, .stk-account, .stk-search-row, .stk-cover, .stk-card");
         if (host) host.classList.add("stk-peek");
       };
       const up = () => {
@@ -15309,6 +15382,23 @@ function TagsPage({ onPick, onMarkers, onBack }) {
       }
       /* /markers/<id>/<name> is the marker feed for one tag; the name rides in
          the route so the feed is identifiable before its first page lands */
+      /* /tagpair/<id>/<id> is two tags ANDed: the "often with" row's feed */
+      if (rest.indexOf("tagpair/") === 0) {
+        const ids = rest.split("/").slice(1).map((part) => part.replace(/\D/g, "")).filter(Boolean);
+        setPerformerFilter(null);
+        setTagProfile(null);
+        setActiveFeed({
+          id: "tagpair-" + ids.join("-"),
+          name: "Two tags",
+          type: "tags",
+          tags: ids,
+          tagMode: "AND",
+          sort: "random",
+          origin: { kind: "tag", tagId: ids[0] || "", name: "Two tags" },
+        });
+        setTab("home");
+        return;
+      }
       if (rest.indexOf("markers/") === 0) {
         const parts = rest.split("/");
         /* /markers/name/<name> is a marker-NAME collection: every marker that
@@ -15874,6 +15964,29 @@ function TagsPage({ onPick, onMarkers, onBack }) {
       goTo(route);
     }
 
+    /* two tags at once: the "often with" row runs on AND, not OR, because the
+       point is the scenes that carry both */
+    function startTagPairFeed(ids, name) {
+      const list = (ids || []).map((id) => String(id));
+      if (!list.length) return;
+      setTagFilter(null);
+      setPerformerFilter(null);
+      setTagProfile(null);
+      setActiveFeed({
+        id: "tagpair-" + list.join("-"),
+        name: name || "Two tags",
+        type: "tags",
+        tags: list,
+        tagMode: "AND",
+        sort: "random",
+        origin: { kind: "tag", tagId: list[0], name: name || "Two tags" },
+      });
+      setTab("home");
+      setRefreshKey((n) => n + 1);
+      routeClaimRef.current = "tagpair/" + list.join("/");
+      goTo("tagpair/" + list.join("/"));
+    }
+
     /* the markers button on a tag row: the marker feed for that one tag */
     function openMarkers(tag) {
       const id = tag ? String(tag.id) : "";
@@ -16102,6 +16215,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
               goTo("tags");
             },
             onPlay: startTagFeed,
+            onPlayPair: startTagPairFeed,
           })
         : h(TagsPage, { onPick: openTagPage, onMarkers: openMarkers, onBack: () => setTab("home") });
     } else if (tab === "markers") {
@@ -16386,9 +16500,9 @@ function TagsPage({ onPick, onMarkers, onBack }) {
       });
     }
 
-    /* What the shell is showing — the key the page wrapper fades on. Only identity
-       changes belong here: a sub-page swap inside one tab must fade without
-       remounting the page's component. */
+    /* What the shell is showing right now — the key the page wrapper fades on. Only
+       identity changes belong here: a sub-page swap inside one tab (a settings
+       section, a tag's own page) must fade without remounting the page's component. */
     const pageSwapKey = [
       tab,
       settingsRoute,

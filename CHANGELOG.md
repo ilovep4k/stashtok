@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased - a tag page that reads like discovery
+
+- **A tag is now six rows, not one grid with a sort switch.** Latest, Shuffle, Top rated, Most watched, Longest, and — the one that actually says something about a tag — **Often with <other tag>**: the tag counted across its scenes, wallpaper excluded (`All Sex`, `HD`, `Amateur`…), then the scenes carrying *both*, opened as an AND feed (`#/tagpair/<id>/<id>`). Superseded the old order chips; every row carries its own **Play** pill on the right of its title, so a row is a feed you can jump into rather than just a strip.
+- Every row is a horizontal strip with a 12 px gap and real snap points. Two layout bugs went with it: `.stk-card` carries a fixed 148 px width for strips, so inside `grid-template-columns: auto-fill` it spilled into the next column and the title collided — grids now let the column win (`.stk-grid > .stk-card { width: auto }`).
+- **Safe-for-work mode now blurs these cards.** `.stk-card-img` was never in the `.stk-sfw` list, so the tag page and every other card surface rendered in full colour with the blur toggle on. It is blurred, clipped to the card's radius so the halo cannot spill, and pressing a card peeks (`stk-peek`), same as a tile.
+- `TagRow` (title + hint + Play pill + strip) is the shared row shape; skeletons keep the row's height while the query is in flight.
+
 ## Unreleased - thumb seeks, and a Marker at the scrub
 
 - **Double tap the edge of the video to jump 5 s.** The stage is cut into three stripes: the outer two are seek zones (200 px, or 33 % of the width on a phone, so the middle stripe always survives) and a double tap in one moves the playhead ∓5 s and leaves a ring with the step on that half. The middle stripe keeps the portrait crop cycle. Two taps that straddle two stripes are swallowed rather than reframing anything. Settings → Appearance → "Double-tap edges to seek" turns it off.
