@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased - caption
+
+- **The hashtag strip is gone from the player.** A clip's tags are something to
+  check and edit, not to read while watching; the rail's add-tag button opens the
+  sheet, and the scene's own tags are still marked there ("on scene"). The strip's
+  code is intact behind `SHOW_CAPTION_TAGS`, off.
+
 ## Unreleased - one tag schema
 
 - **Six sections, in this order: Ethnicity, Category, Content Format, Body, Positions & Acts, Fetish Tags.** The scene sheet, the marker sheet and the performer body-tag panel all read the same lists (`TAG_SHEET_SECTIONS`), so a tag cannot mean one thing on a clip and something else on a performer.

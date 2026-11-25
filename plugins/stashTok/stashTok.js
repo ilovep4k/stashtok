@@ -1599,6 +1599,12 @@
     "Collar", "Face Slapping", "Raceplay",
   ];
 
+  /* Hidden for now: the caption's hashtag strip on the player. A clip's tags are
+     something to check and edit, not something to read while watching, and the
+     rail's add-tag button is the one place that shows them. Flip this back to
+     true to return the strip. */
+  const SHOW_CAPTION_TAGS = false;
+
   /* the section order is the order the sheet draws them in */
   const TAG_SHEET_SECTIONS = [
     { id: "ethnicity", title: "Ethnicity", tags: ETHNICITY_TAGS.map((eth) => eth.name) },
@@ -6293,6 +6299,11 @@ void main() {
                 )
             );
           })(),
+          /* the caption's hashtag strip is hidden: a clip's tags are a thing to
+             check and edit, not something to read while watching, and the rail's
+             add-tag button now opens the one place that shows them. Flip
+             SHOW_CAPTION_TAGS back to true to bring the strip back. */
+          SHOW_CAPTION_TAGS &&
           tags.length > 0 &&
             h(
               "div",
