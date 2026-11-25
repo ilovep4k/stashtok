@@ -1227,9 +1227,13 @@
     await ensurePerformerScope(spec, cfg);
     const body = sceneFilterBody(spec, cfg);
     const sceneFilterArg = body ? `scene_filter: { ${body} }` : "";
-    /* `tags` on a marker filter is the marker's own (primary) tag, which is a
-       different axis from the scene's tags: /markers?q=Tag in Stash is this. */
-    const markerTagArg = spec.markerTagId ? `tags: ["${spec.markerTagId}"]` : "";
+    /* `tags` on a marker filter is the marker's own (primary) tag, but it is a
+       HierarchicalMultiCriterionInput — a bare array of ids is a validation
+       error, and the whole query failing is why a tag feed used to come back
+       empty. */
+    const markerTagArg = spec.markerTagId
+      ? `tags: { value: [${JSON.stringify(String(spec.markerTagId))}], modifier: INCLUDES }`
+      : "";
     /* A marker NAME is its own feed: every marker Stash calls the same thing,
        in whatever scenes they live in. This Stash has no title criterion on
        SceneMarkerFilterType, so the name rides on the find filter's `q` and is
@@ -11339,21 +11343,17 @@ void main() {
      screen as chips, and sorts what it got by tag then title, so the list reads
      grouped by tag instead of as one long stream. Tapping a marker drops into
      the feed at that marker's in point. */
-  function MarkersPage({ onBack, onPick }) {
+  function MarkersPage({ onBack, onPick, onPlayTag }) {
     const [rows, setRows] = useState(null);
-    const [tagId, setTagId] = useState("");
     const [query, setQuery] = useState("");
 
     useEffect(() => {
       let alive = true;
       setRows(null);
-      /* the marker's own tag, not the scene's tags: `tags` on a marker filter */
-      const markerFilter = tagId ? `tags: ["${tagId}"]` : "";
       gql(
         `query StashTokAllMarkers($q: String) {
           findSceneMarkers(
             filter: { per_page: 300, sort: "title", q: $q }
-            scene_marker_filter: { ${markerFilter} }
           ) {
             count
             scene_markers {
@@ -11382,18 +11382,24 @@ void main() {
       return () => {
         alive = false;
       };
-    }, [tagId, query]);
+    }, [query]);
 
     /* the chips come from the page itself: the tags that actually have markers
-       in this library, most-used first */
+       in this library, most-used first. Tapping one opens that tag's marker feed
+       — every marker with the same primary tag, each playing from its own in
+       point — which is the compilation this page exists for. */
     const chips = [];
     const seen = {};
     (rows || []).forEach((marker) => {
       const tag = marker.primary_tag || null;
-      if (!tag || !tag.id || seen[tag.id]) return;
-      seen[tag.id] = true;
-      chips.push({ id: tag.id, name: tag.name, n: 1 });
+      if (!tag || !tag.id) return;
+      if (!seen[tag.id]) {
+        seen[tag.id] = { id: tag.id, name: tag.name, n: 0 };
+        chips.push(seen[tag.id]);
+      }
+      seen[tag.id].n += 1;
     });
+    chips.sort((a, b) => b.n - a.n || a.name.localeCompare(b.name));
 
     return h(
       "div",
@@ -11414,25 +11420,27 @@ void main() {
         { className: "stk-chips", style: { marginBottom: "10px" } },
         h(
           "button",
-          { className: "stk-chip" + (tagId ? "" : " stk-on"), onClick: () => setTagId("") },
-          "All markers"
+          { className: "stk-chip", onClick: () => onPlayTag && onPlayTag(null) },
+          "Play all markers"
         ),
         chips.map((chip) =>
           h(
             "button",
             {
               key: chip.id,
-              className: "stk-chip" + (chip.id === tagId ? " stk-on" : ""),
-              onClick: () => setTagId(chip.id === tagId ? "" : chip.id),
+              className: "stk-chip",
+              title: "Play every marker tagged " + chip.name,
+              onClick: () => onPlayTag && onPlayTag({ id: chip.id, name: chip.name }),
             },
-            chip.name
+            chip.name,
+            h("b", { className: "stk-chip-n" }, String(chip.n))
           )
         )
       ),
       !rows
         ? h("div", { className: "stk-state" }, h("div", { className: "stk-spinner" }))
         : !rows.length
-        ? h("div", { className: "stk-state" }, tagId ? "No markers under this tag" : "No markers yet")
+        ? h("div", { className: "stk-state" }, query.trim() ? "No markers match this search" : "No markers yet")
         : h(
             "div",
             null,
@@ -13667,13 +13675,21 @@ function TagsPage({ onPick, onMarkers, onBack }) {
         }
         return;
       }
-      /* /markers/<id> is the marker feed for one tag */
+      /* /markers/<id>/<name> is the marker feed for one tag; the name rides in
+         the route so the feed is identifiable before its first page lands */
       if (rest.indexOf("markers/") === 0) {
-        const id = rest.slice("markers/".length).replace(/\D/g, "");
+        const parts = rest.split("/");
+        const id = (parts[1] || "").replace(/\D/g, "");
+        let tagName = "";
+        try {
+          tagName = decodeURIComponent(parts[2] || "");
+        } catch (err) {
+          tagName = "";
+        }
         setPerformerFilter(null);
         setActiveFeed({
           id: "markers-" + id,
-          name: "Markers",
+          name: tagName ? (id ? "Markers \u00b7 " + tagName : tagName) : "Markers",
           type: "markers",
           markerTagId: id,
           sort: "random",
@@ -14163,7 +14179,9 @@ function TagsPage({ onPick, onMarkers, onBack }) {
       });
       setTab("home");
       setRefreshKey((n) => n + 1);
-      const route = id ? "markers/" + id : "markers";
+      const route = id
+        ? "markers/" + id + "/" + encodeURIComponent(tag.name || "")
+        : "markers/all/" + encodeURIComponent("All markers");
       routeClaimRef.current = route;
       goTo(route);
     }
@@ -14346,7 +14364,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
     } else if (tab === "tags") {
       body = h(TagsPage, { onPick: openTag, onMarkers: openMarkers, onBack: () => setTab("home") });
     } else if (tab === "markers") {
-      body = h(MarkersPage, { onPick: openMarker, onBack: () => setTab("home") });
+      body = h(MarkersPage, { onPick: openMarker, onPlayTag: openMarkers, onBack: () => setTab("home") });
     } else if (tab === "folders") {
       body = h(FoldersPage, {
         onBack: () => setTab("home"),

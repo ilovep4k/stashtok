@@ -5738,3 +5738,15 @@ body.stk-fullscreen-mode .stash-tok.stk-feed-fullscreen {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
+
+/* a marker-tag chip is a feed, not a filter: the count says how many markers it
+   will play, and the chip is solid so it reads as a destination */
+.stk-chip-n {
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .16);
+  color: rgba(255, 255, 255, .85);
+}

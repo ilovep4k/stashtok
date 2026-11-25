@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased - marker compilation feeds
+
+- **A marker-tag chip on the Markers page now plays, it no longer filters.**
+  Tapping a chip opens that tag's marker feed (`#/markers/<tag>/<name>`): every
+  marker carrying that primary tag, each starting at its own in point, so twenty
+  clips tagged the same way become one compilation. Chips carry the marker count.
+- **`Play all markers` is the same feed without the tag filter** and has its own
+  route (`#/markers/all/All markers`) instead of falling back to the list page.
+- **The tag filter was silently invalid**: `scene_marker_filter.tags` is a
+  `HierarchicalMultiCriterionInput`, so `tags: ["1604"]` failed validation, the
+  whole query errored, and the page rendered "No markers under this tag". It is
+  now `tags: { value: [...], modifier: INCLUDES }` — the same feed the markers
+  button on a tag row and the `#/markers/<id>` deep link use, both of which were
+  broken by the same clause.
+
 ## Unreleased - typing tags
 
 - **`T` tags the clip you are watching**: the sheet opens with the caret in the
