@@ -3,17 +3,19 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta http-equiv="cache-control" content="no-store" />
+<meta http-equiv="pragma" content="no-cache" />
 <title>StashTok — design reference</title>
 <link rel="stylesheet" href="stashTok.css" />
 <style>
   *, *::before, *::after { box-sizing: border-box; }
-  html, body { margin: 0; background: #0a0a0a; color: #fff;
+  html, body { margin: 0; max-width: 100%; overflow-x: hidden;
+    background: #0a0a0a; color: #fff;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
   /* .stash-tok is the app's own root (position:fixed, 100dvh) — this page only
      borrows its class for the scoped component styles, so un-clip it */
-  .ref.stash-tok { position: static; inset: auto; height: auto; display: block;
-    overflow: visible; z-index: auto; }
-  .ref { max-width: 980px; margin: 0 auto; padding: 24px 18px 80px; }
+  .ref { width: 100%; max-width: 980px; margin: 0 auto;
+    padding: 20px max(14px, env(safe-area-inset-right)) 80px max(14px, env(safe-area-inset-left)); }
   .ref h1 { font-size: 26px; font-weight: 800; letter-spacing: -0.02em; margin: 0 0 6px; }
   .ref > p.lede { color: rgba(255,255,255,.55); font-size: 13.5px; margin: 0 0 26px; line-height: 1.5; }
   .ref section { margin: 34px 0 0; }
@@ -38,7 +40,7 @@
 </style>
 </head>
 <body>
-<div class="ref stash-tok">
+<div class="ref">
   <h1>StashTok design reference</h1>
   <p class="lede">Every token and control the plugin draws from. This page loads the real
     <code>stashTok.css</code> — nothing here is a mock-up, so if a control looks wrong
