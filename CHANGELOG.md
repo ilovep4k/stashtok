@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased - markers on the fly
+
+- **`M` adds a marker at the playhead** instead of toggling mute (mute stays a
+  visible control in the clip panel). Right-clicking the video offers the same
+  thing, and the ⋯ panel carries an *Add marker here* row for touch.
+- **The Add Marker sheet is the tag sheet's shell**: in point, Marker Name,
+  Prefilled Names, then the Positions & Acts and Fetish Tags chips only — a
+  marker has no race or body attributes.
+- **The name is the tag.** The picked or typed name becomes both the marker title
+  and its primary tag, so a marker is filterable by that tag in Stash.
+- **Start-only markers**: `sceneMarkerCreate` needs just `seconds`; `end_seconds`
+  is optional and left empty.
+- **Undo toast** for nine seconds after a marker is written.
+- **The white focus box around the rail heart is gone.** Chrome paints its
+  black-and-white `auto` ring on `:focus-visible`, which read as an outlined
+  square over the video on a laptop or a remote.
+
 ## Unreleased - feed chrome
 
 - **Hashtags are one line.** Whatever does not fit is cut and the strip ends in

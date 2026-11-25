@@ -1560,6 +1560,14 @@
     ETHNICITY_TAGS.reduce((all, eth) => all.concat(eth.performer, eth.scene), [])
   );
 
+  /* A marker is named by one tag: positions & acts describe the moment, and the
+     fetish list is the rest of that vocabulary. Body and ethnicity tags describe
+     the performer, so they stay out of the marker picker. */
+  const MARKER_TAG_SECTIONS = TAG_SECTIONS.filter(
+    (section) => section.title === "Positions & Acts" || section.title === "Fetish Tags"
+  );
+  const MARKER_TAG_NAMES = MARKER_TAG_SECTIONS.reduce((all, section) => all.concat(section.tags), []);
+
   /* one request resolves the whole vocabulary: aliased findTags per name, exact
      case-insensitive match. Tags the library has never seen resolve to null and
      are created only when the user actually picks them. */
@@ -2814,6 +2822,14 @@ void main() {
     const undoTimer = useRef(0);
     const tagIdCache = useRef({});
     const tagDialogRef = useDialog(tagOpen, () => setTagOpen(false));
+    /* add marker: M (or right-click) freezes the in point, one tag names it */
+    const [markerAt, setMarkerAt] = useState(null);
+    const [markerName, setMarkerName] = useState("");
+    const [markerBusy, setMarkerBusy] = useState(false);
+    const [markerUndo, setMarkerUndo] = useState(null);
+    const markerUndoTimer = useRef(0);
+    const markerDialogRef = useDialog(markerAt != null, () => setMarkerAt(null));
+    const [ctxMenu, setCtxMenu] = useState(null); // {x, y, at}
     const [press, setPress] = useState(null); // {x,y} pip while a long press builds
     const [quick, setQuick] = useState(null); // {x,y} quick menu anchored at the thumb
     /* "Clear Display" hides every overlay for this clip; gestures keep working */
@@ -4134,6 +4150,122 @@ void main() {
       }
     }, [item, tagPicked, mergeSceneTags, noteUndo]);
 
+    /* ---- markers -------------------------------------------------------
+       A Stash SceneMarker is a start point (seconds) plus a primary tag; the
+       end is optional, so an in point is the whole of what "add a marker"
+       needs. The tag is the marker's name: typed in, or taken from the
+       prefilled Positions & Acts / Fetish lists. */
+    const mergeSceneMarker = useCallback(
+      (sceneId, marker) => {
+        setItems((prev) =>
+          prev.map((entry) => {
+            if (!entry.scene || String(entry.scene.id) !== String(sceneId)) return entry;
+            const have = entry.scene.scene_markers || [];
+            if (have.some((old) => String(old.id) === String(marker.id))) return entry;
+            return Object.assign({}, entry, {
+              scene: Object.assign({}, entry.scene, { scene_markers: have.concat([marker]) }),
+            });
+          })
+        );
+      },
+      [setItems]
+    );
+
+    const unmergeSceneMarker = useCallback(
+      (sceneId, markerId) => {
+        setItems((prev) =>
+          prev.map((entry) =>
+            entry.scene && String(entry.scene.id) === String(sceneId)
+              ? Object.assign({}, entry, {
+                  scene: Object.assign({}, entry.scene, {
+                    scene_markers: (entry.scene.scene_markers || []).filter(
+                      (marker) => String(marker.id) !== String(markerId)
+                    ),
+                  }),
+                })
+              : entry
+          )
+        );
+      },
+      [setItems]
+    );
+
+    const openMarkerSheet = useCallback(
+      (at) => {
+        if (!item || !item.scene) return;
+        const video = activeVideo();
+        const total = duration || (video && video.duration) || 0;
+        const raw = Number(at != null ? at : video ? video.currentTime : 0) || 0;
+        const seconds = Math.max(0, total ? Math.min(total - 0.05, raw) : raw);
+        setCtxMenu(null);
+        setMarkerName("");
+        setMarkerAt(Math.round(seconds * 100) / 100);
+        if (!Object.keys(tagOptions).length) {
+          resolveTagNames(MARKER_TAG_NAMES)
+            .then((ids) => {
+              Object.keys(ids).forEach((name) => {
+                if (ids[name]) tagIdCache.current[name.toLowerCase()] = ids[name];
+              });
+              setTagOptions(ids);
+            })
+            .catch(() => undefined);
+        }
+      },
+      [item, duration, tagOptions, activeVideo]
+    );
+
+    const createMarker = useCallback(async () => {
+      const name = markerName.trim();
+      if (!name || markerAt == null || !item || !item.scene || markerBusy) return;
+      const sceneId = item.scene.id;
+      setMarkerBusy(true);
+      try {
+        const tagId = await ensureTagId(name, tagIdCache.current);
+        const data = await gql(
+          `mutation StashTokMarkerCreate($sceneId: ID!, $seconds: Float!, $tagId: ID!, $title: String!) {
+            sceneMarkerCreate(input: { scene_id: $sceneId, seconds: $seconds, primary_tag_id: $tagId, title: $title }) {
+              id seconds end_seconds title primary_tag { id name }
+            }
+          }`,
+          { sceneId, seconds: markerAt, tagId, title: name }
+        );
+        const marker = data.sceneMarkerCreate;
+        mergeSceneMarker(sceneId, marker);
+        setMarkerAt(null);
+        setMarkerName("");
+        window.clearTimeout(markerUndoTimer.current);
+        setMarkerUndo({ sceneId, markerId: marker.id, label: name, seconds: marker.seconds });
+        markerUndoTimer.current = window.setTimeout(() => setMarkerUndo(null), 9000);
+        buzz(14);
+      } catch (err) {
+        setError(String((err && err.message) || err));
+      } finally {
+        setMarkerBusy(false);
+      }
+    }, [markerName, markerAt, item, markerBusy, mergeSceneMarker]);
+
+    const revertMarker = useCallback(async () => {
+      const current = markerUndo;
+      if (!current) return;
+      setMarkerUndo(null);
+      window.clearTimeout(markerUndoTimer.current);
+      try {
+        await gql(`mutation StashTokMarkerDestroy($id: ID!) { sceneMarkerDestroy(id: $id) }`, { id: current.markerId });
+        unmergeSceneMarker(current.sceneId, current.markerId);
+        buzz(8);
+      } catch (err) {
+        setError(String((err && err.message) || err));
+      }
+    }, [markerUndo, unmergeSceneMarker]);
+
+    /* the name is the first thing to fill, so the sheet opens with the caret in
+       the field instead of on the close button useDialog focuses by default */
+    useEffect(() => {
+      if (markerAt == null) return;
+      const el = document.getElementById("stk-marker-name");
+      if (el && el.focus) el.focus();
+    }, [markerAt]);
+
     /* desktop keyboard map. Every control has a key that matches what the rest of
        the web uses: space/K play, arrows seek, , and . nudge a frame, digits jump,
        L likes, M mutes, I details, O the scene in Stash, / search, R reshuffle,
@@ -4228,11 +4360,10 @@ void main() {
           event.preventDefault();
           setVrMode((on) => !on);
         } else if (key === "m" || key === "M") {
+          /* M adds a marker at the playhead. Mute moved into the clip panel,
+             where it is a visible control instead of a hidden shortcut. */
           event.preventDefault();
-          if (!video) return;
-          const next = !video.muted;
-          video.muted = next;
-          setMuted(next);
+          openMarkerSheet();
         } else if (key === "r" || key === "R") {
           event.preventDefault();
           refreshFeed();
@@ -4245,7 +4376,7 @@ void main() {
       window.addEventListener("keydown", onKey);
       return () => window.removeEventListener("keydown", onKey);
     }, [desktop, goNext, goPrev, toggleHeart, flagCurrent, vrMode, sheet, quick, items, refreshFeed, onSearch, onBack,
-      fullscreen, exitFullscreen]);
+      fullscreen, exitFullscreen, openMarkerSheet]);
 
     /* ---- scrubber sprites -----------------------------------------
        Stash already renders a sprite sheet plus a WebVTT index for scenes with
@@ -5048,7 +5179,12 @@ void main() {
           onPointerMove,
           onPointerUp,
           onPointerCancel: onPointerUp,
-          onContextMenu: (event) => event.preventDefault(),
+          onContextMenu: (event) => {
+            event.preventDefault();
+            if (sfw) return;
+            const video = activeVideo();
+            setCtxMenu({ x: event.clientX, y: event.clientY, at: video ? video.currentTime : 0 });
+          },
         },
         cfg.blurBackdrop &&
           h("div", {
@@ -5860,6 +5996,40 @@ void main() {
         /* the pinch-zoom readout ("1.5x" / "2x") used to sit here; the user read it
            as a leftover speed control and asked for it to go */
 
+        /* right-click on the video: one row, because "add marker here" is the
+           only thing the stage has to say about the frame under the cursor */
+        ctxMenu &&
+          h(
+            "div",
+            {
+              className: "stk-ctx-backdrop",
+              style: { position: "fixed", inset: 0, zIndex: 61 },
+              onClick: () => setCtxMenu(null),
+              onContextMenu: (event) => {
+                event.preventDefault();
+                setCtxMenu(null);
+              },
+            },
+            h(
+              "div",
+              {
+                className: "stk-ctx-menu",
+                style: {
+                  left: Math.max(8, Math.min(ctxMenu.x, (window.innerWidth || 360) - 216)) + "px",
+                  top: Math.max(8, Math.min(ctxMenu.y, (window.innerHeight || 640) - 64)) + "px",
+                },
+                onClick: (event) => event.stopPropagation(),
+              },
+              h(
+                "button",
+                { type: "button", onClick: () => openMarkerSheet(ctxMenu.at) },
+                h(Icon, { name: "chapter", size: 16 }),
+                "Add marker",
+                h("span", null, fmtTime(ctxMenu.at))
+              )
+            )
+          ),
+
         undo &&
           item &&
           String(undo.sceneId) === String(item.scene.id) &&
@@ -5868,6 +6038,16 @@ void main() {
             { className: "stk-undo" },
             h("span", null, "Tagged " + undo.label),
             h("button", { onClick: revertUndo }, "Undo")
+          ),
+
+        markerUndo &&
+          item &&
+          String(markerUndo.sceneId) === String(item.scene.id) &&
+          h(
+            "div",
+            { className: "stk-undo" },
+            h("span", null, "Marker " + markerUndo.label + " · " + fmtTime(markerUndo.seconds)),
+            h("button", { onClick: revertMarker }, "Undo")
           ),
 
         !sfw &&
@@ -5995,6 +6175,80 @@ void main() {
             onClose: () => setSheet(null),
           }),
 
+        /* ---- Add Marker ---------------------------------------------------
+           H1, the name field, then the prefilled names. One tag names the
+           marker: tapping a chip fills the field, tapping it again clears it,
+           and whatever is in the field is what gets created. */
+        markerAt != null &&
+          h(
+            React.Fragment,
+            null,
+            h("div", { className: "stk-sheet-backdrop", onClick: () => setMarkerAt(null) }),
+            h(
+              "div",
+              { className: "stk-sheet stk-tag-sheet stk-marker-sheet", ref: markerDialogRef, onClick: (event) => event.stopPropagation() },
+              h(
+                "h3",
+                null,
+                h("span", null, "Add Marker"),
+                h("button", { className: "stk-btn", onClick: () => setMarkerAt(null), "aria-label": "Close" }, h(Icon, { name: "x", size: 16 }))
+              ),
+              h("p", { className: "stk-marker-at" }, "In point ", h("b", null, fmtTime(markerAt))),
+              h("label", { className: "stk-marker-label", htmlFor: "stk-marker-name" }, "Marker Name"),
+              h("input", {
+                id: "stk-marker-name",
+                className: "stk-tag-search stk-marker-input",
+                placeholder: "Type a name or pick one below…",
+                value: markerName,
+                onChange: (event) => setMarkerName(event.target.value),
+                onKeyDown: (event) => {
+                  if (event.key !== "Enter") return;
+                  event.preventDefault();
+                  createMarker();
+                },
+              }),
+              h("h4", { className: "stk-marker-pre" }, "Prefilled Names"),
+              h("p", { className: "stk-tag-note" }, "Use the below tags to automatically name the Marker"),
+              h(
+                "div",
+                { className: "stk-marker-tags" },
+                MARKER_TAG_SECTIONS.map((section) =>
+                  h(
+                    "div",
+                    { key: section.title, className: "stk-tag-section" },
+                    h("h4", null, section.title),
+                    h(
+                      "div",
+                      { className: "stk-tag-grid" },
+                      section.tags.map((name) => {
+                        const on = markerName.trim().toLowerCase() === name.toLowerCase();
+                        return h(
+                          "button",
+                          {
+                            key: name,
+                            type: "button",
+                            className: "stk-tagpick" + (on ? " stk-on" : ""),
+                            onClick: () => setMarkerName((cur) => (cur.trim().toLowerCase() === name.toLowerCase() ? "" : name)),
+                          },
+                          name
+                        );
+                      })
+                    )
+                  )
+                )
+              ),
+              h(
+                "button",
+                {
+                  className: "stk-btn stk-tag-done",
+                  disabled: markerBusy || !markerName.trim(),
+                  onClick: createMarker,
+                },
+                markerBusy ? "Saving…" : "Create marker"
+              )
+            )
+          ),
+
         tagOpen &&
           h(
             React.Fragment,
@@ -6056,6 +6310,10 @@ void main() {
             dupeFlagged: item ? sceneDupeTagged(item.scene) : false,
             onFlagToggle: (on) => { toggleFlagTag(on); if (on) { dropCurrent(); buzz(40); } },
             onDupeToggle: toggleDupeTag,
+            onAddMarker: () => {
+              setSheet(null);
+              openMarkerSheet();
+            },
             onClose: () => setSheet(null),
             onOpenPerformer,
             onOpenTag,
@@ -6269,7 +6527,7 @@ void main() {
      scene is one of your favourites. */
   function Sheet({ mode, item, cfg, rating, onRate, onHeart, speed, onSpeed, onRotate, onFlag,
     onFlagToggle, onDupeToggle, flagged, dupeFlagged, onClose, onOpenPerformer, onOpenTag,
-    onDeriveFeed, onJump, onNext }) {
+    onDeriveFeed, onJump, onNext, onAddMarker }) {
     const dialogRef = useDialog(true, onClose);
     const scene = item.scene;
     const file = (scene.files && scene.files[0]) || {};
@@ -6367,6 +6625,19 @@ void main() {
             ),
             panelRow("rotate", "Rotate Video",
               h("button", { type: "button", className: "stk-panel-chip", onClick: () => onRotate(90) }, "Rotate Right 90°")
+            )
+          ),
+
+          h("div", { className: "stk-panel-sec" },
+            h("h4", { className: "stk-panel-head" }, "Markers"),
+            h("button", {
+              type: "button",
+              className: "stk-panel-row",
+              onClick: () => { if (onAddMarker) onAddMarker(); },
+            },
+              h("span", { className: "stk-panel-ic" }, h(Icon, { name: "chapter", size: 15 })),
+              h("span", { className: "stk-panel-label" }, "Add marker here"),
+              h("span", { className: "stk-panel-value" }, "M")
             )
           ),
 

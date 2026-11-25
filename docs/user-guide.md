@@ -47,6 +47,14 @@ The scrub bar shows a tick per marker, and the marker's title as you reach it.
 Long clips open in the middle of the action, not at the intro — a marker when the
 scene has one, otherwise a random fifth of the way in.
 
+**`M` adds a marker at the playhead** (right-click the video does the same, and the
+⋯ panel has *Add marker here* for touch). The sheet takes an in point, a name, and
+one tag from the Positions & Acts / Fetish lists — the name and the marker's primary
+tag are the same word, so the marker is filterable as a tag in Stash. Markers are
+start-only: Stash's `end_seconds` is optional and this sheet leaves it empty, so
+none of the library's existing ranges are touched. An accidental marker is one tap
+on the toast's **Undo**.
+
 **Hearts are ratings.** Stash has no scene "favourite", so a heart writes
 `rating100`. That means anything you heart also shows up in Stash's own rating
 filters, and in other clients.
