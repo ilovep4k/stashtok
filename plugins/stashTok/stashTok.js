@@ -3294,8 +3294,15 @@ void main() {
       const observer = new ResizeObserver((entries) => {
         const box = entries[0] && entries[0].contentRect;
         if (!box) return;
-        stageBoxRef.current.w = Math.round(box.width);
-        stageBoxRef.current.h = Math.round(box.height);
+        const w = Math.round(box.width);
+        const h = Math.round(box.height);
+        const changed = w !== stageBoxRef.current.w || h !== stageBoxRef.current.h;
+        stageBoxRef.current.w = w;
+        stageBoxRef.current.h = h;
+        /* the desktop rail expanding or the window resizing changes the cover scale,
+           and that number is cached for gestures: re-measure it here, after the box
+           cache is updated, or a pan would start from a stale zoom and jump */
+        if (changed && cropRefreshRef.current) cropRefreshRef.current();
       });
       observer.observe(stage);
       return () => observer.disconnect();
@@ -3690,9 +3697,12 @@ void main() {
       if (!video) return 1;
       const vw = video.videoWidth || 16;
       const vh = video.videoHeight || 9;
-      const box = stageBox();
-      const ew = box.w || 1;
-      const eh = box.h || 1;
+      /* measure the stage live: the cached box lags the first paint (the desktop
+         rail settles a frame or two late), and this number is the zoom a pan starts
+         from, so a stale read shows up as the picture jumping under the finger */
+      const stage = stageRef.current;
+      const ew = (stage && stage.clientWidth) || (stageBox().w || 1);
+      const eh = (stage && stage.clientHeight) || (stageBox().h || 1);
       const videoAspect = vw / vh;
       const stageAspect = ew / eh;
       const contentW = stageAspect > videoAspect ? eh * videoAspect : ew;
@@ -3706,6 +3716,9 @@ void main() {
         return;
       }
       const target = clamp(coverScale(), 1, MAX_ZOOM);
+      /* the same number the framing lands on, so applyTransform's cover test
+         (which reads the cache) recognises it as a fill */
+      coverRef.current = target;
       tf.current = { s: target, x: 0, y: 0 };
       applyTransform();
       buzz(6);
@@ -3976,10 +3989,22 @@ void main() {
         /* the user's pinch owns the transform: a media event (canplay re-fires on
            every re-buffer) must not pull a zoomed frame back to the crop scale
            mid-grab, which is what made a zoomed pan snap to 1x a beat later */
-        if (!reset && userZoomed()) return;
-        const kind = cropKind();
-        /* refresh the cached cover scale: metadata, resize and rotation all land here */
+        /* the cached cover is the number a pan starts from, so keep it honest even
+           when a pinch owns the framing and this call returns early */
+        const prevCover = coverRef.current;
         coverRef.current = coverScale();
+        if (!reset && userZoomed()) {
+          /* a resize can move the cover scale under a frame that is already filled;
+             keep the cached zoom in step with what is on screen so a pan still
+             starts exactly where the picture is */
+          if (Math.abs(tf.current.s - prevCover) < 0.004 &&
+              Math.abs(coverRef.current - prevCover) > 0.004) {
+            tf.current.s = coverRef.current;
+            applyTransform();
+          }
+          return;
+        }
+        const kind = cropKind();
         const s = kind ? cropScaleFor(mode, kind) : 1;
         /* canplay fires again on every re-buffer, and this runs from it: without
            this guard a grab on a cropped clip snapped back to centre mid-pan.
@@ -5714,7 +5739,10 @@ void main() {
                   top: (at - index) * 100 + "%",
                   width: "100%",
                   height: "100%",
-                  objectFit: fit,
+                  /* a frame that exactly fills the stage is drawn by the sampler
+                     instead of a scale transform, which would composite a layer of
+                     the whole scaled box (~10x the pixels, mostly clipped bars) */
+                  objectFit: active && fillMode ? "cover" : fit,
                   opacity: 1,
                   pointerEvents: active ? "auto" : "none",
                   zIndex: active ? 2 : 1,
