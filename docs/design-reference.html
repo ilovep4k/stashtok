@@ -160,7 +160,7 @@
       <input class="stk-field" value="With a value" />
     </div>
     <p class="note" style="margin-top:14px">Search + sort on one line: <code>.stk-perf-tools</code></p>
-    <div class="stk-perf-tools" style="max-width:480px">
+    <div class="stk-perf-tools">
       <input class="stk-field" placeholder="Search creators" />
       <button class="stk-sort-btn">Favorites first
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
@@ -225,13 +225,15 @@
       <button class="stk-pick-row"><span>Male</span></button>
       <button class="stk-pick-row"><span>Non-binary</span></button>
     </div>
-    <p class="note" style="margin-top:14px">Sort menu (<code>.stk-sort-menu</code>) with the active entry marked:</p>
-    <div class="stk-sort-menu" style="max-width:420px">
-      <button class="stk-sort-btn">Favorites first</button>
-      <button class="stk-sort-btn">Recently added</button>
-      <button class="stk-sort-btn stk-on">A–Z</button>
-      <button class="stk-sort-btn">Most scenes</button>
-      <button class="stk-sort-btn">Random</button>
+    <p class="note" style="margin-top:14px">Sort menu — <code>.stk-sort-menu</code> with its buttons, active entry in
+      <code>.stk-sort-on</code> (pink). It is one wrapped row, so the last entry flowing to a second line is expected,
+      always ragging left:</p>
+    <div class="stk-sort-menu">
+      <button>Favorites first</button>
+      <button>Recently added</button>
+      <button>A–Z</button>
+      <button class="stk-sort-on">Most scenes</button>
+      <button>Random</button>
     </div>
   </section>
 
