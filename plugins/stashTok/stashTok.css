@@ -5421,7 +5421,9 @@ body.stk-fullscreen-mode .stash-tok.stk-feed-fullscreen {
 
 /* text inputs share one skin */
 .stk-field {
+  box-sizing: border-box;
   width: 100%;
+  max-width: 100%;
   padding: 10px 12px;
   border: 1px solid var(--stk-line);
   border-radius: var(--stk-radius);
