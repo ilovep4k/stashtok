@@ -2325,32 +2325,40 @@ void main() {
         if (raf) cancelAnimationFrame(raf);
         setProblem(String(why));
       };
-      /* webgl2 first (it tolerates a non-power-of-two texture at any size), then
-         webgl1; both run the same GLSL ES 1.00 shader and plain LINEAR sampling */
-      const gl = canvas.getContext("webgl2", { alpha: false, antialias: false }) ||
-        canvas.getContext("webgl", { alpha: false, antialias: false });
+      /* webgl1 FIRST: it is the context this shader was written and proven on, and
+         some Android drivers hand out a webgl2 context that then refuses a GLSL ES
+         1.00 shader ("did not compile" on a phone where the same source worked on
+         webgl1). webgl2 is only the fallback for a browser with no webgl1 at all;
+         nothing here needs webgl2 now that there are no mipmaps. */
+      const gl = canvas.getContext("webgl", { alpha: false, antialias: false }) ||
+        canvas.getContext("experimental-webgl", { alpha: false, antialias: false }) ||
+        canvas.getContext("webgl2", { alpha: false, antialias: false });
       if (!gl) {
         fail("VR view unavailable: this browser has no WebGL");
         return undefined;
       }
+      /* the compiler's own words, trimmed: a screenshot of the banner is then
+         enough to diagnose a device that rejects the shader */
       const shader = (type, src) => {
         const sh = gl.createShader(type);
         gl.shaderSource(sh, src);
         gl.compileShader(sh);
-        return gl.getShaderParameter(sh, gl.COMPILE_STATUS) ? sh : null;
+        if (gl.getShaderParameter(sh, gl.COMPILE_STATUS)) return sh;
+        const log = String(gl.getShaderInfoLog(sh) || "").replace(/\s+/g, " ").trim();
+        fail("VR view unavailable: the " + (type === gl.VERTEX_SHADER ? "vertex" : "fragment") +
+          " shader did not compile" + (log ? " — " + log.slice(0, 280) : ""));
+        return null;
       };
       const vs = shader(gl.VERTEX_SHADER, VR_VS);
       const fs = shader(gl.FRAGMENT_SHADER, VR_FS);
-      if (!vs || !fs) {
-        fail("VR view unavailable: the shader did not compile");
-        return undefined;
-      }
+      if (!vs || !fs) return undefined;
       const prog = gl.createProgram();
       gl.attachShader(prog, vs);
       gl.attachShader(prog, fs);
       gl.linkProgram(prog);
       if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-        fail("VR view unavailable: the shader program did not link");
+        const log = String(gl.getProgramInfoLog(prog) || "").replace(/\s+/g, " ").trim();
+        fail("VR view unavailable: the shaders did not link" + (log ? " — " + log.slice(0, 280) : ""));
         return undefined;
       }
       gl.useProgram(prog);
