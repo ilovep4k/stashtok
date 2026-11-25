@@ -5405,8 +5405,7 @@ body.stk-fullscreen-mode .stash-tok.stk-feed-fullscreen {
 .stk-btn-danger { background: transparent; border-color: var(--stk-accent); color: #ff5f7a; }
 .stk-btn-ghost { background: transparent; border-color: transparent; color: var(--stk-ink-dim); }
 .stk-btn-wide { width: 100%; }
-.stk-btn-sm { min-height: 30px; padding: 0 10px; font-size: 12.5px; }
-.stk-btn-lg { min-height: 44px; padding: 0 18px; font-size: 15px; }
+/* one size only: .stk-btn is already the smallest non-icon button */
 
 /* round icon button, the same one the HUD and page headers use */
 .stk-btn-icon {

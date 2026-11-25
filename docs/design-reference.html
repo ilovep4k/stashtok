@@ -22,7 +22,18 @@
   .ref h2 { font-size: 15px; font-weight: 700; letter-spacing: .02em; text-transform: uppercase;
     color: rgba(255,255,255,.45); margin: 0 0 14px; border-top: 1px solid rgba(255,255,255,.1); padding-top: 14px; }
   .ref .note { font-size: 12.5px; color: rgba(255,255,255,.45); margin: 6px 0 16px; line-height: 1.5; }
-  .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: flex-start; }
+  .rail { max-width: 420px; }
+  .samples { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; }
+  .samp { display: flex; flex-direction: column; gap: 3px; }
+  .samp i { display: block; height: 52px; background: #1b1b1b; border: 1px solid rgba(255,255,255,.16); }
+  .samp i.pad { border-style: dashed; height: auto; }
+  .samp i.pad b { display: block; height: 26px; border-radius: 4px; background: rgba(255,45,85,.35); }
+  .samp i.ctl { display: flex; align-items: center; justify-content: center; height: auto; }
+  .samp i.ctl em { display: block; width: 100%; height: 36px; border-radius: 12px; background: rgba(255,255,255,.14); }
+  .samp i.ty { display: flex; align-items: center; justify-content: center; height: 52px; color: #fff; font-family: var(--stk-font); }
+  .samp code { font-size: 11px; color: #ff8fa5; }
+  .samp span { font-size: 11.5px; color: rgba(255,255,255,.45); }
   .stack { display: flex; flex-direction: column; gap: 10px; max-width: 420px; }
   .swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
   .sw { border: 1px solid rgba(255,255,255,.12); border-radius: 12px; overflow: hidden; background: #111; }
@@ -64,37 +75,77 @@
 
   <section>
     <h2>Shape &amp; space</h2>
-    <div class="specs">
-      <div class="spec"><code>--stk-radius-sm</code><span>8px · chips, small controls</span></div>
-      <div class="spec"><code>--stk-radius</code><span>12px · buttons, fields, rows</span></div>
-      <div class="spec"><code>--stk-radius-lg</code><span>16px · cards, sheets</span></div>
-      <div class="spec"><code>--stk-radius-pill</code><span>999px · pills, switches</span></div>
-      <div class="spec"><code>--stk-space-sm / --stk-space / --stk-space-lg</code><span>8 / 12 / 16px</span></div>
-      <div class="spec"><code>--stk-control</code><span>36px · every button and field</span></div>
-      <div class="spec"><code>--stk-fs-title</code><span>20px · page headings</span></div>
-      <div class="spec"><code>--stk-fs-body / --stk-fs-small</code><span>15 / 12.5px</span></div>
+    <p class="note">Each block is drawn at its real value — the rounding you see is the radius.</p>
+    <div class="samples">
+      <div class="samp">
+        <i style="border-radius:8px"></i>
+        <code>--stk-radius-sm</code><span>8px · chips, small controls</span>
+      </div>
+      <div class="samp">
+        <i style="border-radius:12px"></i>
+        <code>--stk-radius</code><span>12px · buttons, fields, rows</span>
+      </div>
+      <div class="samp">
+        <i style="border-radius:16px"></i>
+        <code>--stk-radius-lg</code><span>16px · cards, sheets</span>
+      </div>
+      <div class="samp">
+        <i style="border-radius:999px"></i>
+        <code>--stk-radius-pill</code><span>pill · chips, switches</span>
+      </div>
+    </div>
+
+    <p class="note" style="margin-top:18px">Space — the padding inside each box is the gap:</p>
+    <div class="samples">
+      <div class="samp"><i class="pad" style="padding:8px"><b></b></i><code>--stk-space-sm</code><span>8px</span></div>
+      <div class="samp"><i class="pad" style="padding:12px"><b></b></i><code>--stk-space</code><span>12px</span></div>
+      <div class="samp"><i class="pad" style="padding:16px"><b></b></i><code>--stk-space-lg</code><span>16px</span></div>
+      <div class="samp"><i class="ctl"><em></em></i><code>--stk-control</code><span>36px tall</span></div>
+    </div>
+
+    <p class="note" style="margin-top:18px">Type:</p>
+    <div class="samples">
+      <div class="samp"><i class="ty" style="font-size:20px;font-weight:800">Aa</i><code>--stk-fs-title</code><span>20px · page headings</span></div>
+      <div class="samp"><i class="ty" style="font-size:15px">Aa</i><code>--stk-fs-body</code><span>15px · rows, inputs</span></div>
+      <div class="samp"><i class="ty" style="font-size:12.5px">Aa</i><code>--stk-fs-small</code><span>12.5px · meta</span></div>
     </div>
   </section>
 
   <section>
     <h2>Buttons — <code>.stk-btn</code></h2>
-    <p class="note">One base control. Intents and sizes are modifiers, never new classes.</p>
+    <p class="note">One control, one size. Intent is a modifier, never a new class.</p>
     <div class="row">
       <button class="stk-btn">Default</button>
       <button class="stk-btn stk-btn-primary">Primary</button>
       <button class="stk-btn stk-btn-danger">Danger</button>
-      <button class="stk-btn stk-btn-ghost">Ghost</button>
-      <button class="stk-btn stk-btn-sm">Small</button>
-      <button class="stk-btn stk-btn-lg">Large</button>
       <button class="stk-btn" disabled>Disabled</button>
+      <button class="stk-btn stk-btn-ghost">Ghost</button>
+    </div>
+
+    <p class="note" style="margin-top:18px">Icon buttons — <code>.stk-btn-icon</code>, the same control in a round 34px button:</p>
+    <div class="row">
       <button class="stk-btn stk-btn-icon" aria-label="Play">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5.5v13l11-6.5-11-6.5z"/></svg>
       </button>
+      <button class="stk-btn stk-btn-icon" aria-label="Add">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+      <button class="stk-btn stk-btn-icon" aria-label="Back">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4.5 7.5 12 15 19.5"/></svg>
+      </button>
+      <button class="stk-btn stk-btn-icon" aria-label="More">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="5" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="12" cy="19" r="1.4"/></svg>
+      </button>
+      <button class="stk-btn stk-btn-icon" aria-label="Close">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
     </div>
-    <p class="note" style="margin-top:14px">Full width: <code>.stk-btn.stk-btn-wide</code></p>
-    <div style="max-width:420px"><button class="stk-btn stk-btn-primary stk-btn-wide">Wide primary</button></div>
 
-    <p class="note" style="margin-top:18px">Legacy names that now inherit the same base —
+    <p class="note" style="margin-top:18px">Full width — <code>.stk-btn-wide</code>:</p>
+    <div class="rail"><button class="stk-btn stk-btn-wide">Wide default</button></div>
+    <p class="note">The box is full width and flush left; only the label centres inside it.</p>
+
+    <p class="note" style="margin-top:18px">Legacy names that inherit the same base —
       <code>.stk-sort-btn</code>, <code>.stk-seeall</code>, <code>.stk-ops-btn</code>, <code>.stk-more-btn</code>:</p>
     <div class="row">
       <button class="stk-sort-btn">Recently added ▾</button>
