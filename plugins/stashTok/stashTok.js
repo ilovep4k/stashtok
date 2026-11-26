@@ -3118,6 +3118,10 @@ void main() {
     const quickRef = useRef(null);
     const [vrSource, setVrSource] = useState("");
     const [scrubPreview, setScrubPreview] = useState(null);
+    /* a scene with no generated sprite sheet falls back to Stash's own
+       screenshot-at-time endpoint; when that also fails the overlay gets out
+       of the way and the video stays visible */
+    const [snapFail, setSnapFail] = useState(false);
     const spriteRef = useRef({ key: "", cues: [], ok: false });
     const [spriteTick, setSpriteTick] = useState(0);
     const [hud, setHud] = useState(true);
@@ -3200,6 +3204,9 @@ void main() {
     const [markerDrop, setMarkerDrop] = useState(null);
     const markerDropEl = useRef(null);
     const [scrubTime, setScrubTime] = useState(0);
+    /* Stash's screenshot endpoint runs ffmpeg per request, so a no-sprite
+       scrub asks it at most ~7 times a second instead of once per pixel */
+    const snapRef = useRef({ at: 0, t: 0 });
     const [duration, setDuration] = useState(0);
     const [time, setTime] = useState(0);
     const [rateBadge, setRateBadge] = useState("");
@@ -4943,10 +4950,24 @@ void main() {
       if (!scene) return undefined;
       const vttPath = rel(scene.paths && scene.paths.vtt);
       const spritePath = rel(scene.paths && scene.paths.sprite);
-      spriteRef.current = { key: String(scene.id), cues: [], ok: false, src: spritePath || "" };
+      spriteRef.current = { key: String(scene.id), cues: [], ok: false, src: spritePath || "", sheetW: 0, sheetH: 0 };
       if (spriteTick) setSpriteTick(0);
-      if (!vttPath) return undefined;
+      setSnapFail(false);
       let alive = true;
+      /* the sheet's own pixel size, needed to blow one cell up to the stage */
+      if (spritePath) {
+        const sheet = new Image();
+        sheet.onload = () => {
+          if (!alive) return;
+          spriteRef.current = Object.assign({}, spriteRef.current, {
+            sheetW: sheet.naturalWidth,
+            sheetH: sheet.naturalHeight,
+          });
+          setSpriteTick((n) => n + 1);
+        };
+        sheet.src = spritePath;
+      }
+      if (!vttPath) return undefined;
       const stamp = /(\d{2}):(\d{2}):(\d{2})\.(\d{3})/;
       const secs = (line) => {
         const m = stamp.exec(line);
@@ -4971,7 +4992,9 @@ void main() {
             });
           });
           if (!cues.length) return;
-          spriteRef.current = { key: String(scene.id), cues, ok: true, src: spritePath || "" };
+          spriteRef.current = Object.assign({}, spriteRef.current, {
+            key: String(scene.id), cues, ok: true, src: spritePath || "",
+          });
           setSpriteTick((n) => n + 1);
         })
         .catch(() => {});
@@ -5647,6 +5670,8 @@ void main() {
       window.clearTimeout(scrubBarTimer.current);
       setScrubBar(true);
       setScrubbing(true);
+      setSnapFail(false);
+      snapRef.current = { at: 0, t: 0 };
       dropRef.current = { y0: event.clientY, at: null, armed: false, over: false, x: 0 };
       setMarkerDrop(null);
       poke();
@@ -5663,16 +5688,29 @@ void main() {
       const cue = store.cues && store.cues.length
         ? store.cues.find((c) => at >= c.start && at < c.end) || store.cues[store.cues.length - 1]
         : null;
+      const hasSprite = Boolean(store.ok && cue);
+      if (!hasSprite || !spriteRef.current.sheetW) {
+        const now = performance.now();
+        if (now - snapRef.current.at > 140) snapRef.current = { at: now, t: Math.round(at) };
+      }
+      const stage = stageRef.current;
+      const sbox = stage ? stage.getBoundingClientRect() : null;
+      const activeEl = activeVideo();
+      const fit = activeEl ? getComputedStyle(activeEl).objectFit : "contain";
       setScrubPreview({
         pct,
         time: at,
-        hasSprite: Boolean(store.ok && cue),
+        snapT: snapRef.current.t,
+        fit: fit === "cover" ? "cover" : "contain",
+        hasSprite,
         x: cue ? cue.x : 0,
         y: cue ? cue.y : 0,
         w: cue ? cue.w : 0,
         h: cue ? cue.h : 0,
         src: store.src,
         sceneId: item && item.scene ? item.scene.id : "",
+        stageW: sbox ? sbox.width : 0,
+        stageH: sbox ? sbox.height : 0,
       });
       if (!scrubbing) return;
 
@@ -6116,6 +6154,51 @@ void main() {
             }),
         ),
 
+
+        /* ---- scrub frame -------------------------------------------
+           While the playhead is being dragged the frame under it fills the
+           stage, so the viewer shows what the timeline is pointing at instead
+           of the last decoded frame. A generated sprite sheet is instant and
+           free; without one, Stash's screenshot-at-time endpoint is asked
+           (throttled); if that fails too the overlay gets out of the way and
+           leaves the video visible. */
+        scrubbing &&
+          scrubPreview &&
+          !sfw &&
+          !snapFail &&
+          h(
+            "div",
+            { className: "stk-scrub-frame", "aria-hidden": "true" },
+            scrubPreview.hasSprite && spriteRef.current.sheetW
+              ? h("div", {
+                  className: "stk-scrub-frame-img",
+                  style: (() => {
+                    const preview = scrubPreview;
+                    const vw = preview.stageW || window.innerWidth || 360;
+                    const vh = preview.stageH || window.innerHeight || 640;
+                    const scale = preview.fit === "cover"
+                      ? Math.max(vw / preview.w, vh / preview.h)
+                      : Math.min(vw / preview.w, vh / preview.h);
+                    const sheetW = spriteRef.current.sheetW * scale;
+                    const sheetH = spriteRef.current.sheetH * scale;
+                    return {
+                      backgroundImage: `url("${preview.src}")`,
+                      backgroundSize: `${sheetW}px ${sheetH}px`,
+                      backgroundPosition:
+                        `${-(preview.x * scale + (preview.w * scale - vw) / 2)}px ` +
+                        `${-(preview.y * scale + (preview.h * scale - vh) / 2)}px`,
+                    };
+                  })(),
+                })
+              : h("img", {
+                  className: "stk-scrub-frame-img",
+                  src: `/scene/${scrubPreview.sceneId}/screenshot?t=${scrubPreview.snapT}`,
+                  alt: "",
+                  draggable: false,
+                  style: { objectFit: scrubPreview.fit === "cover" ? "cover" : "contain" },
+                  onError: () => setSnapFail(true),
+                })
+          ),
 
         /* the first clip has nothing above it: pulling down reloads the feed */
         index === 0 &&

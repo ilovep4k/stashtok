@@ -637,6 +637,17 @@
 .stk-info { transition: bottom 260ms ease; }
 /* the caption is gone, so the handle takes its place: same bottom offset as when
    the date/size/resolution line was there, and no leftover gap where it used to be */
+/* idle HUD: the feed should never look like it lost its controls. The username
+   row and the timeline stay as a ghost at half strength; everything else folds
+   away. Touching the timeline pokes the HUD back to full, so the tap that
+   restores the controls is also the tap that scrubs. */
+.stk-hud-hidden .stk-handle-row,
+.stk-hud-hidden .stk-timeline {
+  opacity: .5;
+}
+.stk-hud-hidden .stk-handle-row {
+  transition: opacity 200ms ease;
+}
 .stk-hud-hidden .stk-caption { display: none; }
 .stk-hud-hidden .stk-info { bottom: 10px; }
 .stk-hud-hidden .stk-handle-row { transition: transform 220ms ease; }
@@ -2861,6 +2872,35 @@ img.stk-scrub-cell {
   width: 160px;
   height: 90px;
 }
+/* ---- scrub frame: the frame under the playhead, blown up to the stage ---- */
+.stk-scrub-frame {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  overflow: hidden;
+  background: #000;
+}
+.stk-scrub-frame-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background-repeat: no-repeat;
+  background-color: #000;
+}
+/* the tiny bubble above the bar only has to carry the time while the whole
+   frame is already on screen */
+.stk-timeline.stk-scrubbing .stk-scrub-cell { display: none; }
+@media (prefers-reduced-motion: no-preference) {
+  .stk-scrub-frame { animation: stk-frame-in 90ms ease-out both; }
+}
+@keyframes stk-frame-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
 .stk-scrub-time {
   font-size: 11px;
   font-variant-numeric: tabular-nums;
