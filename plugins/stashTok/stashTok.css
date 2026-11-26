@@ -649,7 +649,10 @@
   transition: opacity 200ms ease;
 }
 .stk-hud-hidden .stk-caption { display: none; }
-.stk-hud-hidden .stk-info { bottom: 10px; }
+/* the caption is gone, so the band is no longer a gesture area: the handle row
+   drops onto the bar, and letting the container keep pointer events would eat
+   the bar's own drag. Its children stay tappable. */
+.stk-hud-hidden .stk-info { bottom: 10px; pointer-events: none; }
 .stk-hud-hidden .stk-handle-row { transition: transform 220ms ease; }
 .stk-hashtext-more {
   background: transparent;
@@ -884,7 +887,10 @@
   display: flex;
   flex-direction: column;
   gap: 3px;
-  pointer-events: none;
+  /* the caption band is a scrub gesture area: a drag anywhere on the text
+     seeks, and only the username and the "more" link stay as controls */
+  pointer-events: auto;
+  touch-action: none;
   text-shadow: 0 1px 4px rgba(0,0,0,.85);
   /* above the timeline's 44px grab band: with the HUD hidden the info block
      drops onto the bar, and the hashtags under the username must stay tappable */
@@ -1232,7 +1238,9 @@ body.stk-anim .stk-grid-5 .stk-tile {
 
 /* pinch zooms the video, never the page or the chrome around it */
 .stash-tok-wrap { touch-action: pan-y; overscroll-behavior: contain; }
-.stk-nav, .stk-rail, .stk-info, .stk-top, .stk-timeline { touch-action: manipulation; -webkit-user-select: none; user-select: none; }
+.stk-nav, .stk-rail, .stk-top, .stk-timeline { touch-action: manipulation; -webkit-user-select: none; user-select: none; }
+/* the caption band drags: a browser pan here would steal the gesture mid-scrub */
+.stk-info { touch-action: none; -webkit-user-select: none; user-select: none; }
 
 /* one sort control instead of a wall of chips */
 .stk-sort-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
@@ -1658,11 +1666,23 @@ body.stk-anim .stk-grid-5 .stk-tile {
 /* right rail: avatar first, tighter rhythm, text shadow like theirs */
 .stk-rail {
   right: 9px;
-  /* clear of the timeline (44 px, bottom 0) and of a wrapped caption on a short
-     window: the rail's last button must never sit on top of either */
-  bottom: 104px;
+  /* sits on the timeline instead of floating above it: at 104 px the stack ended
+     60 px short of the bar, which left a dead hole between the last icon and the
+     duration and pushed the whole column up the right edge. 44 px bar + 8 px air */
+  bottom: 52px;
   gap: 17px;
 }
+/* More floats above the rail rather than ending the column: same 17 px rhythm,
+   but out of flow, so the stack below can drop onto the timeline without dragging
+   the [...] button down into the duration text. */
+.stk-rail-more {
+  position: absolute;
+  right: 4px;
+  bottom: calc(100% + 17px);
+}
+/* the scrub bar grows to 58 px when open (the desktop feed shows it open), so the
+   rail steps up by the same 14 px and keeps its 8 px of air above the bar */
+.stk-stage:has(.stk-timeline.stk-open) .stk-rail { bottom: 66px; }
 .stk-rail button {
   gap: 4px;
   font-size: 11px;
@@ -1965,6 +1985,69 @@ body.stk-anim .stk-grid-5 .stk-tile {
 .stk-pref-stack .stk-pref-control { max-width: 100%; }
 .stk-pref-stack .stk-pills { justify-content: flex-start; }
 
+/* percent dial: the track fills the row and the readout sits at its end, so the
+   number never hides under the thumb */
+.stk-slider-wrap { display: flex; align-items: center; gap: 10px; width: 100%; }
+/* the attribute in the selector is load-bearing: a theme plugin in the same
+   app styles `input[type="range"]` and wins a bare class on specificity, which
+   painted this slider in the theme's accent instead of ours */
+input.stk-slider[type="range"] {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 26px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  -webkit-appearance: none;
+  appearance: none;
+  accent-color: #ff2d55;
+  touch-action: pan-y;
+}
+/* the track is painted by the input's own background gradient (set inline from
+   the value), so the pseudo-elements stay clear and only the thumb is drawn */
+input.stk-slider[type="range"]::-webkit-slider-runnable-track {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 2px;
+  background: transparent;
+  border: 0;
+}
+input.stk-slider[type="range"]::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: transparent;
+  border: 0;
+}
+input.stk-slider[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  margin-top: -7px;
+  border: 0;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.55);
+}
+input.stk-slider[type="range"]::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.55);
+}
+.stk-slider-value {
+  flex: 0 0 auto;
+  min-width: 42px;
+  text-align: right;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.75);
+}
+
 /* ---------- folder view: file-manager list ---------- */
 .stk-fv-head {
   display: flex;
@@ -2142,10 +2225,14 @@ body.stk-anim .stk-grid-5 .stk-tile {
 .stk-timeline.stk-open .stk-timeline-fill { border-radius: 8px 0 0 8px; }
 .stk-timeline-knob {
   position: absolute;
-  top: 50%;
+  /* the bar rests on the base of the video, and the stage clips at that edge:
+     a centred 22px knob had its lower half cut off by the tab bar. Sitting the
+     knob on the bar's own bottom edge keeps the whole dot visible without
+     lifting the bar into the caption. */
+  bottom: 0;
   width: 22px;
   height: 22px;
-  margin: -11px 0 0 -11px;
+  margin: 0 0 0 -11px;
   border-radius: 50%;
   background: #fff;
   box-shadow: 0 1px 7px rgba(0, 0, 0, .6);
@@ -2865,6 +2952,10 @@ body.stk-clip-mode .stk-gear-fab { display: none; }
   gap: 3px;
   z-index: 20;
 }
+/* the bubble rises above the caption band while it is up: the caption's block
+   sits at z-index 31 and would otherwise paint over the frame. The bar itself
+   only overlaps that block in the idle HUD, so it stays put the rest of the time. */
+.stk-timeline:has(.stk-scrub-preview) { z-index: 32; }
 .stk-scrub-cell {
   display: block;
   border-radius: 6px;
@@ -2896,11 +2987,10 @@ img.stk-scrub-cell {
   background-repeat: no-repeat;
   background-color: #000;
 }
-/* the tiny bubble above the bar only has to carry the time while the whole
-   frame is already on screen */
-.stk-timeline.stk-scrubbing .stk-scrub-cell { display: none; }
+/* the bubble above the bar is the only preview: the full-stage frame it used to
+   hand over to is gone, so the cell stays up for the whole drag */
 @media (prefers-reduced-motion: no-preference) {
-  .stk-scrub-frame { animation: stk-frame-in 90ms ease-out both; }
+  .stk-scrub-preview { animation: stk-frame-in 90ms ease-out both; }
 }
 @keyframes stk-frame-in {
   from { opacity: 0; }
@@ -3327,31 +3417,39 @@ html.stk-kb-open .stk-tag-sheet {
    costs the same vertical space as eight. Scanning is worse than a wrapped
    block; height is what a sheet on a phone cannot afford. */
 .stk-tag-grid {
-  /* one row by default — a column flow with a fixed height reads in order and
-     scrolls sideways like a TV row. `stk-two` doubles the height for the long
-     act lists, which still flick as a single strip (2 columns of chips). */
-  display: flex;
-  flex-direction: column;
-  flex-wrap: wrap;
-  align-content: flex-start;
+  /* Three across, then down: 1 2 3 / 4 5 6 / 7 8 9, and the next nine start a
+     new block to the right. Grid, not flex-column: column flow read down the
+     first column, so the list arrived 1 4 7 / 2 5 8 / 3 6 9 — the order was
+     there, the reading direction was not. Each chip is placed explicitly from
+     its index at the section's row count. */
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-rows: minmax(0, 1fr);
+  grid-auto-columns: max-content;
+  align-items: center;
+  justify-content: start;
+  /* each pill keeps its own width: equal columns turned a short tag into a
+     wide empty pill just because it shared a column with a long one */
+  justify-items: start;
   height: 44px;
-  gap: 7px;
+  column-gap: 7px;
   overflow-x: auto;
   overflow-y: hidden;
   scroll-snap-type: x proximity;
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-x: contain;
-  padding-bottom: 6px;
   flex: 0 0 auto;
 }
-.stk-tag-grid.stk-two { height: calc(44px * 2 + 7px); }
+.stk-tag-grid.stk-two { grid-template-rows: repeat(2, minmax(0, 1fr)); height: calc(44px * 2 + 7px); }
 /* Once a row reaches its end a further swipe used to chain up to the sheet and
    pan the whole view. `contain` stops the chain at the row, so the sheet only
    ever moves vertically. */
 .stk-tag-grid { overscroll-behavior-x: contain; overscroll-behavior-y: contain; }
+.stk-tag-grid-3 { grid-template-rows: repeat(3, minmax(0, 1fr)); height: calc(44px * 3 + 14px); }
 .stk-tag-grid::-webkit-scrollbar { display: none; }
 .stk-tag-grid > .stk-tagpick { scroll-snap-align: start; white-space: nowrap; }
+/* one line per list: nothing sits above or below a chip but the strip itself */
 
 /* ---- free-text tag field ------------------------------------------------ *
    chips closed with , / Tab sit above the suggestions, which sit above the
@@ -5565,6 +5663,201 @@ body.stk-fullscreen-mode .stash-tok.stk-feed-fullscreen {
 
 .stk-set-block { display: flex; flex-direction: column; margin-bottom: 16px; }
 
+/* ---- the family float above a head pill ---------------------------------- */
+/* Three variants arrive one after another over the thumb that asked, so the
+   next tap is a thumb-width away instead of a scroll away. */
+.stk-pillpop {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  max-width: 250px;
+  padding: 8px;
+  border-radius: 14px;
+  background: rgba(24,24,26,.97);
+  border: 1px solid rgba(255,255,255,.13);
+  box-shadow: 0 14px 36px rgba(0,0,0,.6);
+  transform: translate(-50%, -100%);
+  animation: stk-pop-in 140ms ease-out;
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+.stk-pillpop-tail {
+  position: absolute;
+  left: 50%;
+  bottom: -5px;
+  width: 10px;
+  height: 10px;
+  margin-left: -5px;
+  transform: rotate(45deg);
+  background: rgba(24,24,26,.97);
+  border-right: 1px solid rgba(255,255,255,.13);
+  border-bottom: 1px solid rgba(255,255,255,.13);
+}
+.stk-pillpop-chip {
+  border: 1px solid rgba(255,255,255,.16);
+  background: rgba(255,255,255,.07);
+  color: #fff;
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1;
+  padding: 8px 12px;
+  border-radius: 999px;
+  opacity: 0;
+  animation: stk-bloop 240ms cubic-bezier(.34,1.56,.64,1) forwards;
+}
+.stk-pillpop-chip.stk-on { background: var(--stk-accent, #e50914); border-color: transparent; }
+@keyframes stk-bloop {
+  0% { opacity: 0; transform: scale(.55) translateY(8px); }
+  60% { opacity: 1; transform: scale(1.07) translateY(-2px); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes stk-pop-in {
+  from { opacity: 0; transform: translate(-50%, -96%) scale(.94); }
+  to { opacity: 1; transform: translate(-50%, -100%) scale(1); }
+}
+/* a pill that opens a family says so with a hairline dot, not a chevron:
+   the dot reads at thumb size and does not widen the chip */
+.stk-tagpick { position: relative; }
+.stk-has-kids::after {
+  content: "";
+  position: absolute;
+  top: 5px;
+  right: 6px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: rgba(255,255,255,.5);
+}
+@media (prefers-reduced-motion: reduce) {
+  .stk-pillpop, .stk-pillpop-chip { animation: none; opacity: 1; }
+}
+
+/* ---- the fan: variants sweeping out of the pill -------------------------- */
+/* The tapped pill is the hinge. Each chip starts on it and flies to its place
+   on the arc, so the motion explains where the options came from. */
+.stk-fan {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 60;
+}
+.stk-fan-chip {
+  position: fixed;
+  left: 0;
+  top: 0;
+  border: 1px solid rgba(255,255,255,.17);
+  background: rgba(26,26,29,.97);
+  color: #fff;
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1;
+  padding: 9px 13px;
+  border-radius: 999px;
+  white-space: nowrap;
+  box-shadow: 0 10px 26px rgba(0,0,0,.55);
+  transition:
+    transform 280ms cubic-bezier(.22,1.3,.42,1),
+    opacity 180ms ease-out;
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+.stk-fan-chip.stk-on { background: var(--stk-accent, #e50914); border-color: transparent; }
+@media (prefers-reduced-motion: reduce) {
+  .stk-fan-chip { transition: opacity 120ms linear; }
+}
+
+/* ---- buffering ----------------------------------------------------------- */
+.stk-buffer {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  pointer-events: none;
+  z-index: 4;
+}
+.stk-buffer-ring {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 2.5px solid rgba(255,255,255,.2);
+  border-top-color: rgba(255,255,255,.9);
+  animation: stk-spin .75s linear infinite, stk-buffer-in .2s ease .15s both;
+}
+@keyframes stk-spin {
+  to { transform: rotate(360deg); }
+}
+/* a clip that loads instantly should not flash a spinner on the way */
+@keyframes stk-buffer-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stk-buffer-ring { animation: stk-buffer-in .2s ease both; border-top-color: #fff; }
+}
+
+/* ---- why it is slow ------------------------------------------------------ *
+   Only after two seconds, so a quick clip never flashes a paragraph. A soft
+   pill keeps small text legible over a bright frame without covering it. */
+.stk-hint {
+  max-width: 78%;
+  padding: 9px 13px 10px;
+  border-radius: 14px;
+  text-align: center;
+  color: rgba(255,255,255,.92);
+  background: rgba(8,8,10,.5);
+  border: 1px solid rgba(255,255,255,.07);
+  -webkit-backdrop-filter: blur(10px) saturate(120%);
+  backdrop-filter: blur(10px) saturate(120%);
+  box-shadow: 0 10px 24px rgba(0,0,0,.35);
+  animation: stk-hint-in .32s cubic-bezier(.22,1,.36,1) both;
+}
+.stk-hint-title { font-size: 13px; font-weight: 650; letter-spacing: .005em; }
+.stk-hint-detail {
+  margin-top: 3px;
+  font-size: 11.5px;
+  line-height: 1.42;
+  color: rgba(255,255,255,.66);
+  text-wrap: pretty;
+}
+.stk-hint-facts {
+  margin-top: 7px;
+  font-size: 10px;
+  letter-spacing: .02em;
+  color: rgba(255,255,255,.34);
+  font-variant-numeric: tabular-nums;
+}
+@keyframes stk-hint-in {
+  from { opacity: 0; transform: translateY(4px) scale(.98); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stk-hint { animation: stk-buffer-in .2s ease both; }
+}
+
+/* ---- whose ethnicity: one row per performer ----------------------------- */
+.stk-ethpick { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+.stk-ethpick-row {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 8px 10px; border-radius: 11px;
+  border: 1px solid rgba(255,255,255,.09);
+  background: rgba(255,255,255,.045);
+  color: #fff; font-size: 14px; text-align: left;
+}
+.stk-ethpick-avatar {
+  width: 34px; height: 34px; border-radius: 50%; flex: 0 0 auto;
+  background-color: #262626; background-size: cover; background-position: center;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; color: rgba(255,255,255,.75);
+}
+.stk-ethpick-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stk-ethpick-go { color: rgba(255,255,255,.35); display: flex; }
+
 /* ---- Customize StashTok: the ordered chip lists ------------------------- *
    A row per chip with its position number, so the order is what you read, not
    something you infer from the layout. */
@@ -6558,17 +6851,18 @@ body.stk-fullscreen-mode .stash-tok.stk-feed-fullscreen {
    Add Marker sheet so the in point can be judged by eye before naming it. */
 .stk-marker-snap {
   display: block;
-  /* fit-content, not a fixed width: a vertical clip made the polaroid as tall
-     as the modal. The frame hugs the photo and the photo is capped below. */
+  /* A plain white stroke around the frame, not a polaroid: no paper margin, no
+     tilt, no drop shadow. 5px is the old 7px frame minus a quarter, which is
+     what was asked for when adding a marker. */
   width: fit-content;
   max-width: min(62%, 230px);
   margin: 4px auto 18px;
-  padding: 7px 7px 26px;
-  background: #f7f6f2;
-  border-radius: 0;
-  box-shadow: 0 12px 26px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.4);
-  transform: rotate(-3.5deg);
-  transform-origin: 50% 55%;
+  padding: 0;
+  border: 5px solid #f7f6f2;
+  border-radius: 2px;
+  background: #111;
+  box-shadow: none;
+  transform: none;
 }
 .stk-marker-snap-img {
   display: block;
@@ -6586,8 +6880,10 @@ body.stk-fullscreen-mode .stash-tok.stk-feed-fullscreen {
   .stk-marker-snap { animation: stk-snap-in 240ms ease-out both; }
 }
 @keyframes stk-snap-in {
-  from { opacity: 0; transform: rotate(-6deg) translateY(6px) scale(0.97); }
-  to { opacity: 1; transform: rotate(-3.5deg) translateY(0) scale(1); }
+  /* no tilt any more: the frame is a plain stroke, so the entrance is a lift,
+     and `both` would otherwise re-apply the old rotation after it finished */
+  from { opacity: 0; transform: translateY(6px) scale(0.97); }
+  to { opacity: 1; transform: none; }
 }
 
 /* ---------------- page, tab and step transitions ----------------
@@ -6657,3 +6953,20 @@ body.stk-fullscreen-mode .stash-tok.stk-feed-fullscreen {
 .stk-excl-pill { display: inline-flex; align-items: center; gap: 5px; }
 .stk-excl-search { margin: 4px 0 8px; }
 .stk-pick-count { margin-left: auto; padding-right: 10px; font-size: 12px; opacity: 0.55; }
+
+/* Meta swap: the handle and caption are a fixed HUD over a video that travels,
+   so a clip change used to be a hard cut of the text. A short lift covers it
+   without moving any hit target — the change is a remount keyed on the scene id,
+   so this restarts only when the clip actually changes, not on tag edits or on
+   the HUD fading back in. Deliberately no fill mode: a forwards fill would pin
+   opacity at 1 and kill the idle HUD's half-strength handle. */
+@media (prefers-reduced-motion: no-preference) {
+  .stk-meta-swap { animation: stk-meta-swap 150ms cubic-bezier(.2,.7,.3,1); }
+  /* hidden HUD: the handle is a ghost at .5 and the caption is display:none, so
+     there is nothing to animate and the animation would fight those rules */
+  .stk-hud-hidden .stk-meta-swap { animation: none; }
+}
+@keyframes stk-meta-swap {
+  from { opacity: 0; transform: translateY(7px); }
+  to { opacity: 1; transform: translateY(0); }
+}

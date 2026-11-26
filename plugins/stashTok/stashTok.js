@@ -94,6 +94,14 @@
   const EDGE_ZONE_PX = 200;
   const EDGE_ZONE_RATIO = 0.33;
   const SEEK_STEP = 5;
+  /* A rush of edge double taps is one scrub, not ten gestures, so the jump grows
+     with the streak: 5, 5, 10, 10, 15, 15, then 30 for every tap after that. The
+     pause is what tells the app the rush is over; a change of side is a new one. */
+  const SEEK_STREAK_STEPS = [5, 5, 10, 10, 15, 15, 30];
+  const SEEK_STREAK_MS = 1500;
+  function seekStreakStep(count) {
+    return SEEK_STREAK_STEPS[Math.min(count, SEEK_STREAK_STEPS.length) - 1];
+  }
   /* how far up the scrub bar the finger travels before the Marker bubble arms */
   const MARKER_LIFT_PX = 96;
 
@@ -778,7 +786,7 @@
     play_count
     paths { stream preview screenshot vtt sprite }
     files { path size duration width height video_codec audio_codec frame_rate bit_rate }
-    performers { id name image_path ethnicity rating100 }
+    performers { id name image_path ethnicity rating100 gender }
     studio { id name }
     tags { id name }
     scene_markers { id title seconds end_seconds primary_tag { id name } }
@@ -1635,11 +1643,32 @@
   const CONTENT_TAGS = ["Full Scene", "Short Clip", "Livestream", "Compilation"];
   const BODY_TAGS = ["Big Tits", "Big Ass", "Curvy", "Petite", "Fit / Athletic"];
 
+  /* The order is how a scene goes, not how the library counts, because this is
+     the list a finger is moving down: the act that opens the scene, then the
+     positions in the order they are usually reached. The rest follow in Wario's
+     own scene counts (Blowjob 4953, Cowgirl 2357, Missionary 2015, Doggy 1897,
+     Pussy Licking 1717, Reverse Cowgirl 1509, Handjob 1197, Anal 1166). */
   const POSITION_TAGS = [
-    "Doggy Style", "Missionary", "Cowgirl", "Reverse Cowgirl", "Blowjob", "Anal", "Facial", "Cumshot",
-    "Prone Bone", "Standing", "Titfuck", "Handjob", "Deepthroat", "69", "Spooning", "Squirting",
-    "Double Penetration", "Piledriver",
+    "Blowjob", "Cowgirl", "Reverse Cowgirl", "Pussy Licking", "Doggy Style", "Missionary",
+    "Prone Bone", "Standing", "Anal", "Toys", "Handjob", "Deepthroat", "69", "Spooning",
+    "Titfuck", "Piledriver", "Threesome", "Double Penetration", "Squirting", "Facial", "Cumshot",
   ];
+
+  /* A position that names a family is a head pill, and its variants bubble out
+     of it: tapping Blowjob surfaces Deepthroat beside the thumb instead of
+     making the user scroll a list of every way to do it. These are not chip
+     lists — the pills bubble, they are not the list — so the map is coded, and
+     a name a server has never seen is created as a tag when it is tapped. */
+  const POSITION_CHILDREN = {
+    Blowjob: ["Deepthroat", "Face Fuck", "Ball Licking"],
+    "Pussy Licking": ["69", "Face Sitting"],
+    "Doggy Style": ["Standing Doggy", "Doggy Style - POV"],
+    Cowgirl: ["Cowgirl - POV", "Reverse Cowgirl"],
+    Anal: ["Anal Creampie", "Gaping", "Anal Toys"],
+    Toys: ["Dildo", "Vibrator", "Wand", "Anal Toys", "Fucking Machine"],
+    Threesome: ["FFM", "MMF", "Double Penetration", "Eiffel Tower"],
+    Standing: ["Standing Doggy", "Standing 69"],
+  };
   const FETISH_TAGS = [
     "BDSM", "Bondage", "Choking", "Domination", "Submission", "Roleplay", "Foot Fetish", "Interracial",
     "BBC", "Femdom", "Spanking", "Exhibitionism", "Voyeur", "Blindfold", "Latex", "Leather",
@@ -1666,6 +1695,31 @@
     fetish: FETISH_TAGS,
   };
 
+  /* The order this list shipped with before it was rewritten to the order a
+     scene is usually tagged in. A server still holding exactly that order never
+     made a choice about it, so it is upgraded; a list that differs is the
+     user's own and is left alone. */
+  const LEGACY_POSITION_TAGS = [
+    /* orders this list has shipped with. A server holding one of them never
+       made a choice about it, so it is replaced with the current order. */
+    [
+      "Doggy Style", "Missionary", "Cowgirl", "Reverse Cowgirl", "Blowjob", "Anal", "Facial", "Cumshot",
+      "Prone Bone", "Standing", "Titfuck", "Handjob", "Deepthroat", "69", "Spooning", "Squirting",
+      "Double Penetration", "Piledriver",
+    ],
+    [
+      "Blowjob", "Pussy Licking", "Cowgirl", "Reverse Cowgirl", "Doggy Style", "Missionary",
+      "Prone Bone", "Standing", "Anal", "Toys", "Handjob", "Deepthroat", "69", "Spooning",
+      "Titfuck", "Piledriver", "Threesome", "Double Penetration", "Squirting", "Facial", "Cumshot",
+    ],
+  ];
+
+  function sameNames(a, b) {
+    const left = a.map((name) => String(name).trim().toLowerCase()).sort();
+    const right = b.map((name) => String(name).trim().toLowerCase()).sort();
+    return left.length === right.length && left.every((name, i) => name === right[i]);
+  }
+
   function tagLists(customize) {
     const c = customize && typeof customize === "object" ? customize : {};
     const out = {};
@@ -1674,6 +1728,9 @@
       out[key] = Array.isArray(value)
         ? value.map((name) => String(name).trim()).filter(Boolean)
         : DEFAULT_LISTS[key].slice();
+      if (key === "positions" && LEGACY_POSITION_TAGS.some((old) => sameNames(out[key], old))) {
+        out[key] = DEFAULT_LISTS.positions.slice();
+      }
     });
     return out;
   }
@@ -1692,9 +1749,13 @@
   /* the section order is the order the sheet draws them in */
   function tagSections(lists) {
     const l = lists || tagLists(null);
+    /* Every strip is one line high and scrolls sideways. Two and three row
+       versions were tried: they ate the sheet's height and the extra rows made
+       the order harder to follow, not easier. One line per list, and more
+       lists fit. */
     return [
       { id: "ethnicity", title: "Ethnicity", tags: l.ethnicity },
-      { id: "category", title: "Category", parents: CATEGORY_PARENTS, children: CATEGORY_TAGS, standalone: CATEGORY_STANDALONE },
+      { id: "category", title: "Category", parents: CATEGORY_PARENTS, children: CATEGORY_TAGS },
       { id: "content", title: "Content Format", tags: l.content },
       { id: "body", title: "Body", tags: l.body },
       { id: "positions", title: "Positions & Acts", tags: l.positions },
@@ -1707,7 +1768,12 @@
      and Content Format describe the production rather than the moment, so the
      marker sheet never offers them — not even while typing. */
   function markerSections(lists) {
-    return tagSections(lists).filter((section) => ["ethnicity", "positions", "fetish"].indexOf(section.id) >= 0);
+    /* Body is back: "Big Ass" is a thing a marker is allowed to be, not only a
+       tag that rides along. Ethnicity, then the body, then the act, then the
+       fetishes — the order a scene is looked at. */
+    return tagSections(lists).filter(
+      (section) => ["ethnicity", "body", "positions", "fetish"].indexOf(section.id) >= 0
+    );
   }
 
   function vocabularyOf(sections) {
@@ -1722,9 +1788,37 @@
     }, []);
   }
 
-  /* A performer's ethnicity is a free string on the record, so the sheet has to
-     match it back to a chip: the chip the performer already carries is the
-     answer, and a scene with no performer falls back to the scene's own tags. */
+  /* Where a marker's ethnicity comes from, in the order it should be trusted:
+     the performer already on the scene (hers is a fact about her), then the
+     scene's own tags (a scene tagged Latina makes every marker on it Latina),
+     then the Customize default. Only a miss leaves the chip for the user. */
+  function sceneEthnicity(scene, lists, genders) {
+    if (!scene) return "";
+    const rows = ethnicityRows(lists);
+    const match = (parts) => {
+      const hay = (parts || []).join(" ").toLowerCase();
+      if (!hay.trim()) return "";
+      const hit = rows.find((row) =>
+        row.performer.concat(row.scene).some((name) => hay.includes(String(name).toLowerCase()))
+      );
+      return hit ? hit.name : "";
+    };
+    const want = genders && genders.length ? genders : ["FEMALE"];
+    /* only the people an ethnicity would be written to: a male performer's
+       ethnicity is not what a marker on this scene is about, and letting him
+       answer the question prefilled the wrong chip. Unknown gender stays in. */
+    const people = (scene.performers || []).filter((person) => {
+      const gender = String(person.gender || "");
+      return !gender || want.indexOf(gender) >= 0;
+    });
+    for (let i = 0; i < people.length; i += 1) {
+      const hit = match([String(people[i].ethnicity || "")]);
+      if (hit) return hit;
+    }
+    return match((scene.tags || []).map((tag) => String(tag.name || "")));
+  }
+
+  /* kept for the tag sheet, which asks about one performer */
   function ethnicityOf(performer, lists) {
     if (!performer) return "";
     const hay = [String(performer.ethnicity || "")]
@@ -2191,6 +2285,10 @@
     showPath: false,
     /* portrait framing: on unless turned off in Settings */
     autoCrop: true,
+    /* how much of a wide clip's width survives the auto-crop: 50 keeps the
+       middle half (25 % off each side). 25 is the most aggressive crop, 75 the
+       mildest — the slider is the dial between "too wide" and "too cropped". */
+    cropPercent: 50,
     /* sideways drag on the video seeks the clip. Off by default: a horizontal
        drag is how a thumb slips while swiping, and the seek it caused read as the
        clip jumping on its own. The scrub bar is opened by tapping the caption. */
@@ -3182,6 +3280,220 @@ void main() {
     };
   }
 
+  /* ---- why is this taking so long -----------------------------------------
+     A clip that has not started after two seconds has a reason, and after two
+     seconds the reason is worth one sentence. Four cheap probes separate the
+     cases a person can act on:
+
+       server  a tiny GraphQL query — Stash's own cpu/db work plus the round trip
+       net     one chunk of a static plugin file — the round trip with almost no
+               server work, so a slow server still answers this quickly
+       stream  the first 64 KB of this very clip — disk/NAS read, transcoding and
+               real throughput on the path the video itself takes
+       lag     timer drift on this tab — the browser's main thread, i.e. "lots of
+               sessions/tabs open"
+
+     The wording only claims what the numbers support: a probe that failed is
+     left out of the sentence and out of the facts line. */
+  const SLOW_AFTER = 2000;
+  const SLOW_ROUNDS = 4;
+  const SLOW_ROUND_GAP = 6000;
+
+  function fetchBounded(url, options) {
+    if (typeof AbortController === "undefined") return fetch(url, options);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 7000);
+    return fetch(url, Object.assign({}, options, { signal: controller.signal }))
+      .finally(() => clearTimeout(timer));
+  }
+
+  function probeServerTime() {
+    const started = performance.now();
+    return fetchBounded("/graphql", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: "{version{version}}" }),
+    })
+      .then((response) => response.text().then(() => ({ ms: performance.now() - started, ok: response.ok })))
+      .catch(() => ({ ms: performance.now() - started, failed: true }));
+  }
+
+  /* one read from a static file: the response headers plus first chunk are the
+     round trip; the file itself is never downloaded, so a fat CSS costs nothing */
+  function probeNetTime() {
+    const started = performance.now();
+    return fetchBounded(`/plugin/stashTok/stashTok.css?probe=${Date.now()}`, {
+      cache: "no-store",
+      credentials: "same-origin",
+    })
+      .then((response) => {
+        if (!response.body || !response.body.getReader) {
+          return response.blob().then(() => ({ ms: performance.now() - started, ok: response.ok }));
+        }
+        const reader = response.body.getReader();
+        return reader.read().then(() => {
+          reader.cancel().catch(() => {});
+          return { ms: performance.now() - started, ok: response.ok };
+        });
+      })
+      .catch(() => ({ ms: performance.now() - started, failed: true }));
+  }
+
+  /* the clip's own bytes: a range request on the same URL the <video> is using,
+     so this measures the path that is actually slow. 64 KB is enough for a rate
+     and small enough not to steal the clip's bandwidth. */
+  function probeStreamTime(url) {
+    if (!url) return Promise.resolve(null);
+    const started = performance.now();
+    let firstByte = 0;
+    let bytes = 0;
+    return fetchBounded(url, {
+      headers: { Range: "bytes=0-65535" },
+      cache: "no-store",
+      credentials: "same-origin",
+    })
+      .then((response) => {
+        if (!response.ok) return { failed: true, ms: performance.now() - started };
+        if (!response.body || !response.body.getReader) {
+          return response.blob().then(() => ({ failed: true, ms: performance.now() - started }));
+        }
+        const reader = response.body.getReader();
+        const pump = () =>
+          reader.read().then((chunk) => {
+            if (chunk.done) return null;
+            bytes += chunk.value.byteLength;
+            if (!firstByte) firstByte = performance.now() - started;
+            if (bytes >= 65536) return null;
+            return pump();
+          });
+        return pump().then(() => {
+          reader.cancel().catch(() => {});
+          const total = performance.now() - started;
+          return {
+            firstByte: firstByte || total,
+            total,
+            bytes,
+            mbps: bytes ? (bytes * 8) / total / 1000 : 0,
+          };
+        });
+      })
+      .catch(() => ({ failed: true, ms: performance.now() - started, firstByte: firstByte }));
+  }
+
+  /* a setTimeout that should fire in 80 ms: the overshoot is the main thread's
+     own backlog, which is what "the computer is bogged down" looks like in a tab */
+  function probeTabLag() {
+    return new Promise((resolve) => {
+      const started = performance.now();
+      setTimeout(() => resolve(Math.max(0, performance.now() - started - 80)), 80);
+    });
+  }
+
+  function fmtSpan(ms) {
+    if (!Number.isFinite(ms) || ms < 0) return "?";
+    return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`;
+  }
+
+  function slowLoadVerdict(probes) {
+    const server = probes.server || {};
+    const net = probes.net || {};
+    const stream = probes.stream || {};
+    const facts = [];
+    if (!server.failed && server.ms != null) facts.push(`server ${fmtSpan(server.ms)}`);
+    if (!net.failed && net.ms != null) facts.push(`net ${fmtSpan(net.ms)}`);
+    if (stream && !stream.failed && stream.mbps) {
+      facts.push(`${stream.mbps < 1 ? stream.mbps.toFixed(2) : stream.mbps.toFixed(1)} Mbps`);
+    }
+    if (probes.failed || (server.ms == null && net.ms == null)) {
+      return { detail: "Taking longer than usual — the check could not reach Stash.", facts };
+    }
+
+    if (probes.lag > 400) {
+      return { detail: "The clip is arriving, but this tab is lagging — a busy browser, not the server.", facts };
+    }
+    if (server.ms > 1200 && server.ms > (net.ms || 0) * 3) {
+      return { detail: `Stash is busy — a tiny query took ${fmtSpan(server.ms)} to answer.`, facts };
+    }
+    if (net.ms > 1200) {
+      return { detail: `The connection is slow — even a small request takes ${fmtSpan(net.ms)}.`, facts };
+    }
+    if (stream.failed || stream.firstByte > 1500 || (stream.mbps && stream.mbps < 1.2)) {
+      return { detail: "Stash answers fast; the file itself reads slowly — a big clip, a transcode or a NAS spin-up.", facts };
+    }
+    if (stream && (stream.mbps || stream.firstByte)) {
+      return { detail: "Everything is answering fast — the clip is just large.", facts };
+    }
+    return { detail: "Taking longer than usual — nothing here stands out as the cause.", facts };
+  }
+
+  /* the verdict is pure arithmetic, so a harness can drive every branch without
+     waiting for a real stall; never installed on a normal load */
+  if (/[?&]qa=/.test(location.search)) window.__stkSlowVerdict = slowLoadVerdict;
+
+  /* Nothing for the first two seconds: a clip that starts quickly must never
+     flash this. Then a ring above and one line of why, re-measured while the
+     wait lasts. The component lives inside the spinner, so it disappears the
+     moment the video plays. */
+  function SlowLoadHint({ hintKey, phase, streamUrl, fallbackUrl }) {
+    const [round, setRound] = useState(0);
+    const [probes, setProbes] = useState(null);
+
+    useEffect(() => {
+      setRound(0);
+      setProbes(null);
+      const timer = setTimeout(() => setRound(1), SLOW_AFTER);
+      return () => clearTimeout(timer);
+    }, [hintKey]);
+
+    useEffect(() => {
+      if (!round) return undefined;
+      let alive = true;
+      /* the probes run together and are cut off: a stalled clip is exactly when
+         the connection is at its worst, so waiting for four sequential round
+         trips would leave "Checking…" up longer than the stall itself */
+      const capped = (promise, ms) =>
+        Promise.race([
+          promise.catch(() => null),
+          new Promise((resolve) => setTimeout(() => resolve(null), ms)),
+        ]);
+      Promise.all([
+        capped(probeServerTime(), 2500),
+        capped(probeNetTime(), 2500),
+        capped(
+          (async () => {
+            let stream = await probeStreamTime(streamUrl);
+            if ((!stream || stream.failed) && fallbackUrl && fallbackUrl !== streamUrl) {
+              stream = await probeStreamTime(fallbackUrl);
+            }
+            return stream;
+          })(),
+          3500
+        ),
+        capped(probeTabLag(), 800),
+      ]).then(([server, net, stream, lag]) => {
+        if (!alive) return;
+        setProbes({ server: server || {}, net: net || {}, stream: stream || null, lag: lag || 0 });
+      });
+      const again = round < SLOW_ROUNDS
+        ? setTimeout(() => { if (alive) setRound((n) => n + 1); }, SLOW_ROUND_GAP)
+        : 0;
+      return () => { alive = false; clearTimeout(again); };
+    }, [round, hintKey, streamUrl, fallbackUrl]);
+
+    if (!round) return null;
+    const verdict = probes ? slowLoadVerdict(probes) : null;
+    return h(
+      "div",
+      { className: "stk-hint" },
+      h("div", { className: "stk-hint-title" }, phase === "buffer" ? "Still buffering…" : "Still loading this clip…"),
+      h("div", { className: "stk-hint-detail" }, verdict ? verdict.detail : "Checking what is holding it up…"),
+      verdict && verdict.facts.length
+        ? h("div", { className: "stk-hint-facts" }, verdict.facts.join(" · "))
+        : null
+    );
+  }
+
   function FeedView({ prefs, spec, cfg, refreshKey, onBack, onSearch, onSettings, onMenu, onOpenPerformer, onOpenTag, onDeriveFeed, onEditFeed, onOpenFolder, onOpenFolderProfile, feeds, onSwitchFeed, onNewFeed, onManageFeeds, onDuo, duo, desktop }) {
     const sfw = !!cfg.sfw;
     /* the chip vocabulary, in the order Settings → Customize StashTok puts it.
@@ -3194,6 +3506,29 @@ void main() {
     const vocabulary = useMemo(() => vocabularyOf(sections), [sections]);
     const markerDefaults = (customize && customize.markerDefaults) || {};
     const tagDefaults = (customize && customize.tagDefaults) || {};
+    /* whose profile an ethnicity belongs on. Female by default: a marker's
+       ethnicity is a fact about the woman in the clip, and the men on set are
+       not who it is for. */
+    const ethGenders = useMemo(() => {
+      const list = customize && Array.isArray(customize.ethGenders) ? customize.ethGenders : null;
+      return list && list.length ? list : ["FEMALE"];
+    }, [customize]);
+    /* A performer with no gender set cannot be filtered out of a female-only
+       rule: most of a scraped library has no gender, and dropping those would
+       silently send every ethnicity to the scene. Unknown counts as eligible. */
+    /* how a family opens: a fan of chips out of the pill, or the stacked list.
+       Both stay in the build until one of them has been lived with. */
+    /* the list is the default: the fan swept nicely but read worse in the hand.
+       Fan is still one toggle away in Customize. */
+    const expandStyle = (customize && customize.expandStyle === "fan") ? "fan" : "list";
+    const ethTargets = useCallback(
+      (scene) =>
+        ((scene && scene.performers) || []).filter((person) => {
+          const gender = String(person.gender || "");
+          return !gender || ethGenders.indexOf(gender) >= 0;
+        }),
+      [ethGenders]
+    );
     const [items, setItems] = useState([]);
     const [index, setIndex] = useState(0);
     const [count, setCount] = useState(0);
@@ -3201,6 +3536,10 @@ void main() {
     const [loading, setLoading] = useState(true);
     const [playing, setPlaying] = useState(false);
     const [ready, setReady] = useState(false);
+    /* the spinner. `waiting` is the browser's own word for "stalled", and a
+       seek is a gap of the same kind, so both raise it; the first frame that
+       lands clears it. */
+    const [buffering, setBuffering] = useState(false);
     const [fullscreen, setFullscreen] = useState(false);
     const [fullscreenFit, setFullscreenFit] = useState("auto");
     const nativeFullscreenRef = useRef(false);
@@ -3312,6 +3651,17 @@ void main() {
     const [markerTyping, setMarkerTyping] = useState(false);
     /* one ethnicity chip, multi-select fetish and any extra act */
     const [markerEth, setMarkerEth] = useState("");
+    /* set when a scene has several women with no ethnicity: the marker keeps
+       its tags, this asks whose profile the ethnicity is written to */
+    const [markerEthPick, setMarkerEthPick] = useState(null);
+    /* the family pill whose variants are floating above the thumb. `sheet`
+       decides what a pick means: the marker's act, or one more tag. */
+    const [pillPop, setPillPop] = useState(null);
+
+    /* the ethnicity last used on a marker. A library with no performer on the
+       clip has nothing to import, so walking a video means retyping it every
+       time — this makes the second marker start where the first one ended. */
+    const lastMarkerEth = useRef("");
     const [markerTags, setMarkerTags] = useState({});
     const [markerBusy, setMarkerBusy] = useState(false);
     /* the polaroid on the marker sheet: a JPEG data URL grabbed from the paused
@@ -3465,6 +3815,8 @@ void main() {
     const pressTimer = useRef(0);
     const tapTimer = useRef(null);
     const lastTapAt = useRef(0);
+    /* how many edge double taps have landed in a row, and on which side */
+    const seekStreakRef = useRef({ count: 0, at: 0, zone: "" });
     /* which stripe the first tap of a possible double tap landed in, so two taps
        in the same stripe are a seek and a stray pair across stripes is not */
     const lastTapZone = useRef("");
@@ -3879,6 +4231,8 @@ void main() {
       window.clearTimeout(tapTimer.current);
       tapUndoRef.current = null;
       lastTapAt.current = 0;
+      /* the next clip starts the scale at 5 s again, not where this one ended */
+      seekStreakRef.current = { count: 0, at: 0, zone: "" };
       cropZoomRef.current = false;
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [item && item.key]);
@@ -4262,7 +4616,14 @@ void main() {
        frame, then fill the device height. Two fingers still zoom freely; the
        cycle only decides where a double tap starts from. */
 
-    const CROP_SCALE = 1 / (1 - CROP_SIDE * 2);
+    /* how much of the width the crop throws away on each side, from the
+       Settings slider: 50 → 25 % a side (the middle half survives), 25 → 37.5 %
+       a side (the most aggressive), 75 → 12.5 % a side (the mildest). */
+    const cropSide = () => {
+      const pct = clamp(Number(prefs.cropPercent) || 50, 25, 75);
+      return (100 - pct) / 200;
+    };
+    const CROP_SCALE = 1 / Math.max(0.2, 1 - cropSide() * 2);
     /* portrait clips fill the frame too, as long as no edge loses more than a
        fifth of the picture: 0.4 of the frame in total, i.e. 20 % per edge */
     const NEAR_RATIO = 0.4;
@@ -4345,7 +4706,7 @@ void main() {
         cropZoomRef.current = kind ? s > 1.02 : false;
         applyTransform(animate);
       },
-      [activeVideo, cropKind, applyTransform]
+      [activeVideo, cropKind, applyTransform, prefs.cropPercent]
     );
 
     cropRefreshRef.current = () => applyCrop(cropModeRef.current, false, false);
@@ -4353,8 +4714,14 @@ void main() {
       cropRefreshRef.current();
     }, [fullscreen, fullscreenFit]);
 
+    /* moving the auto-crop slider re-frames the clip that is already on screen:
+       the scale lives in the transform, so nothing else would repaint it */
+    useEffect(() => {
+      cropRefreshRef.current();
+    }, [prefs.cropPercent]);
+
     const cropLabel = (mode) =>
-      mode === "full" ? "Full frame" : mode === "height" ? "Fill height" : cropKind() === "wide" ? "Crop 50%" : "Fill frame";
+      mode === "full" ? "Full frame" : mode === "height" ? "Fill height" : cropKind() === "wide" ? "Crop " + clamp(Number(prefs.cropPercent) || 50, 25, 75) + "%" : "Fill frame";
 
     /** double tap: auto → full → height → auto. A near-ratio portrait clip has
         only two useful framings (fill and full frame), so it flips between them. */
@@ -4931,7 +5298,12 @@ void main() {
         setMarkerTyping(false);
         /* ethnicity is imported, not asked for: the performer on the scene
            already says what she is, and that is what the chip starts on */
-        setMarkerEth(ethnicityOf((item.scene.performers || [])[0] || null, lists) || String(markerDefaults.ethnicity || ""));
+        setMarkerEth(
+          sceneEthnicity(item.scene, lists, ethGenders) ||
+            String(markerDefaults.ethnicity || "") ||
+            lastMarkerEth.current ||
+            ""
+        );
         setMarkerAt(Math.round(seconds * 100) / 100);
         setMarkerShown({});
         /* the sheet's polaroid is the frame on screen right now: freeze the
@@ -4965,14 +5337,13 @@ void main() {
           setMarkerSnap("");
         }
       },
-      [item, duration, activeVideo, lists, markerDefaults]
+      [item, duration, activeVideo, lists, markerDefaults, ethGenders]
     );
 
     const createMarker = useCallback(async () => {
       const name = markerName.trim();
       if (!name || markerAt == null || !item || !item.scene || markerBusy) return;
       const sceneId = item.scene.id;
-      const performer = (item.scene.performers || [])[0] || null;
       /* the act is the marker; ethnicity and fetish are tags that ride along */
       const eth = markerEth ? ethnicityRows(lists).find((row) => row.name === markerEth) || null : null;
       const extras = eth ? eth.scene.slice() : [];
@@ -5004,25 +5375,31 @@ void main() {
         );
         const marker = data.sceneMarkerCreate;
         mergeSceneMarker(sceneId, marker);
-        /* ethnicity belongs to a person: with a performer it is a fact about her
-           (and only filled in when she has none yet), with nobody to carry it
-           the scene takes it instead. A failed tag write must not lose the
-           marker that was just made. */
+        /* An ethnicity belongs to a person, and it is written once: the woman
+           on the scene, if she has none yet. Several women and no value is the
+           one case worth asking about, so the marker lands and a picker follows
+           instead of the app guessing. Nobody to carry it (all male, or no
+           performer at all) and it becomes a scene tag. A failed tag write must
+           never lose the marker that was just made. */
         if (eth) {
           try {
-            const names = performer ? eth.performer : eth.scene;
             const ids = [];
-            for (let i = 0; i < names.length; i += 1) {
-              ids.push(await ensureTagId(names[i], tagIdCache.current));
+            for (let i = 0; i < eth.performer.length; i += 1) {
+              ids.push(await ensureTagId(eth.performer[i], tagIdCache.current));
             }
-            if (performer) {
-              if (!String(performer.ethnicity || "").trim()) await addPerformerTags(performer.id, ids);
-            } else {
+            const targets = ethTargets(item.scene);
+            const bare = targets.filter((person) => !String(person.ethnicity || "").trim());
+            if (!targets.length) {
               await addSceneTags(sceneId, ids);
-              mergeSceneTags(sceneId, names.map((tagName, i) => ({ id: ids[i], name: tagName })));
+              mergeSceneTags(sceneId, eth.scene.map((tagName, i) => ({ id: ids[i], name: tagName })));
+            } else if (bare.length === 1) {
+              await addPerformerTags(bare[0].id, ids);
+            } else if (bare.length > 1) {
+              setMarkerEthPick({ performers: bare, tagIds: ids, eth: eth.name });
             }
           } catch (err) { /* the marker is what the tap asked for */ }
         }
+        if (eth) lastMarkerEth.current = eth.name;
         setMarkerAt(null);
         setMarkerName("");
         setMarkerTags({});
@@ -5036,7 +5413,83 @@ void main() {
       } finally {
         setMarkerBusy(false);
       }
-    }, [markerName, markerEth, markerTags, markerAt, item, markerBusy, mergeSceneMarker, mergeSceneTags]);
+    }, [markerName, markerEth, markerTags, markerAt, item, markerBusy, mergeSceneMarker, mergeSceneTags, ethTargets, lists]);
+
+    /* a family pill was tapped: float its variants over the pill itself */
+    const showPillPop = useCallback((sheet, parent, el, sectionId) => {
+      const names = POSITION_CHILDREN[parent];
+      if (!el) return;
+      /* a pill with no family is still an answer: it closes the one that was
+         open instead of leaving a stale float over the sheet */
+      if (!names || !names.length) {
+        setPillPop(null);
+        return;
+      }
+      const rect = el.getBoundingClientRect();
+      /* the float is drawn 250px wide and centred on its left edge, so the
+         clamp has to keep half of that on screen — clamping the centre alone
+         pushed it off the left edge for a pill in the first column */
+      const half = 129;
+      setPillPop({
+        sheet,
+        parent,
+        style: expandStyle,
+        sectionId: sectionId || "positions",
+        names,
+        x: Math.max(half, Math.min(window.innerWidth - half, rect.left + rect.width / 2)),
+        y: Math.max(96, rect.top - 12),
+        nonce: Date.now(),
+      });
+    }, [expandStyle]);
+
+    /* a variant was tapped: same as tapping that pill would have done, and the
+       family stays out so the next one is one more tap */
+    const pickPill = useCallback(
+      (name) => {
+        const pop = pillPop;
+        if (!pop) return;
+        if (pop.sheet === "marker") {
+          setMarkerTyping(false);
+          setMarkerName((cur) => (cur.trim().toLowerCase() === name.toLowerCase() ? "" : name));
+        } else {
+          toggleTagName(name, "positions");
+        }
+        setPillPop((cur) => (cur ? Object.assign({}, cur, { nonce: Date.now() }) : cur));
+      },
+      [pillPop, toggleTagName]
+    );
+
+    /* three seconds from the last touch, cancelled the moment it closes */
+    useEffect(() => {
+      if (!pillPop) return undefined;
+      const timer = setTimeout(() => setPillPop(null), 5000);
+      return () => clearTimeout(timer);
+    }, [pillPop]);
+
+    /* any tap outside the float dismisses it; a tap on another pill closes this
+       one and opens that one's */
+    useEffect(() => {
+      if (!pillPop) return undefined;
+      const onDown = (event) => {
+        const target = event.target;
+        if (target && target.closest && target.closest(".stk-pillpop")) return;
+        setPillPop(null);
+      };
+      document.addEventListener("pointerdown", onDown, true);
+      return () => document.removeEventListener("pointerdown", onDown, true);
+    }, [pillPop]);
+
+    /* the ethnicity picker's answer: write the tag to that performer only */
+    const applyMarkerEth = useCallback(async (person) => {
+      const pick = markerEthPick;
+      setMarkerEthPick(null);
+      if (!pick || !person) return;
+      try {
+        await addPerformerTags(person.id, pick.tagIds);
+      } catch (err) {
+        setError(String((err && err.message) || err));
+      }
+    }, [markerEthPick]);
 
     const revertMarker = useCallback(async () => {
       const current = markerUndo;
@@ -5278,6 +5731,7 @@ void main() {
       setCropBadge("");
       tapUndoRef.current = null;
       lastTapAt.current = 0;
+      seekStreakRef.current = { count: 0, at: 0, zone: "" };
       pts.current.clear();
       gesture.current = null;
       if (rafRef.current) {
@@ -5707,7 +6161,13 @@ void main() {
             const hgt = box ? box.height : 0;
             const fx = Math.max(Math.min(56, w / 2), Math.min(w - Math.min(56, w / 2), event.clientX - (box ? box.left : 0)));
             const fy = Math.max(Math.min(56, hgt / 2), Math.min(hgt - Math.min(56, hgt / 2), event.clientY - (box ? box.top : 0)));
-            seekBy(zone === "right" ? SEEK_STEP : -SEEK_STEP, zone, fx, fy);
+            const streak = seekStreakRef.current;
+            const chained =
+              streak.count > 0 && streak.zone === zone && now - streak.at <= SEEK_STREAK_MS;
+            const count = chained ? streak.count + 1 : 1;
+            seekStreakRef.current = { count, at: now, zone };
+            const step = seekStreakStep(count);
+            seekBy(zone === "right" ? step : -step, zone, fx, fy);
             return;
           }
           /* a pair that straddles two stripes is neither: swallow it rather than
@@ -5848,21 +6308,66 @@ void main() {
       return false;
     }
 
-    function seekAt(clientX) {
-      const video = activeVideo();
+    function barBox() {
       const bar = document.querySelector(".stk-timeline-inner");
-      const rect = (bar || stageRef.current || document.body).getBoundingClientRect();
-      const ratio = clamp((clientX - rect.left) / (rect.width || 1), 0, 1);
-      /* the same total the preview used, and for the same reason: a video with
-         its buffer evicted reports duration NaN, and `duration || video.duration`
-         collapsed to 0, which turned every drag into a seek back to the start */
+      return (bar || stageRef.current || document.body).getBoundingClientRect();
+    }
+
+    /* the same total the preview used, and for the same reason: a video with
+       its buffer evicted reports duration NaN, and `duration || video.duration`
+       collapsed to 0, which turned every drag into a seek back to the start */
+    function totalSeconds() {
+      const video = activeVideo();
       const fileTotal = Number((item && item.scene.files && item.scene.files[0] && item.scene.files[0].duration) || 0);
       const liveTotal = video && isFinite(video.duration) ? video.duration : 0;
-      const total = duration || fileTotal || liveTotal || 0;
-      const target = ratio * total;
+      return duration || fileTotal || liveTotal || 0;
+    }
+
+    function seekToTime(target) {
+      const video = activeVideo();
       if (video) applySeek(video, target);
       setScrubTime(target);
       return target;
+    }
+
+    function seekAt(clientX) {
+      const rect = barBox();
+      const ratio = clamp((clientX - rect.left) / (rect.width || 1), 0, 1);
+      return seekToTime(ratio * totalSeconds());
+    }
+
+    /* the frame under the playhead, built once and used by both the bar and the
+       caption band above it: the sprite cell when the scene has a sheet, the
+       clip's own decoded frame when it does not */
+    function showScrubPreview(at) {
+      const total = totalSeconds();
+      const pct = total ? Math.max(0, Math.min(1, at / total)) : 0;
+      const store = spriteRef.current;
+      const cue = store.cues && store.cues.length
+        ? store.cues.find((c) => at >= c.start && at < c.end) || store.cues[store.cues.length - 1]
+        : null;
+      const hasSprite = Boolean(store.ok && cue);
+      const stage = stageRef.current;
+      const sbox = stage ? stage.getBoundingClientRect() : null;
+      const activeEl = activeVideo();
+      const fit = activeEl ? getComputedStyle(activeEl).objectFit : "contain";
+      const zoomTf = activeEl && activeEl.style.transform ? activeEl.style.transform : "none";
+      setScrubPreview({
+        pct,
+        time: at,
+        fit: fit === "cover" ? "cover" : "contain",
+        zoom: zoomTf,
+        hasSprite,
+        x: cue ? cue.x : 0,
+        y: cue ? cue.y : 0,
+        w: cue ? cue.w : 0,
+        h: cue ? cue.h : 0,
+        src: store.src,
+        sceneId: item && item.scene ? item.scene.id : "",
+        stageW: sbox ? sbox.width : 0,
+        stageH: sbox ? sbox.height : 0,
+      });
+      return pct;
     }
 
     function seekFromEvent(event) {
@@ -5897,49 +6402,43 @@ void main() {
        few pixels onto it, and letting go opens the marker sheet at the frozen
        in point. The playhead stops moving the moment the bubble appears, so the
        marker cannot drift while the thumb is on its way. */
+    /* Relative scrubbing: grab anywhere on the bar and the playhead moves by
+       the distance the thumb travels, not to where the thumb is. Grab a clip at
+       two thirds, drag a third of the bar back, land at one third. A tap that
+       never moves still seeks straight to the mark it lands on. */
+    const grabRef = useRef(null);
+
     function onTimelineDown(event) {
       event.stopPropagation();
       event.currentTarget.setPointerCapture(event.pointerId);
       window.clearTimeout(scrubBarTimer.current);
       setScrubBar(true);
       setScrubbing(true);
+      const video = activeVideo();
+      const now = video && isFinite(video.currentTime) ? video.currentTime : time;
+      const rect = barBox();
+      grabRef.current = { x0: event.clientX, t0: now, width: rect.width || 1, moved: false };
+      setScrubTime(now);
       dropRef.current = { y0: event.clientY, at: null, armed: false, over: false, x: 0 };
       setMarkerDrop(null);
       poke();
-      seekFromEvent(event);
     }
 
     function onTimelineMove(event) {
       event.stopPropagation();
-      const box = event.currentTarget.getBoundingClientRect();
-      const pct = box.width ? Math.max(0, Math.min(1, (event.clientX - box.left) / box.width)) : 0;
-      const store = spriteRef.current;
-      const total = duration || Number((item && item.scene.files && item.scene.files[0] && item.scene.files[0].duration) || 0);
-      const at = pct * total;
-      const cue = store.cues && store.cues.length
-        ? store.cues.find((c) => at >= c.start && at < c.end) || store.cues[store.cues.length - 1]
-        : null;
-      const hasSprite = Boolean(store.ok && cue);
-      const stage = stageRef.current;
-      const sbox = stage ? stage.getBoundingClientRect() : null;
-      const activeEl = activeVideo();
-      const fit = activeEl ? getComputedStyle(activeEl).objectFit : "contain";
-      const zoomTf = activeEl && activeEl.style.transform ? activeEl.style.transform : "none";
-      setScrubPreview({
-        pct,
-        time: at,
-        fit: fit === "cover" ? "cover" : "contain",
-        zoom: zoomTf,
-        hasSprite,
-        x: cue ? cue.x : 0,
-        y: cue ? cue.y : 0,
-        w: cue ? cue.w : 0,
-        h: cue ? cue.h : 0,
-        src: store.src,
-        sceneId: item && item.scene ? item.scene.id : "",
-        stageW: sbox ? sbox.width : 0,
-        stageH: sbox ? sbox.height : 0,
-      });
+      const grab = grabRef.current;
+      const total = totalSeconds();
+      let at;
+      if (grab) {
+        const dx = event.clientX - grab.x0;
+        if (Math.abs(dx) > 4) grab.moved = true;
+        at = grab.moved ? clamp(grab.t0 + (dx / grab.width) * total, 0, total) : grab.t0;
+      } else {
+        const box = event.currentTarget.getBoundingClientRect();
+        const pct = box.width ? Math.max(0, Math.min(1, (event.clientX - box.left) / box.width)) : 0;
+        at = pct * total;
+      }
+      showScrubPreview(at);
       if (!scrubbing) return;
 
       const drop = dropRef.current;
@@ -5948,7 +6447,7 @@ void main() {
           if (drop.y0 - event.clientY >= MARKER_LIFT_PX) {
             /* freeze the in point where the finger was scrubbing to, and park
                the bubble right above it */
-            drop.at = seekFromEvent(event);
+            drop.at = seekToTime(at);
             const stage = stageRef.current;
             const box = stage ? stage.getBoundingClientRect() : { left: 0, width: 0, bottom: 0, height: 0 };
             drop.x = Math.max(64, Math.min(Math.max(64, box.width - 64), event.clientX - box.left));
@@ -5968,7 +6467,7 @@ void main() {
             /* no lift yet: the finger is still on the bar, so the playhead
                follows it. Arming the marker bubble is what freezes the in
                point, not the press itself. */
-            seekFromEvent(event);
+            seekToTime(at);
           }
         } else {
           /* the finger is on its way to the bubble: keep the playhead still and
@@ -5989,11 +6488,13 @@ void main() {
         return;
       }
 
-      seekFromEvent(event);
+      seekToTime(at);
     }
 
     function onTimelineUp(event) {
       event.stopPropagation();
+      const grab = grabRef.current;
+      grabRef.current = null;
       const drop = dropRef.current;
       dropRef.current = null;
       setMarkerDrop(null);
@@ -6005,6 +6506,10 @@ void main() {
         return;
       }
       setScrubbing(false);
+      /* a tap that never moved still means "jump here": the press itself no
+         longer seeks, because a press starts a relative drag whose anchor is
+         the current position. Only a release without travel counts as a tap. */
+      if (grab && !grab.moved) seekAt(event.clientX);
       /* keep the bar where the finger left it: a seek on a streamed clip can
          take a moment to land, and the timeupdate that follows would otherwise
          snap the playhead back to the old position in the meantime. */
@@ -6016,7 +6521,77 @@ void main() {
       poke();
     }
 
+    /* The caption band is a gesture area too. Nothing in it is a control
+       except the username and the "more" link, so a drag that starts on the
+       text scrubs exactly like a drag on the bar. That is the forgiving part:
+       the thumb no longer has to find a 5 px line. No marker bubble here — the
+       lift gesture belongs to the bar, and the caption band is where the eye
+       already is while the finger travels. */
+    function infoTargetIsControl(event) {
+      const el = event.target;
+      return !!(el && el.closest && el.closest("button, a, input, [role='button']"));
+    }
+
+    function onInfoDown(event) {
+      if (infoTargetIsControl(event)) return;
+      event.stopPropagation();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      window.clearTimeout(scrubBarTimer.current);
+      setScrubBar(true);
+      setScrubbing(true);
+      const video = activeVideo();
+      const now = video && isFinite(video.currentTime) ? video.currentTime : time;
+      const rect = barBox();
+      grabRef.current = { x0: event.clientX, t0: now, width: rect.width || 1, moved: false };
+      setScrubTime(now);
+      poke();
+    }
+
+    function onInfoMove(event) {
+      if (infoTargetIsControl(event)) return;
+      event.stopPropagation();
+      const grab = grabRef.current;
+      if (!grab) return;
+      const total = totalSeconds();
+      const dx = event.clientX - grab.x0;
+      if (Math.abs(dx) > 4) grab.moved = true;
+      const at = grab.moved ? clamp(grab.t0 + (dx / grab.width) * total, 0, total) : grab.t0;
+      showScrubPreview(at);
+      seekToTime(at);
+    }
+
+    function onInfoUp(event) {
+      if (infoTargetIsControl(event)) return;
+      event.stopPropagation();
+      const grab = grabRef.current;
+      grabRef.current = null;
+      setScrubPreview(null);
+      setScrubbing(false);
+      /* a tap on the caption still opens the scrub bar, the way it always did:
+         the band is a drag target, not a seek target. A tap that lands on the
+         text is how the bar comes back into view. */
+      if (grab && !grab.moved) openScrubber();
+      setTime(scrubTime);
+      if (scrubBar) {
+        window.clearTimeout(scrubBarTimer.current);
+        scrubBarTimer.current = window.setTimeout(() => setScrubBar(false), 4500);
+      }
+      poke();
+    }
+
     /* ---- derived --------------------------------------------------- */
+
+    /* where the chosen ethnicity will actually land, so the note never claims a
+       profile that already has one */
+    const markerEthNote = (() => {
+      if (markerAt == null || !markerEth || !item || !item.scene) return "";
+      const targets = ethTargets(item.scene);
+      const bare = targets.filter((person) => !String(person.ethnicity || "").trim());
+      if (!targets.length) return "Ethnicity " + markerEth + " → this scene";
+      if (!bare.length) return "Ethnicity " + markerEth + " → the marker only";
+      if (bare.length === 1) return "Ethnicity " + markerEth + " → " + (bare[0].name || "performer");
+      return "Ethnicity " + markerEth + " → pick which of " + bare.length;
+    })();
 
     const markers = (item && item.scene.scene_markers) || [];
     const scrubbingRatio = duration ? (scrubbing ? scrubTime : time) / duration : 0;
@@ -6043,6 +6618,12 @@ void main() {
       lastPosRef.current = video.currentTime;
       setTime(video.currentTime);
       if (!duration && video.duration) setDuration(video.duration);
+      /* a clip that was prewarmed as a neighbour already reached `canplay`
+         while it was inactive, so its `onCanPlay` never fires once it becomes
+         the active element: the spinner and the slow-load hint then sit on top
+         of a clip that is visibly playing. Frames arriving are the truth. */
+      if (!ready && video.readyState >= 3) setReady(true);
+      if (buffering && !video.paused && video.readyState >= 3) setBuffering(false);
     };
 
     /* ---- render ---------------------------------------------------- */
@@ -6258,6 +6839,25 @@ void main() {
             style: { backgroundImage: `url("${rel(scene.paths && scene.paths.screenshot)}")` },
           }),
         h("div", { className: "stk-scan" }),
+
+        /* a spinner while the clip is still fetching. Not over a sheet: the
+           video is paused behind it and the sheet is what has the eye. After a
+           couple of seconds it says why it is taking that long. */
+        !sfw &&
+          !sheet &&
+          (buffering || !ready) &&
+          !frameHandoff &&
+          h(
+            "div",
+            { className: "stk-buffer", "aria-live": "polite", "aria-label": "Buffering" },
+            h("i", { className: "stk-buffer-ring" }),
+            h(SlowLoadHint, {
+              hintKey: (item && item.key) || "",
+              phase: ready ? "buffer" : "load",
+              streamUrl: scene ? streamSource(scene).plain : "",
+              fallbackUrl: scene ? streamSource(scene).signed : "",
+            })
+          ),
         vrMode && vrSource === "preview" && vrLayout(scene) &&
           h("div", { className: "stk-vr-chip" }, "preview"),
         h(VrCanvas, {
@@ -6340,12 +6940,19 @@ void main() {
                 onCanPlay: active
                   ? () => {
                       setReady(true);
+                      setBuffering(false);
                       setFailCount(0);
                     }
                   : undefined,
                 onTimeUpdate: active ? onTimeUpdate : undefined,
                 onPlay: active ? () => setPlaying(true) : undefined,
                 onPause: active ? () => setPlaying(false) : undefined,
+                onWaiting: active ? () => setBuffering(true) : undefined,
+                onStalled: active ? () => setBuffering(true) : undefined,
+                onSeeking: active ? () => setBuffering(true) : undefined,
+                onSeeked: active ? () => setBuffering(false) : undefined,
+                onPlaying: active ? () => setBuffering(false) : undefined,
+                onLoadedData: active ? () => setBuffering(false) : undefined,
                 /* a sheet over the stage means the user is typing, not watching:
                    auto-scroll must not advance to the next clip mid-sentence, or
                    the tags land on the clip that replaced the one on screen */
@@ -6390,37 +6997,9 @@ void main() {
            free. With no sheet (most of an OnlyFans library) or the setting
            off, the clip itself seeks on every move and the viewer shows its
            own decoded frame. */
-        scrubbing &&
-          scrubPreview &&
-          !sfw &&
-          prefs.scrubSprites !== false &&
-          scrubPreview.hasSprite &&
-          spriteRef.current.sheetH &&
-          h(
-            "div",
-            { className: "stk-scrub-frame", "aria-hidden": "true" },
-            h("div", {
-              className: "stk-scrub-frame-img",
-              style: (() => {
-                const preview = scrubPreview;
-                const vw = preview.stageW || window.innerWidth || 360;
-                const vh = preview.stageH || window.innerHeight || 640;
-                const scale = preview.fit === "cover"
-                  ? Math.max(vw / preview.w, vh / preview.h)
-                  : Math.min(vw / preview.w, vh / preview.h);
-                const sheetW = spriteRef.current.sheetW * scale;
-                const sheetH = spriteRef.current.sheetH * scale;
-                return {
-                  backgroundImage: `url("${preview.src}")`,
-                  backgroundSize: `${sheetW}px ${sheetH}px`,
-                  backgroundPosition:
-                    `${-(preview.x * scale + (preview.w * scale - vw) / 2)}px ` +
-                    `${-(preview.y * scale + (preview.h * scale - vh) / 2)}px`,
-                  transform: preview.zoom && preview.zoom !== "none" ? preview.zoom : undefined,
-                };
-              })(),
-            })
-          ),
+        /* No full-stage frame over the viewer. The clip itself seeks while the
+           bar is dragged, so the picture follows the finger; the sprite preview
+           is the small bubble above the bar instead of a cover over the video. */
 
         /* the first clip has nothing above it: pulling down reloads the feed */
         index === 0 &&
@@ -6892,10 +7471,20 @@ void main() {
 
         h(
           "div",
-          { className: "stk-info" + (scrubBar ? " stk-up" : "") },
+          {
+            className: "stk-info" + (scrubBar ? " stk-up" : ""),
+            onPointerDown: onInfoDown,
+            onPointerMove: onInfoMove,
+            onPointerUp: onInfoUp,
+            onPointerCancel: onInfoUp,
+            onPointerLeave: () => { if (grabRef.current) setScrubPreview(null); },
+          },
           h(
             "div",
-            { className: "stk-handle-row stk-handle-row-text" },
+            /* keyed on the scene: the video travels under a fixed HUD, so without
+               this the handle and caption swap in a hard cut at the moment the
+               next clip lands. Remounting restarts the 150ms lift in CSS. */
+            { key: "handle:" + (item && item.key), className: "stk-handle-row stk-handle-row-text stk-meta-swap" },
             h(
               "button",
               { className: "stk-handle-at", onClick: (event) => { event.stopPropagation(); openHandle(); } },
@@ -6929,7 +7518,7 @@ void main() {
             if (!path && !meta.length) return null;
             return h(
               "div",
-              { className: "stk-caption" },
+              { key: "caption:" + (item && item.key), className: "stk-caption stk-meta-swap" },
               scene.title && h("div", { className: "stk-caption-line stk-caption-title" }, scene.title),
               h(
                 "div",
@@ -7232,32 +7821,42 @@ void main() {
             onPointerCancel: onTimelineUp,
             onPointerLeave: () => setScrubPreview(null),
           },
+          /* the frame under the playhead, as a strip above the bar. Only a scene
+             with a generated sheet has one — a scene without sprites shows no
+             bubble at all, and the bar's own fill is the feedback. The clip
+             seeks either way, so the viewer follows the drag. */
           scrubPreview &&
+            prefs.scrubSprites !== false &&
+            scrubPreview.hasSprite &&
             (duration > 0 || Number((scene.files && scene.files[0] && scene.files[0].duration) || 0) > 0) &&
-            h(
-              "div",
-              {
-                className: "stk-scrub-preview",
-                style: { left: `${Math.max(4, Math.min(96, scrubPreview.pct * 100))}%` },
-              },
-              scrubPreview.hasSprite
-                ? h("div", {
-                    className: "stk-scrub-cell",
-                    style: {
-                      width: scrubPreview.w + "px",
-                      height: scrubPreview.h + "px",
-                      backgroundImage: `url("${scrubPreview.src}")`,
-                      backgroundPosition: `-${scrubPreview.x}px -${scrubPreview.y}px`,
-                    },
-                  })
-                : h("img", {
-                    className: "stk-scrub-cell",
-                    src: `/scene/${scrubPreview.sceneId}/screenshot?t=${Math.round(scrubPreview.time)}`,
-                    alt: "",
-                    loading: "eager",
-                  }),
-              h("span", { className: "stk-scrub-time" }, fmtTime(scrubPreview.time))
-            ),
+            (() => {
+              const SPRITE_ZOOM = 1.2;
+              const sheet = spriteRef.current;
+              const cellW = (scrubPreview.w || 160) * SPRITE_ZOOM;
+              const cellH = (scrubPreview.h || 90) * SPRITE_ZOOM;
+              const stageW = scrubPreview.stageW || window.innerWidth || 360;
+              /* a 20% bigger cell at the edge of the screen would run off it, so
+                 the bubble is clamped by its own half-width in pixels */
+              const cx = Math.max(cellW / 2 + 6, Math.min(stageW - cellW / 2 - 6, scrubPreview.pct * stageW));
+              return h(
+                "div",
+                {
+                  className: "stk-scrub-preview",
+                  style: { left: `${cx}px` },
+                },
+                h("div", {
+                  className: "stk-scrub-cell",
+                  style: {
+                    width: cellW + "px",
+                    height: cellH + "px",
+                    backgroundImage: `url("${scrubPreview.src}")`,
+                    backgroundSize: `${(sheet.sheetW || 0) * SPRITE_ZOOM}px ${(sheet.sheetH || 0) * SPRITE_ZOOM}px`,
+                    backgroundPosition: `-${scrubPreview.x * SPRITE_ZOOM}px -${scrubPreview.y * SPRITE_ZOOM}px`,
+                  },
+                }),
+                h("span", { className: "stk-scrub-time" }, fmtTime(scrubPreview.time))
+              );
+            })(),
 
           h(
             "div",
@@ -7439,16 +8038,60 @@ void main() {
                   setMarkerTyping(false);
                   setMarkerName((cur) => (cur.trim().toLowerCase() === name.toLowerCase() ? "" : name));
                 },
+                onPop: (name, el, sectionId) => showPillPop("marker", name, el, sectionId),
               }),
-              markerEth &&
+              h(PillPop, {
+                pop: pillPop && pillPop.sheet === "marker" ? pillPop : null,
+                isOn: (name) =>
+                  markerName.trim().toLowerCase() === String(name).trim().toLowerCase() ||
+                  !!markerTags[name],
+                onPick: pickPill,
+              }),
+              markerEthNote &&
+                h("p", { className: "stk-tag-note" }, markerEthNote)
+            )
+          ),
+
+        /* the marker exists; this only decides whose profile the ethnicity it
+           already carries belongs on */
+        markerEthPick &&
+          h(
+            TagSheetShell,
+            {
+              title: "Whose ethnicity?",
+              subtitle: markerEthPick.eth + " · " + markerEthPick.performers.length + " without one",
+              onClose: () => setMarkerEthPick(null),
+              footer: h(
+                "button",
+                { type: "button", className: "stk-btn", onClick: () => setMarkerEthPick(null) },
+                "Marker only — no profile"
+              ),
+            },
+            h("p", { className: "stk-tag-note" }, "More than one woman on this scene. Pick whose profile it belongs on."),
+            h(
+              "div",
+              { className: "stk-ethpick" },
+              markerEthPick.performers.map((person) =>
                 h(
-                  "p",
-                  { className: "stk-tag-note" },
-                  "Ethnicity " + markerEth + " → " +
-                    ((item.scene.performers || [])[0]
-                      ? ((item.scene.performers || [])[0].name || "performer")
-                      : "this scene")
+                  "button",
+                  {
+                    key: person.id,
+                    type: "button",
+                    className: "stk-ethpick-row",
+                    onClick: () => applyMarkerEth(person),
+                  },
+                  h(
+                    "span",
+                    {
+                      className: "stk-ethpick-avatar",
+                      style: person.image_path ? { backgroundImage: `url("${rel(person.image_path)}")` } : undefined,
+                    },
+                    person.image_path ? null : initials(person.name)
+                  ),
+                  h("span", { className: "stk-ethpick-name" }, person.name),
+                  h("span", { className: "stk-ethpick-go" }, h(Icon, { name: "chevron", size: 15 }))
                 )
+              )
             )
           ),
 
@@ -7574,6 +8217,12 @@ void main() {
                 category: tagCat,
                 onCategory: toggleCategory,
                 onChild: toggleChild,
+                onPop: (name, el, sectionId) => showPillPop("tags", name, el, sectionId),
+              }),
+              h(PillPop, {
+                pop: pillPop && pillPop.sheet === "tags" ? pillPop : null,
+                isOn: tagIsOn,
+                onPick: pickPill,
               })
             )
           ),
@@ -7756,23 +8405,138 @@ void main() {
      Category are short by design and always stay on one line. */
   const TAG_ROW_TWO = 16;
 
-  function TagSections({ sections = [], query, isOn, isChildOn, onToggle, category, onCategory, onChild }) {
+  /* The family a head pill opens: drawn above the thumb that asked for it, the
+     chips arriving one after another with a small bloop, gone in about three
+     seconds or the moment the user taps anywhere else. Fixed position so the
+     sheet's own scrolling cannot cut it off. */
+  function PillPop({ pop, isOn, onPick }) {
+    const nonce = pop ? pop.nonce : 0;
+    const mode = pop ? pop.style : "";
+    const names = (pop && pop.names) || [];
+    const [shown, setShown] = useState(false);
+    /* the burst is a transition, not a keyframe: the chips start on the thumb
+       and fly out to where they belong, and a re-render mid-flight cannot
+       strand them the way a restarted animation can */
+    useEffect(() => {
+      if (!pop) return undefined;
+      setShown(false);
+      const raf = requestAnimationFrame(() => setShown(true));
+      return () => cancelAnimationFrame(raf);
+    }, [nonce, names.join("|"), mode]);
+    if (!pop) return null;
+
+    /* the fan: the variants sweep out of the pill on an arc, the way a hand of
+       cards opens, instead of stacking into a list. Labels stay level (the tilt
+       is counter-rotated most of the way back) so a long tag still reads. */
+    if (mode === "fan") {
+      const n = names.length;
+      const viewW = window.innerWidth || 360;
+      const viewH = window.innerHeight || 720;
+      const spread = n > 1 ? Math.min(150, 30 * (n - 1) + 30) : 0;
+      const step = n > 1 ? spread / (n - 1) : 0;
+      /* the arc has to fit above the thumb, so the radius gives way, not the chips */
+      const radius = Math.min(96 + n * 9, Math.max(74, pop.y - 58));
+      return h(
+        "div",
+        {
+          className: "stk-fan",
+          onPointerDown: (event) => event.stopPropagation(),
+          onClick: (event) => event.stopPropagation(),
+          role: "menu",
+        },
+        names.map((name, index) => {
+          const angle = -spread / 2 + step * index;
+          const rad = (angle * Math.PI) / 180;
+          const x = Math.max(66, Math.min(viewW - 66, pop.x + Math.sin(rad) * radius));
+          const y = Math.max(56, Math.min(viewH - 40, pop.y - 14 - Math.cos(rad) * radius));
+          return h(
+            "button",
+            {
+              key: name,
+              type: "button",
+              className: "stk-fan-chip" + (isOn && isOn(name) ? " stk-on" : ""),
+              style: {
+                transform: shown
+                  ? `translate3d(${x}px, ${y}px, 0) translate(-50%, -50%) rotate(${(angle * 0.18).toFixed(1)}deg)`
+                  : `translate3d(${pop.x}px, ${pop.y - 14}px, 0) translate(-50%, -50%) scale(.45)`,
+                opacity: shown ? 1 : 0,
+                transitionDelay: index * 65 + "ms",
+                zIndex: index + 1,
+              },
+              onClick: () => onPick(name),
+            },
+            name
+          );
+        })
+      );
+    }
+
+    return h(
+      "div",
+      {
+        className: "stk-pillpop",
+        style: { left: pop.x + "px", top: pop.y + "px" },
+        onPointerDown: (event) => event.stopPropagation(),
+        onClick: (event) => event.stopPropagation(),
+        role: "menu",
+      },
+      h("span", { className: "stk-pillpop-tail" }),
+      pop.names.map((name, index) =>
+        h(
+          "button",
+          {
+            key: name,
+            type: "button",
+            className: "stk-pillpop-chip" + (isOn && isOn(name) ? " stk-on" : ""),
+            style: { animationDelay: index * 70 + "ms" },
+            onClick: () => onPick(name),
+          },
+          name
+        )
+      )
+    );
+  }
+
+  function TagSections({ sections = [], query, isOn, isChildOn, onToggle, onPop, category, onCategory, onChild }) {
     const kidOn = isChildOn || isOn;
     const q = String(query || "").trim().toLowerCase();
     const matches = (name) => !q || String(name).toLowerCase().includes(q);
 
-    const chip = (name, extraClass, sectionId) => {
+    /* Three across, then down: 1 2 3 / 4 5 6 / 7 8 9, and the tenth starts a
+       new block to the right. Placement is explicit because CSS grid's column
+       flow reads DOWN a column, which is the order the list used to arrive in. */
+    const place = (index, rows) => {
+      const block = 3 * rows;
+      const within = index % block;
+      return {
+        gridRow: Math.floor(within / 3) + 1,
+        gridColumn: Math.floor(index / block) * 3 + (within % 3) + 1,
+      };
+    };
+
+    const chip = (name, extraClass, sectionId, index, rows) => {
       const on = isOn(name);
+      const kids = (onPop && POSITION_CHILDREN[name]) || null;
       return h(
         "button",
         {
           key: name,
           type: "button",
-          className: "stk-tagpick" + (on ? " stk-on" : "") + (extraClass ? " " + extraClass : ""),
+          className:
+            "stk-tagpick" +
+            (on ? " stk-on" : "") +
+            (extraClass ? " " + extraClass : "") +
+            (kids && !on ? " stk-has-kids" : ""),
           "aria-pressed": on,
+          style: rows ? place(index, rows) : undefined,
           /* the section id rides along so a sheet can treat the same name
              differently per section (a marker's act vs its extra tags) */
-          onClick: () => onToggle(name, sectionId),
+          onClick: (event) => {
+            onToggle(name, sectionId);
+            /* only on the way in: deselecting has nothing to open. A pill
+               without a family still reports, so it can close a stale float */
+            if (!on) onPop(name, event.currentTarget, sectionId);
+          },
         },
         name
       );
@@ -7855,8 +8619,12 @@ void main() {
         h("h4", null, section.title),
         h(
           "div",
-          { className: "stk-tag-grid" + (all.length > TAG_ROW_TWO ? " stk-two" : "") },
-          all.map((name) => chip(name, "", section.id))
+          {
+            className:
+              "stk-tag-grid" +
+              (section.rows === 3 ? " stk-tag-grid-3" : section.rows === 2 ? " stk-two" : ""),
+          },
+          all.map((name, index) => chip(name, "", section.id, index, section.rows))
         )
       );
     });
@@ -13326,6 +14094,37 @@ function TagsPage({ onPick, onMarkers, onBack }) {
     );
   }
 
+  /* a percent dial: the thumb position is the value, and the readout sits at
+     the end of the row so the number is never hidden under the thumb */
+  function PrefSlider({ value, min, max, step, onChange, suffix, label }) {
+    const shown = Math.round(Number(value));
+    const span = max - min || 1;
+    const pct = Math.max(0, Math.min(100, ((shown - min) / span) * 100));
+    return h(
+      "div",
+      { className: "stk-slider-wrap" },
+      h("input", {
+        className: "stk-slider",
+        type: "range",
+        min: min,
+        max: max,
+        step: step || 1,
+        value: shown,
+        "aria-label": label || "Value",
+        /* the filled part of the track is the input's own background: a gradient
+           keeps the accent on the left of the thumb without a wrapper element */
+        style: {
+          background: `linear-gradient(to right, #ff2d55 0%, #ff2d55 ${pct}%, rgba(255,255,255,.22) ${pct}%, rgba(255,255,255,.22) 100%)`,
+          backgroundSize: "100% 4px",
+          backgroundPosition: "center",
+          backgroundRepeat: "no-repeat",
+        },
+        onChange: (event) => onChange(Number(event.target.value)),
+      }),
+      h("span", { className: "stk-slider-value" }, shown + (suffix || "%"))
+    );
+  }
+
   function PrefPills({ value, options, onChange }) {
     return h(
       "div",
@@ -14829,6 +15628,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
         const setTagDefaults = (changes) =>
           setCustom({ tagDefaults: Object.assign({}, custom.tagDefaults || {}, changes) });
         const markerD = custom.markerDefaults || {};
+        const ethGenders = Array.isArray(custom.ethGenders) && custom.ethGenders.length ? custom.ethGenders : ["FEMALE"];
         const tagD = custom.tagDefaults || {};
         const pillOptions = (names) => [["", "None"]].concat(names.map((name) => [name, name]));
 
@@ -14915,6 +15715,41 @@ function TagsPage({ onPick, onMarkers, onBack }) {
               value: markerD.fetish || [],
               onChange: (value) => setMarkerDefaults({ fetish: value }),
             })),
+          h(PrefRow, {
+            title: "Ethnicity goes to",
+            hint: "Whose profile a new marker's ethnicity is written to — women by default, since that is who it describes. A scene with more than one candidate asks you which. Untick everything and the ethnicity becomes a scene tag instead.",
+            stack: true,
+          },
+            h("div", { className: "stk-chip-pick" },
+              GENDER_OPTIONS.map((option) => {
+                const current = ethGenders;
+                const on = current.indexOf(option.value) >= 0;
+                return h("button", {
+                  key: option.value,
+                  type: "button",
+                  className: "stk-tagpick" + (on ? " stk-on" : ""),
+                  "aria-pressed": on,
+                  onClick: () => setCustom({ ethGenders: on ? current.filter((value) => value !== option.value) : current.concat([option.value]) }),
+                }, option.label);
+              })
+            )),
+          h(PrefRow, {
+            title: "Family pills open as",
+            hint: "A pill naming a family (Blowjob, Toys, Threesome) opens its variants when tapped: a fan sweeping out of the pill, or a list stacked above it.",
+            stack: true,
+          },
+            h("div", { className: "stk-chip-pick" },
+              [["fan", "Fan"], ["list", "List"]].map(([value, label]) => {
+                const on = (custom.expandStyle || "list") === value;
+                return h("button", {
+                  key: value,
+                  type: "button",
+                  className: "stk-tagpick" + (on ? " stk-on" : ""),
+                  "aria-pressed": on,
+                  onClick: () => setCustom({ expandStyle: value }),
+                }, label);
+              })
+            )),
           h("section", { className: "stk-set-block" },
             h("h4", { className: "stk-set-block-head" }, "New tag session"),
             h("p", { className: "stk-set-block-sub" }, "Pre-ticked on the tag sheet. Untick anything that does not fit the clip."),
@@ -14975,6 +15810,21 @@ function TagsPage({ onPick, onMarkers, onBack }) {
             h(PrefToggle, { label: "Black & white", on: !!prefs.mono, onChange: (value) => setPref("mono", value) })),
           h(PrefRow, { title: "Auto-crop to fill", hint: "Fill a portrait screen: the middle half of a 16:9 clip, or an even top-and-bottom crop when a clip is only a little off the screen's ratio. Off = always letterbox." },
             h(PrefToggle, { label: "Auto-crop", on: prefs.autoCrop !== false, onChange: (value) => setPref("autoCrop", value) })),
+          prefs.autoCrop !== false &&
+            h(PrefRow, {
+              title: "Auto-crop strength",
+              hint: "How much of the width survives the crop. 50 keeps the middle half; lower cuts harder and shows less of the frame's edges, higher keeps more of the picture.",
+              stack: true,
+            },
+              h(PrefSlider, {
+                value: clamp(Number(prefs.cropPercent) || 50, 25, 75),
+                min: 25,
+                max: 75,
+                step: 5,
+                suffix: "%",
+                label: "Auto-crop strength",
+                onChange: (value) => setPref("cropPercent", value),
+              })),
           h(PrefRow, { title: "Show file path", hint: "Print the folder path under the caption in the feed" },
             h(PrefToggle, { label: "Show path", on: !!prefs.showPath, onChange: (value) => setPref("showPath", value) })),
           h(PrefRow, { title: "Drag-scrub the stage", hint: "Press and sweep sideways across the video to seek. Off by default — a sideways thumb at the end of a swipe was seeking the clip. Tap the caption to open the scrub bar instead." },
