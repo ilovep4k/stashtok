@@ -2,7 +2,7 @@
   name: StashTok
   metadata:
     description: Full-screen vertical feed for scenes and markers with swipe, pinch zoom and a marker scrub bar.
-  version: 0.3.23
+  version: 0.3.24
   date: 2026-11-25 00:00:00
   path: https://raw.githubusercontent.com/ilovep4k/stashtok/main/dist/stashTok.zip
-  sha256: 45018ec00d137fdf20f1741b019d485de315152a397854f24aaf4f4a7fd8ca17
+  sha256: e1be9fb6b3e17687b265e98468f8fb20201c2fec93cb1c48692657b1a6113b80

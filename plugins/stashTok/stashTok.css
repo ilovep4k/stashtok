@@ -2078,7 +2078,13 @@ body.stk-anim .stk-grid-5 .stk-tile {
 .stk-timeline.stk-scrubbing .stk-timeline-inner { height: 9px; }
 
 /* the top third of the tab bar is a scrub zone: taps there seek, they don't switch tabs */
-.stk-nav { position: relative; }
+.stk-nav {
+  position: relative;
+  /* keep the scrub strip's z-index inside the bar: with the bar at z-index auto
+     its children escape into the app's stacking context and outrank the page
+     wrapper, which is what put a sheet's Done button behind the nav. */
+  isolation: isolate;
+}
 .stk-nav-scrub {
   position: absolute;
   top: 0;
@@ -6490,6 +6496,13 @@ body.stk-fullscreen-mode .stash-tok.stk-feed-fullscreen {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  /* the fade animation makes this a stacking context, which traps the sheets
+     inside it below the app's nav bar — the nav is a later sibling in the same
+     flex column. A relative position and a positive z-index put the page's
+     context above the nav's auto layer, so a sheet's backdrop and its footer
+     paint over the bar. Nothing overlaps in the layout, so no hit area moves. */
+  position: relative;
+  z-index: 1;
 }
 @media (prefers-reduced-motion: no-preference) {
   .stk-page-swap[data-swap] { animation: stk-page-fade 180ms linear both; }

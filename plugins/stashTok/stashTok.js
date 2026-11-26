@@ -655,6 +655,28 @@
     return 0;
   }
 
+  /** A JPEG data URL of whatever the video element is showing right now, for
+   *  sheets that need a still of the current frame (Stash offers no
+   *  screenshot-at-time route: `?t=` on /scene/{id}/screenshot only busts the
+   *  cache, it always returns the scene cover). Returns "" when the video has
+   *  no decoded frame yet, so callers can fall back to the cover. */
+  function grabFrame(video, maxWidth) {
+    try {
+      if (!video || video.readyState < 2 || !video.videoWidth || !video.videoHeight) return "";
+      const width = Math.min(maxWidth || 720, video.videoWidth);
+      const height = Math.max(1, Math.round((width * video.videoHeight) / video.videoWidth));
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return "";
+      ctx.drawImage(video, 0, 0, width, height);
+      return canvas.toDataURL("image/jpeg", 0.82);
+    } catch (err) {
+      return "";
+    }
+  }
+
   function fmtTime(seconds) {
     const total = Math.max(0, Math.floor(Number(seconds) || 0));
     const hh = Math.floor(total / 3600);
@@ -1637,20 +1659,28 @@
     return all.concat(section.tags);
   }, []);
 
-  /* A marker is named by one tag and is drawn from the same section list as the
-     add-tag sheet, minus the sections that describe a person rather than a
-     moment: no ethnicity, no body. */
-  const MARKER_TAG_SECTIONS = TAG_SHEET_SECTIONS.filter(
-    (section) => section.id !== "ethnicity" && section.id !== "body"
-  );
-  const MARKER_TAG_NAMES = MARKER_TAG_SECTIONS.reduce((all, section) => {
-    if (section.parents) {
-      return all.concat(section.parents).concat(
-        section.parents.reduce((kids, parent) => kids.concat(section.children[parent]), [])
-      );
-    }
-    return all.concat(section.tags);
-  }, []);
+  /* A marker marks one thing at one moment. The act is the marker's name
+     (primary tag); ethnicity and fetish ride along as its other tags. Category
+     and Content Format describe the production rather than the moment, so the
+     marker sheet never offers them — not even while typing. */
+  const MARKER_TAG_SECTIONS = ["ethnicity", "positions", "fetish"]
+    .map((id) => TAG_SHEET_SECTIONS.find((section) => section.id === id))
+    .filter(Boolean);
+  /* A performer's ethnicity is a free string on the record, so the sheet has to
+     match it back to a chip: the chip the performer already carries is the
+     answer, and a scene with no performer falls back to the scene's own tags. */
+  function ethnicityOf(performer) {
+    if (!performer) return "";
+    const hay = [String(performer.ethnicity || "")]
+      .concat((performer.tags || []).map((tag) => String(tag.name || "")))
+      .join(" ")
+      .toLowerCase();
+    if (!hay.trim()) return "";
+    const hit = ETHNICITY_TAGS.find((row) =>
+      row.performer.concat(row.scene).some((name) => hay.includes(String(name).toLowerCase()))
+    );
+    return hit ? hit.name : "";
+  }
 
   /* Attributes belong to a person, not a clip: they are the tags the performer
      page may push across every scene of a performer. Ebony carries its scene
@@ -3156,22 +3186,23 @@ void main() {
     const undoTimer = useRef(0);
     const tagIdCache = useRef({});
     const tagDialogRef = useDialog(tagOpen, () => setTagOpen(false));
-    /* add marker: M (or right-click) freezes the in point, one tag names it */
+    /* add marker: M (or right-click) freezes the in point. The marker's name
+       (its primary tag) is the act being marked; ethnicity and fetish are extra
+       tags that ride along on the marker instead. */
     const [markerAt, setMarkerAt] = useState(null);
     const [markerName, setMarkerName] = useState("");
     /* the name field doubles as a search, but only while it is being typed:
        picking a chip must not filter the sheet down to that one word */
     const [markerTyping, setMarkerTyping] = useState(false);
-    /* the marker sheet is single-select, so its Category drawer follows the
-       chosen name: a parent is itself, a child inherits its parent */
-    const markerCategory = (() => {
-      const name = markerName.trim().toLowerCase();
-      if (!name) return "";
-      const direct = CATEGORY_PARENTS.find((parent) => parent.toLowerCase() === name);
-      if (direct) return direct;
-      return CATEGORY_PARENTS.find((parent) => CATEGORY_TAGS[parent].some((kid) => kid.toLowerCase() === name)) || "";
-    })();
+    /* one ethnicity chip, multi-select fetish and any extra act */
+    const [markerEth, setMarkerEth] = useState("");
+    const [markerTags, setMarkerTags] = useState({});
     const [markerBusy, setMarkerBusy] = useState(false);
+    /* the polaroid on the marker sheet: a JPEG data URL grabbed from the paused
+       video element. Stash has no "screenshot at time T" route — `?t=` on
+       /scene/{id}/screenshot is only a cache-buster, so asking for it always
+       returned the scene cover. */
+    const [markerSnap, setMarkerSnap] = useState("");
     const [markerUndo, setMarkerUndo] = useState(null);
     const markerUndoTimer = useRef(0);
     const markerDialogRef = useDialog(markerAt != null, () => setMarkerAt(null));
@@ -4768,8 +4799,43 @@ void main() {
         const seconds = Math.max(0, total ? Math.min(total - 0.05, raw) : raw);
         setCtxMenu(null);
         setMarkerName("");
+        setMarkerTags({});
+        setMarkerTyping(false);
+        /* ethnicity is imported, not asked for: the performer on the scene
+           already says what she is, and that is what the chip starts on */
+        setMarkerEth(ethnicityOf(((item.scene.performers || [])[0] || null)));
         setMarkerAt(Math.round(seconds * 100) / 100);
         setMarkerShown({});
+        /* the sheet's polaroid is the frame on screen right now: freeze the
+           picture so the in point cannot drift, and copy the frame into a small
+           canvas. A scrub bubble already sought there; a right-click may not
+           have, so seek first and grab on `seeked`. */
+        if (video) {
+          try {
+            video.pause();
+            setPlaying(false);
+          } catch (err) { /* ignore */ }
+          const drift = Math.abs((Number(video.currentTime) || 0) - seconds);
+          setMarkerSnap(grabFrame(video));
+          if (drift > 0.4) {
+            const once = () => {
+              window.clearTimeout(snapTimer);
+              video.removeEventListener("seeked", once);
+              setMarkerSnap(grabFrame(video));
+            };
+            /* the element may never fire `seeked` (unseekable, or swiped away) */
+            const snapTimer = window.setTimeout(() => video.removeEventListener("seeked", once), 1500);
+            video.addEventListener("seeked", once);
+            try {
+              video.currentTime = seconds;
+            } catch (err) {
+              window.clearTimeout(snapTimer);
+              video.removeEventListener("seeked", once);
+            }
+          }
+        } else {
+          setMarkerSnap("");
+        }
       },
       [item, duration, activeVideo]
     );
@@ -4778,21 +4844,61 @@ void main() {
       const name = markerName.trim();
       if (!name || markerAt == null || !item || !item.scene || markerBusy) return;
       const sceneId = item.scene.id;
+      const performer = (item.scene.performers || [])[0] || null;
+      /* the act is the marker; ethnicity and fetish are tags that ride along */
+      const eth = markerEth ? ETHNICITY_TAGS.find((row) => row.name === markerEth) : null;
+      const extras = eth ? eth.scene.slice() : [];
+      Object.keys(markerTags).forEach((tagName) => {
+        if (markerTags[tagName]) extras.push(tagName);
+      });
+      const seen = {};
+      seen[name.toLowerCase()] = true;
+      const extraNames = extras.filter((tagName) => {
+        const key = String(tagName).trim().toLowerCase();
+        if (!key || seen[key]) return false;
+        seen[key] = true;
+        return true;
+      });
       setMarkerBusy(true);
       try {
         const tagId = await ensureTagId(name, tagIdCache.current);
+        const extraIds = [];
+        for (let i = 0; i < extraNames.length; i += 1) {
+          extraIds.push(String(await ensureTagId(extraNames[i], tagIdCache.current)));
+        }
         const data = await gql(
-          `mutation StashTokMarkerCreate($sceneId: ID!, $seconds: Float!, $tagId: ID!, $title: String!) {
-            sceneMarkerCreate(input: { scene_id: $sceneId, seconds: $seconds, primary_tag_id: $tagId, title: $title }) {
-              id seconds end_seconds title primary_tag { id name }
+          `mutation StashTokMarkerCreate($sceneId: ID!, $seconds: Float!, $tagId: ID!, $title: String!, $tags: [ID!]) {
+            sceneMarkerCreate(input: { scene_id: $sceneId, seconds: $seconds, primary_tag_id: $tagId, title: $title, tag_ids: $tags }) {
+              id seconds end_seconds title primary_tag { id name } tags { id name }
             }
           }`,
-          { sceneId, seconds: markerAt, tagId, title: name }
+          { sceneId, seconds: markerAt, tagId, title: name, tags: extraIds }
         );
         const marker = data.sceneMarkerCreate;
         mergeSceneMarker(sceneId, marker);
+        /* ethnicity belongs to a person: with a performer it is a fact about her
+           (and only filled in when she has none yet), with nobody to carry it
+           the scene takes it instead. A failed tag write must not lose the
+           marker that was just made. */
+        if (eth) {
+          try {
+            const names = performer ? eth.performer : eth.scene;
+            const ids = [];
+            for (let i = 0; i < names.length; i += 1) {
+              ids.push(await ensureTagId(names[i], tagIdCache.current));
+            }
+            if (performer) {
+              if (!String(performer.ethnicity || "").trim()) await addPerformerTags(performer.id, ids);
+            } else {
+              await addSceneTags(sceneId, ids);
+              mergeSceneTags(sceneId, names.map((tagName, i) => ({ id: ids[i], name: tagName })));
+            }
+          } catch (err) { /* the marker is what the tap asked for */ }
+        }
         setMarkerAt(null);
         setMarkerName("");
+        setMarkerTags({});
+        setMarkerEth("");
         window.clearTimeout(markerUndoTimer.current);
         setMarkerUndo({ sceneId, markerId: marker.id, label: name, seconds: marker.seconds });
         markerUndoTimer.current = window.setTimeout(() => setMarkerUndo(null), 9000);
@@ -4802,7 +4908,7 @@ void main() {
       } finally {
         setMarkerBusy(false);
       }
-    }, [markerName, markerAt, item, markerBusy, mergeSceneMarker]);
+    }, [markerName, markerEth, markerTags, markerAt, item, markerBusy, mergeSceneMarker, mergeSceneTags]);
 
     const revertMarker = useCallback(async () => {
       const current = markerUndo;
@@ -5697,11 +5803,13 @@ void main() {
       const sbox = stage ? stage.getBoundingClientRect() : null;
       const activeEl = activeVideo();
       const fit = activeEl ? getComputedStyle(activeEl).objectFit : "contain";
+      const zoomTf = activeEl && activeEl.style.transform ? activeEl.style.transform : "none";
       setScrubPreview({
         pct,
         time: at,
         snapT: snapRef.current.t,
         fit: fit === "cover" ? "cover" : "contain",
+        zoom: zoomTf,
         hasSprite,
         x: cue ? cue.x : 0,
         y: cue ? cue.y : 0,
@@ -5736,6 +5844,11 @@ void main() {
             drop.over = false;
             setMarkerDrop({ x: drop.x, at: drop.at, over: false, bottom: drop.bottom });
             buzz(12);
+          } else {
+            /* no lift yet: the finger is still on the bar, so the playhead
+               follows it. Arming the marker bubble is what freezes the in
+               point, not the press itself. */
+            seekFromEvent(event);
           }
         } else {
           /* the finger is on its way to the bubble: keep the playhead still and
@@ -5772,6 +5885,10 @@ void main() {
         return;
       }
       setScrubbing(false);
+      /* keep the bar where the finger left it: a seek on a streamed clip can
+         take a moment to land, and the timeupdate that follows would otherwise
+         snap the playhead back to the old position in the meantime. */
+      setTime(scrubTime);
       if (scrubBar) {
         window.clearTimeout(scrubBarTimer.current);
         scrubBarTimer.current = window.setTimeout(() => setScrubBar(false), 4500);
@@ -6187,6 +6304,7 @@ void main() {
                       backgroundPosition:
                         `${-(preview.x * scale + (preview.w * scale - vw) / 2)}px ` +
                         `${-(preview.y * scale + (preview.h * scale - vh) / 2)}px`,
+                      transform: preview.zoom && preview.zoom !== "none" ? preview.zoom : undefined,
                     };
                   })(),
                 })
@@ -6195,7 +6313,10 @@ void main() {
                   src: `/scene/${scrubPreview.sceneId}/screenshot?t=${scrubPreview.snapT}`,
                   alt: "",
                   draggable: false,
-                  style: { objectFit: scrubPreview.fit === "cover" ? "cover" : "contain" },
+                  style: {
+                    objectFit: scrubPreview.fit === "cover" ? "cover" : "contain",
+                    transform: scrubPreview.zoom && scrubPreview.zoom !== "none" ? scrubPreview.zoom : undefined,
+                  },
                   onError: () => setSnapFail(true),
                 })
           ),
@@ -7122,7 +7243,7 @@ void main() {
             TagSheetShell,
             {
               title: "Add Marker",
-              subtitle: "In point " + fmtTime(markerAt),
+              subtitle: "In point " + fmtTime(markerAt) + (markerName.trim() ? " · " + markerName.trim() : ""),
               onClose: () => setMarkerAt(null),
               dialogRef: markerDialogRef,
               footer: h(
@@ -7145,7 +7266,9 @@ void main() {
                 { className: "stk-marker-snap" },
                 h("img", {
                   className: "stk-marker-snap-img",
-                  src: `/scene/${item.scene.id}/screenshot?t=${Math.max(0, Math.round(Number(markerAt) || 0))}`,
+                  /* the frozen frame; the cover is only a stand-in when the
+                     video could not be sampled */
+                  src: markerSnap || rel(item.scene.paths && item.scene.paths.screenshot) || "",
                   alt: "",
                   draggable: false,
                   loading: "eager",
@@ -7155,7 +7278,7 @@ void main() {
             h("input", {
               id: "stk-marker-name",
               className: "stk-tag-search stk-marker-input",
-              placeholder: "Type any tag or a new name…",
+              placeholder: "The act — Cowgirl, Blowjob, Anal…",
               value: markerName,
               onChange: (event) => {
                 setMarkerName(event.target.value);
@@ -7167,35 +7290,55 @@ void main() {
                 createMarker();
               },
             }),
-            h("h4", { className: "stk-marker-pre" }, "Prefilled Names"),
-            h("p", { className: "stk-tag-note" }, "Use the below tags to automatically name the Marker"),
             h(
               "div",
               { className: "stk-tag-scroll" },
               h(TagSections, {
-                /* typing is the override: a name outside the four marker
-                   sections (an ethnicity, a body tag, or something the library
-                   has never seen) is searched across the whole vocabulary and
-                   is still creatable as-is */
-                sections: markerTyping ? TAG_SHEET_SECTIONS : MARKER_TAG_SECTIONS,
+                /* ethnicity and fetish are marker tags, not alternative names:
+                   the act in the field is what the marker is called */
+                sections: MARKER_TAG_SECTIONS,
                 query: markerTyping ? markerName : "",
                 shown: markerShown,
                 onMore: (sectionId, total) => showMore(sectionId, total, setMarkerShown),
-                isOn: (name) => markerName.trim().toLowerCase() === String(name).toLowerCase(),
-                onToggle: (name) => {
-                  setMarkerTyping(false);
-                  setMarkerName((cur) => (cur.trim().toLowerCase() === String(name).toLowerCase() ? "" : name));
+                isOn: (name) => {
+                  const low = String(name).trim().toLowerCase();
+                  if (!low) return false;
+                  if (markerEth && markerEth.toLowerCase() === low) return true;
+                  if (markerName.trim().toLowerCase() === low) return true;
+                  return !!markerTags[name];
                 },
-                category: markerCategory,
-                onCategory: (name) => {
+                onToggle: (name, sectionId) => {
                   setMarkerTyping(false);
-                  setMarkerName((cur) => (cur.trim().toLowerCase() === String(name).toLowerCase() ? "" : name));
+                  if (sectionId === "ethnicity") {
+                    setMarkerEth((cur) => (cur === name ? "" : name));
+                  } else if (sectionId === "positions") {
+                    /* one act names the marker: another chip replaces it */
+                    setMarkerName((cur) => (cur.trim().toLowerCase() === name.toLowerCase() ? "" : name));
+                  } else {
+                    setMarkerTags((cur) => {
+                      const next = Object.assign({}, cur);
+                      if (next[name]) delete next[name];
+                      else next[name] = true;
+                      return next;
+                    });
+                  }
                 },
+                category: "",
+                onCategory: () => undefined,
                 onChild: (parent, name) => {
                   setMarkerTyping(false);
-                  setMarkerName((cur) => (cur.trim().toLowerCase() === String(name).toLowerCase() ? parent : name));
+                  setMarkerName((cur) => (cur.trim().toLowerCase() === name.toLowerCase() ? "" : name));
                 },
-              })
+              }),
+              markerEth &&
+                h(
+                  "p",
+                  { className: "stk-tag-note" },
+                  "Ethnicity " + markerEth + " → " +
+                    ((item.scene.performers || [])[0]
+                      ? ((item.scene.performers || [])[0].name || "performer")
+                      : "this scene")
+                )
             )
           ),
 
@@ -7496,7 +7639,7 @@ void main() {
     const q = String(query || "").trim().toLowerCase();
     const matches = (name) => !q || String(name).toLowerCase().includes(q);
 
-    const chip = (name, extraClass) => {
+    const chip = (name, extraClass, sectionId) => {
       const on = isOn(name);
       return h(
         "button",
@@ -7505,7 +7648,9 @@ void main() {
           type: "button",
           className: "stk-tagpick" + (on ? " stk-on" : "") + (extraClass ? " " + extraClass : ""),
           "aria-pressed": on,
-          onClick: () => onToggle(name),
+          /* the section id rides along so a sheet can treat the same name
+             differently per section (a marker's act vs its extra tags) */
+          onClick: () => onToggle(name, sectionId),
         },
         name
       );
@@ -7586,7 +7731,7 @@ void main() {
         h(
           "div",
           { className: "stk-tag-grid" },
-          visible.map((name) => chip(name)),
+          visible.map((name) => chip(name, "", section.id)),
           section.paged && !q
             ? h(
                 "button",
