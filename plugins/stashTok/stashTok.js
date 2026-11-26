@@ -19,7 +19,7 @@
 
   const React = api.React;
   const h = React.createElement;
-  const { useState, useEffect, useLayoutEffect, useRef, useCallback } = React;
+  const { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } = React;
   const RouterDOM = api.libraries.ReactRouterDOM || {};
   const Link = RouterDOM.Link || "a";
 
@@ -1617,6 +1617,10 @@
     Sextape: ["BG", "GG", "Group", "Cuckold"],
   };
   const CATEGORY_PARENTS = Object.keys(CATEGORY_TAGS);
+  /* SFW and Social are not part of the Solo/Sextape pair — they describe how a
+     scene was produced, not what is in it — so they sit beside the pair as
+     ordinary tags and can be on at the same time as either. */
+  const CATEGORY_STANDALONE = ["SFW", "Social"];
 
   const CONTENT_TAGS = ["Full Scene", "Short Clip", "Livestream", "Compilation"];
   const BODY_TAGS = ["Big Tits", "Big Ass", "Curvy", "Petite", "Fit / Athletic"];
@@ -1638,45 +1642,87 @@
      true to return the strip. */
   const SHOW_CAPTION_TAGS = false;
 
-  /* the section order is the order the sheet draws them in */
-  const TAG_SHEET_SECTIONS = [
-    { id: "ethnicity", title: "Ethnicity", tags: ETHNICITY_TAGS.map((eth) => eth.name) },
-    { id: "category", title: "Category", parents: CATEGORY_PARENTS, children: CATEGORY_TAGS },
-    { id: "content", title: "Content Format", tags: CONTENT_TAGS },
-    { id: "body", title: "Body", tags: BODY_TAGS },
-    { id: "positions", title: "Positions & Acts", tags: POSITION_TAGS, paged: true },
-    { id: "fetish", title: "Fetish Tags", tags: FETISH_TAGS, paged: true },
-  ];
-  /* how many chips a paged section shows before "+ N more" */
-  const TAG_PAGE = 8;
+  /* ---- the vocabulary the sheets draw ------------------------------------
+     Everything below the defaults is editable in Settings → Customize
+     StashTok: the four chip lists, their order, and the defaults a new marker
+     starts on. The coded lists are only what a server that has never been
+     configured gets, so a custom list is never merged with them — an edited
+     list is the list. */
+  const DEFAULT_LISTS = {
+    ethnicity: ETHNICITY_TAGS.map((eth) => eth.name),
+    content: CONTENT_TAGS,
+    body: BODY_TAGS,
+    positions: POSITION_TAGS,
+    fetish: FETISH_TAGS,
+  };
 
-  const TAG_VOCABULARY = TAG_SHEET_SECTIONS.reduce((all, section) => {
-    if (section.parents) {
-      return all.concat(section.parents).concat(
-        section.parents.reduce((kids, parent) => kids.concat(section.children[parent]), [])
-      );
-    }
-    return all.concat(section.tags);
-  }, []);
+  function tagLists(customize) {
+    const c = customize && typeof customize === "object" ? customize : {};
+    const out = {};
+    Object.keys(DEFAULT_LISTS).forEach((key) => {
+      const value = c[key];
+      out[key] = Array.isArray(value)
+        ? value.map((name) => String(name).trim()).filter(Boolean)
+        : DEFAULT_LISTS[key].slice();
+    });
+    return out;
+  }
+
+  /* A known ethnicity carries its two tag spellings (Ebony writes Black +
+     Ebony); anything the user added is its own tag on both sides. */
+  function ethnicityRows(lists) {
+    const names = (lists && lists.ethnicity) || DEFAULT_LISTS.ethnicity;
+    return names.map((name) => {
+      const known = ETHNICITY_TAGS.find((row) => row.name.toLowerCase() === String(name).toLowerCase());
+      if (known) return known;
+      return { name: String(name), performer: [String(name)], scene: [String(name)] };
+    });
+  }
+
+  /* the section order is the order the sheet draws them in */
+  function tagSections(lists) {
+    const l = lists || tagLists(null);
+    return [
+      { id: "ethnicity", title: "Ethnicity", tags: l.ethnicity },
+      { id: "category", title: "Category", parents: CATEGORY_PARENTS, children: CATEGORY_TAGS, standalone: CATEGORY_STANDALONE },
+      { id: "content", title: "Content Format", tags: l.content },
+      { id: "body", title: "Body", tags: l.body },
+      { id: "positions", title: "Positions & Acts", tags: l.positions },
+      { id: "fetish", title: "Fetish Tags", tags: l.fetish },
+    ];
+  }
 
   /* A marker marks one thing at one moment. The act is the marker's name
      (primary tag); ethnicity and fetish ride along as its other tags. Category
      and Content Format describe the production rather than the moment, so the
      marker sheet never offers them — not even while typing. */
-  const MARKER_TAG_SECTIONS = ["ethnicity", "positions", "fetish"]
-    .map((id) => TAG_SHEET_SECTIONS.find((section) => section.id === id))
-    .filter(Boolean);
+  function markerSections(lists) {
+    return tagSections(lists).filter((section) => ["ethnicity", "positions", "fetish"].indexOf(section.id) >= 0);
+  }
+
+  function vocabularyOf(sections) {
+    return (sections || []).reduce((all, section) => {
+      if (section.parents) {
+        return all
+          .concat(section.parents)
+          .concat(section.standalone || [])
+          .concat(section.parents.reduce((kids, parent) => kids.concat(section.children[parent]), []));
+      }
+      return all.concat(section.tags || []);
+    }, []);
+  }
+
   /* A performer's ethnicity is a free string on the record, so the sheet has to
      match it back to a chip: the chip the performer already carries is the
      answer, and a scene with no performer falls back to the scene's own tags. */
-  function ethnicityOf(performer) {
+  function ethnicityOf(performer, lists) {
     if (!performer) return "";
     const hay = [String(performer.ethnicity || "")]
       .concat((performer.tags || []).map((tag) => String(tag.name || "")))
       .join(" ")
       .toLowerCase();
     if (!hay.trim()) return "";
-    const hit = ETHNICITY_TAGS.find((row) =>
+    const hit = ethnicityRows(lists).find((row) =>
       row.performer.concat(row.scene).some((name) => hay.includes(String(name).toLowerCase()))
     );
     return hit ? hit.name : "";
@@ -1852,6 +1898,18 @@
       minDuration: raw.minDuration == null ? 10 : Number(raw.minDuration),
       /* "" = auto-guess from the port, "off" = always use Stash's own images */
       thumbBase: typeof raw.thumbBase === "string" ? raw.thumbBase : "",
+      /* Settings → Customize StashTok: the chip lists (order included) and the
+         defaults a new marker or tag session opens on. Stored on the server so
+         it survives a new browser; a string is accepted because the plugin map
+         is JSON, and an older save may hold the raw text. */
+      customize: (() => {
+        const value = raw.customize;
+        if (value && typeof value === "object") return value;
+        if (typeof value === "string" && value.trim()) {
+          try { return JSON.parse(value) || {}; } catch (e) { return {}; }
+        }
+        return {};
+      })(),
       /* written by the setup wizard: this *server* has been configured */
       setupDone: raw.setupDone === true,
       /* any key at all means somebody has been here before: an upgraded
@@ -2085,6 +2143,10 @@
   /* did this device already have prefs before this build loaded? the merged
      defaults look identical to a first run, so the stored key is the only tell */
   let PREFS_SEEN = false;
+  /* content that is not for the main feed, hidden everywhere unless turned on */
+  const EXCLUDE_TAGS_DEFAULT = ["SFW", "Social"];
+  const EXCLUDE_TAG_PRESETS = ["Anal", "Fake Tits", "Gay"];
+
   const PREF_DEFAULTS = {
     performerSort: "filesize",
     performerImages: true,
@@ -2097,6 +2159,10 @@
        drag is how a thumb slips while swiping, and the seek it caused read as the
        clip jumping on its own. The scrub bar is opened by tapping the caption. */
     dragScrub: false,
+    /* the scrub preview fills the viewer from the generated sprite sheet. Off =
+       the clip itself seeks on every drag, which is slower but works on scenes
+       that never had thumbnails generated. */
+    scrubSprites: true,
     /* double tap the left/right stripe of the stage to seek ∓5 s, the phone's
        arrow keys. On by default; the centre still steps the crop. */
     edgeSeek: true,
@@ -2117,6 +2183,11 @@
     /* which performer genders the app shows at all. Empty = every gender, so a
        library that never set a gender on anyone is not filtered into nothing */
     genders: [],
+    /* every feed hides these tags: SFW and Social by default, plus whatever the
+       user adds. The exclusion rides in the scene filter, so it applies to For
+       You, custom feeds, tag feeds and performer feeds alike. */
+    excludeDefaults: true,
+    excludeTags: [],
     favoriteTags: [],
     favoritesAlgo: {},
     folderView: "list",
@@ -3077,6 +3148,16 @@ void main() {
 
   function FeedView({ prefs, spec, cfg, refreshKey, onBack, onSearch, onSettings, onMenu, onOpenPerformer, onOpenTag, onDeriveFeed, onEditFeed, onOpenFolder, onOpenFolderProfile, feeds, onSwitchFeed, onNewFeed, onManageFeeds, onDuo, duo, desktop }) {
     const sfw = !!cfg.sfw;
+    /* the chip vocabulary, in the order Settings → Customize StashTok puts it.
+       Memoised on the config object: these feed callbacks, and a fresh array on
+       every render would re-register the key handler on every render. */
+    const customize = cfg.customize;
+    const lists = useMemo(() => tagLists(customize), [customize]);
+    const sections = useMemo(() => tagSections(lists), [lists]);
+    const markerSecs = useMemo(() => markerSections(lists), [lists]);
+    const vocabulary = useMemo(() => vocabularyOf(sections), [sections]);
+    const markerDefaults = (customize && customize.markerDefaults) || {};
+    const tagDefaults = (customize && customize.tagDefaults) || {};
     const [items, setItems] = useState([]);
     const [index, setIndex] = useState(0);
     const [count, setCount] = useState(0);
@@ -3151,7 +3232,6 @@ void main() {
     /* a scene with no generated sprite sheet falls back to Stash's own
        screenshot-at-time endpoint; when that also fails the overlay gets out
        of the way and the video stays visible */
-    const [snapFail, setSnapFail] = useState(false);
     const spriteRef = useRef({ key: "", cues: [], ok: false });
     const [spriteTick, setSpriteTick] = useState(0);
     const [hud, setHud] = useState(true);
@@ -3235,9 +3315,6 @@ void main() {
     const [markerDrop, setMarkerDrop] = useState(null);
     const markerDropEl = useRef(null);
     const [scrubTime, setScrubTime] = useState(0);
-    /* Stash's screenshot endpoint runs ffmpeg per request, so a no-sprite
-       scrub asks it at most ~7 times a second instead of once per pixel */
-    const snapRef = useRef({ at: 0, t: 0 });
     const [duration, setDuration] = useState(0);
     const [time, setTime] = useState(0);
     const [rateBadge, setRateBadge] = useState("");
@@ -4474,11 +4551,20 @@ void main() {
       setTagQueue([]);
       setTagSugg([]);
       setTagSuggSel(-1);
-      setTagPicked({});
+      /* the Customize defaults open pre-ticked, so a library that tags the same
+         way every time is two taps instead of six */
+      const seed = {};
+      [tagDefaults.ethnicity, tagDefaults.content].forEach((name) => {
+        if (name) seed[String(name)] = true;
+      });
+      (tagDefaults.body || []).concat(tagDefaults.fetish || []).forEach((name) => {
+        if (name) seed[String(name)] = true;
+      });
+      setTagPicked(seed);
       setTagCat("");
       setTagKids({});
       setTagShown({});
-    }, [item]);
+    }, [item, tagDefaults]);
 
     /* merge tags into the clip on screen so the caption updates without a refetch */
     const mergeSceneTags = useCallback(
@@ -4693,7 +4779,7 @@ void main() {
       const sceneSeen = {};
       const performerNames = [];
       base.forEach((name) => {
-        const eth = ETHNICITY_TAGS.find((row) => row.name.toLowerCase() === name.toLowerCase());
+        const eth = ethnicityRows(lists).find((row) => row.name.toLowerCase() === name.toLowerCase());
         (eth ? eth.scene : [name]).forEach((tagName) => {
           const key = tagName.trim().toLowerCase();
           if (!key || sceneSeen[key]) return;
@@ -4798,12 +4884,18 @@ void main() {
         const raw = Number(at != null ? at : video ? video.currentTime : 0) || 0;
         const seconds = Math.max(0, total ? Math.min(total - 0.05, raw) : raw);
         setCtxMenu(null);
-        setMarkerName("");
-        setMarkerTags({});
+        /* a marker starts on the Customize defaults: the act it usually marks,
+           the ethnicity it usually carries, the fetishes that usually apply */
+        setMarkerName(String(markerDefaults.act || ""));
+        const seeds = {};
+        (markerDefaults.fetish || []).forEach((name) => {
+          if (name) seeds[String(name)] = true;
+        });
+        setMarkerTags(seeds);
         setMarkerTyping(false);
         /* ethnicity is imported, not asked for: the performer on the scene
            already says what she is, and that is what the chip starts on */
-        setMarkerEth(ethnicityOf(((item.scene.performers || [])[0] || null)));
+        setMarkerEth(ethnicityOf((item.scene.performers || [])[0] || null, lists) || String(markerDefaults.ethnicity || ""));
         setMarkerAt(Math.round(seconds * 100) / 100);
         setMarkerShown({});
         /* the sheet's polaroid is the frame on screen right now: freeze the
@@ -4837,7 +4929,7 @@ void main() {
           setMarkerSnap("");
         }
       },
-      [item, duration, activeVideo]
+      [item, duration, activeVideo, lists, markerDefaults]
     );
 
     const createMarker = useCallback(async () => {
@@ -4846,7 +4938,7 @@ void main() {
       const sceneId = item.scene.id;
       const performer = (item.scene.performers || [])[0] || null;
       /* the act is the marker; ethnicity and fetish are tags that ride along */
-      const eth = markerEth ? ETHNICITY_TAGS.find((row) => row.name === markerEth) : null;
+      const eth = markerEth ? ethnicityRows(lists).find((row) => row.name === markerEth) || null : null;
       const extras = eth ? eth.scene.slice() : [];
       Object.keys(markerTags).forEach((tagName) => {
         if (markerTags[tagName]) extras.push(tagName);
@@ -5058,7 +5150,6 @@ void main() {
       const spritePath = rel(scene.paths && scene.paths.sprite);
       spriteRef.current = { key: String(scene.id), cues: [], ok: false, src: spritePath || "", sheetW: 0, sheetH: 0 };
       if (spriteTick) setSpriteTick(0);
-      setSnapFail(false);
       let alive = true;
       /* the sheet's own pixel size, needed to blow one cell up to the stage */
       if (spritePath) {
@@ -5776,8 +5867,6 @@ void main() {
       window.clearTimeout(scrubBarTimer.current);
       setScrubBar(true);
       setScrubbing(true);
-      setSnapFail(false);
-      snapRef.current = { at: 0, t: 0 };
       dropRef.current = { y0: event.clientY, at: null, armed: false, over: false, x: 0 };
       setMarkerDrop(null);
       poke();
@@ -5795,10 +5884,6 @@ void main() {
         ? store.cues.find((c) => at >= c.start && at < c.end) || store.cues[store.cues.length - 1]
         : null;
       const hasSprite = Boolean(store.ok && cue);
-      if (!hasSprite || !spriteRef.current.sheetW) {
-        const now = performance.now();
-        if (now - snapRef.current.at > 140) snapRef.current = { at: now, t: Math.round(at) };
-      }
       const stage = stageRef.current;
       const sbox = stage ? stage.getBoundingClientRect() : null;
       const activeEl = activeVideo();
@@ -5807,7 +5892,6 @@ void main() {
       setScrubPreview({
         pct,
         time: at,
-        snapT: snapRef.current.t,
         fit: fit === "cover" ? "cover" : "contain",
         zoom: zoomTf,
         hasSprite,
@@ -6007,7 +6091,7 @@ void main() {
       const key = typed.toLowerCase();
       if (tagQueueLower.has(key) || sceneTagNames.has(key)) return "";
       if (tagSugg.some((row) => String(row.name).trim().toLowerCase() === key)) return "";
-      const inVocab = TAG_VOCABULARY.some((name) => name.toLowerCase() === key);
+      const inVocab = vocabulary.some((name) => name.toLowerCase() === key);
       return inVocab ? "" : typed;
     })();
 
@@ -6110,14 +6194,6 @@ void main() {
         return;
       }
       setTagKids((prev) => Object.assign({}, prev, { [name]: !prev[name] }));
-    }
-
-    function showMore(sectionId, total, setter) {
-      setter((prev) => {
-        const current = prev[sectionId] || TAG_PAGE;
-        const next = current >= total ? TAG_PAGE : Math.min(total, current + TAG_PAGE);
-        return Object.assign({}, prev, { [sectionId]: next });
-      });
     }
 
     return h(
@@ -6273,52 +6349,41 @@ void main() {
 
 
         /* ---- scrub frame -------------------------------------------
-           While the playhead is being dragged the frame under it fills the
-           stage, so the viewer shows what the timeline is pointing at instead
-           of the last decoded frame. A generated sprite sheet is instant and
-           free; without one, Stash's screenshot-at-time endpoint is asked
-           (throttled); if that fails too the overlay gets out of the way and
-           leaves the video visible. */
+           While the playhead is dragged the frame under it fills the stage,
+           read straight from Stash's generated sprite sheet — instant and
+           free. With no sheet (most of an OnlyFans library) or the setting
+           off, the clip itself seeks on every move and the viewer shows its
+           own decoded frame. */
         scrubbing &&
           scrubPreview &&
           !sfw &&
-          !snapFail &&
+          prefs.scrubSprites !== false &&
+          scrubPreview.hasSprite &&
+          spriteRef.current.sheetH &&
           h(
             "div",
             { className: "stk-scrub-frame", "aria-hidden": "true" },
-            scrubPreview.hasSprite && spriteRef.current.sheetW
-              ? h("div", {
-                  className: "stk-scrub-frame-img",
-                  style: (() => {
-                    const preview = scrubPreview;
-                    const vw = preview.stageW || window.innerWidth || 360;
-                    const vh = preview.stageH || window.innerHeight || 640;
-                    const scale = preview.fit === "cover"
-                      ? Math.max(vw / preview.w, vh / preview.h)
-                      : Math.min(vw / preview.w, vh / preview.h);
-                    const sheetW = spriteRef.current.sheetW * scale;
-                    const sheetH = spriteRef.current.sheetH * scale;
-                    return {
-                      backgroundImage: `url("${preview.src}")`,
-                      backgroundSize: `${sheetW}px ${sheetH}px`,
-                      backgroundPosition:
-                        `${-(preview.x * scale + (preview.w * scale - vw) / 2)}px ` +
-                        `${-(preview.y * scale + (preview.h * scale - vh) / 2)}px`,
-                      transform: preview.zoom && preview.zoom !== "none" ? preview.zoom : undefined,
-                    };
-                  })(),
-                })
-              : h("img", {
-                  className: "stk-scrub-frame-img",
-                  src: `/scene/${scrubPreview.sceneId}/screenshot?t=${scrubPreview.snapT}`,
-                  alt: "",
-                  draggable: false,
-                  style: {
-                    objectFit: scrubPreview.fit === "cover" ? "cover" : "contain",
-                    transform: scrubPreview.zoom && scrubPreview.zoom !== "none" ? scrubPreview.zoom : undefined,
-                  },
-                  onError: () => setSnapFail(true),
-                })
+            h("div", {
+              className: "stk-scrub-frame-img",
+              style: (() => {
+                const preview = scrubPreview;
+                const vw = preview.stageW || window.innerWidth || 360;
+                const vh = preview.stageH || window.innerHeight || 640;
+                const scale = preview.fit === "cover"
+                  ? Math.max(vw / preview.w, vh / preview.h)
+                  : Math.min(vw / preview.w, vh / preview.h);
+                const sheetW = spriteRef.current.sheetW * scale;
+                const sheetH = spriteRef.current.sheetH * scale;
+                return {
+                  backgroundImage: `url("${preview.src}")`,
+                  backgroundSize: `${sheetW}px ${sheetH}px`,
+                  backgroundPosition:
+                    `${-(preview.x * scale + (preview.w * scale - vw) / 2)}px ` +
+                    `${-(preview.y * scale + (preview.h * scale - vh) / 2)}px`,
+                  transform: preview.zoom && preview.zoom !== "none" ? preview.zoom : undefined,
+                };
+              })(),
+            })
           ),
 
         /* the first clip has nothing above it: pulling down reloads the feed */
@@ -7275,8 +7340,19 @@ void main() {
                 })
               ),
             h("label", { className: "stk-marker-label", htmlFor: "stk-marker-name" }, "Marker Name"),
+            /* Safari offers a contact/"AutoFill Contact" bar over a bare text
+               input, which covers the sheet's own chips. autocomplete=off and a
+               fixed name are what stop it guessing this is a person's data. */
             h("input", {
               id: "stk-marker-name",
+              name: "stktok-marker",
+              type: "text",
+              autoComplete: "off",
+              autoCorrect: "off",
+              autoCapitalize: "words",
+              spellCheck: false,
+              enterKeyHint: "done",
+              "data-form-type": "other",
               className: "stk-tag-search stk-marker-input",
               placeholder: "The act — Cowgirl, Blowjob, Anal…",
               value: markerName,
@@ -7296,10 +7372,8 @@ void main() {
               h(TagSections, {
                 /* ethnicity and fetish are marker tags, not alternative names:
                    the act in the field is what the marker is called */
-                sections: MARKER_TAG_SECTIONS,
+                sections: markerSecs,
                 query: markerTyping ? markerName : "",
-                shown: markerShown,
-                onMore: (sectionId, total) => showMore(sectionId, total, setMarkerShown),
                 isOn: (name) => {
                   const low = String(name).trim().toLowerCase();
                   if (!low) return false;
@@ -7362,6 +7436,13 @@ void main() {
             h("input", {
               className: "stk-tag-search",
               ref: tagInputRef,
+              name: "stktok-tag",
+              type: "text",
+              autoCorrect: "off",
+              autoCapitalize: "words",
+              spellCheck: false,
+              enterKeyHint: "done",
+              "data-form-type": "other",
               placeholder: "Type a tag — comma or Tab to add",
               value: tagFilter,
               autoComplete: "off",
@@ -7449,9 +7530,8 @@ void main() {
               "div",
               { className: "stk-tag-scroll" },
               h(TagSections, {
+                sections,
                 query: tagFilter,
-                shown: tagShown,
-                onMore: (sectionId, total) => showMore(sectionId, total, setTagShown),
                 isOn: tagIsOn,
                 isChildOn: (name) => !!tagKids[name] || sceneTagNames.has(String(name).trim().toLowerCase()),
                 onToggle: toggleTagName,
@@ -7631,10 +7711,16 @@ void main() {
 
   /* ---- the six sections, drawn the same way everywhere ------------------
      A section is either a flat chip grid or (Category) a pair of exclusive
-     parents with a child drawer. Paged sections show TAG_PAGE chips and grow
-     eight at a time; a search query overrides the pagination so a hidden tag
-     is never unreachable by typing. */
-  function TagSections({ sections = TAG_SHEET_SECTIONS, query, shown, onMore, isOn, isChildOn, onToggle, category, onCategory, onChild }) {
+     parents with a child drawer. Every section is two rows that scroll
+     sideways, and a query filters the whole vocabulary, so nothing is
+     unreachable by typing. */
+  /* A section is one horizontally scrolling line, like a TV row. Only the long
+     lists (Positions, Fetish) fold into a second line — a 19-chip single line is
+     a lot of flicks, and two lines still scroll as one strip. Ethnicity and
+     Category are short by design and always stay on one line. */
+  const TAG_ROW_TWO = 16;
+
+  function TagSections({ sections = [], query, isOn, isChildOn, onToggle, category, onCategory, onChild }) {
     const kidOn = isChildOn || isOn;
     const q = String(query || "").trim().toLowerCase();
     const matches = (name) => !q || String(name).toLowerCase().includes(q);
@@ -7681,19 +7767,23 @@ void main() {
           h(
             "div",
             { className: "stk-tag-grid" },
-            section.parents.map((name) =>
-              h(
-                "button",
-                {
-                  key: name,
-                  type: "button",
-                  className: "stk-tagpick stk-catpill" + (category === name ? " stk-on" : ""),
-                  "aria-pressed": category === name,
-                  onClick: () => onCategory(name),
-                },
-                name
-              )
-            )
+            section.parents
+              .filter(matches)
+              .map((name) =>
+                h(
+                  "button",
+                  {
+                    key: name,
+                    type: "button",
+                    className: "stk-tagpick stk-catpill" + (category === name ? " stk-on" : ""),
+                    "aria-pressed": category === name,
+                    onClick: () => onCategory(name),
+                  },
+                  name
+                )
+              ),
+            /* SFW / Social sit beside the pair: ordinary tags, not a third parent */
+            (section.standalone || []).filter(matches).map((name) => chip(name, "stk-catpill", section.id))
           ),
           kidRows.length
             ? h(
@@ -7719,31 +7809,18 @@ void main() {
         );
       }
 
+      /* every chip is rendered: a section is two rows that scroll sideways, so
+         there is no "+ N more" to hide them behind any more */
       const all = section.tags.filter(matches);
       if (!all.length) return null;
-      const limit = section.paged && !q ? Math.min(shown[section.id] || TAG_PAGE, all.length) : all.length;
-      const visible = all.slice(0, limit);
-      const remaining = all.length - limit;
       return h(
         "div",
         { key: section.id, className: "stk-tag-section" },
         h("h4", null, section.title),
         h(
           "div",
-          { className: "stk-tag-grid" },
-          visible.map((name) => chip(name, "", section.id)),
-          section.paged && !q
-            ? h(
-                "button",
-                {
-                  key: "__more",
-                  type: "button",
-                  className: "stk-morepill",
-                  onClick: () => onMore(section.id, all.length),
-                },
-                remaining > 0 ? "+ " + Math.min(TAG_PAGE, remaining) + " more" : "Show less"
-              )
-            : null
+          { className: "stk-tag-grid" + (all.length > TAG_ROW_TWO ? " stk-two" : "") },
+          all.map((name) => chip(name, "", section.id))
         )
       );
     });
@@ -13227,6 +13304,200 @@ function TagsPage({ onPick, onMarkers, onBack }) {
     );
   }
 
+  /* ------------------------------------------------- customize stash tok *
+   * The chip lists, their order, and the defaults every sheet opens on. The
+   * order is the feature: the first chip in each row is the one a thumb
+   * reaches, and the marker sheet draws exactly this order. Each list is
+   * edited as a list (move up / down / remove) — a wrapped cloud of chips
+   * tells you nothing about order, and order is the whole point here. */
+
+  const CUSTOMIZE_LIST_META = [
+    {
+      key: "ethnicity",
+      title: "Ethnicity",
+      hint: "Imported from the performer on the scene. A chip she has no value for is written to her on the marker, or to the scene when there is no performer.",
+    },
+    { key: "positions", title: "Positions & Acts", hint: "Names a marker, and tags what actually happens in a clip." },
+    { key: "fetish", title: "Fetish Tags", hint: "Extra tags that ride on a marker, and scene tags." },
+    { key: "body", title: "Body", hint: "Body attributes on the tag sheet and the performer sync." },
+    { key: "content", title: "Content Format", hint: "Full Scene, Short Clip, Livestream…" },
+  ];
+
+  function CustomizeList({ title, hint, names, onSet }) {
+    const [draft, setDraft] = useState("");
+    const add = () => {
+      const name = draft.trim();
+      if (!name) return;
+      if (names.some((have) => have.toLowerCase() === name.toLowerCase())) {
+        setDraft("");
+        return;
+      }
+      onSet(names.concat([name]));
+      setDraft("");
+    };
+    const move = (index, delta) => {
+      const next = names.slice();
+      const at = index + delta;
+      if (at < 0 || at >= next.length) return;
+      const [row] = next.splice(index, 1);
+      next.splice(at, 0, row);
+      onSet(next);
+    };
+    const defaults = DEFAULT_LISTS[Object.keys(DEFAULT_LISTS).find((key) => DEFAULT_LISTS[key] === names) || ""] || null;
+    return h(
+      "section",
+      { className: "stk-set-block" },
+      h("h4", { className: "stk-set-block-head" }, title),
+      hint ? h("p", { className: "stk-set-block-sub" }, hint) : null,
+      names.length === 0
+        ? h("p", { className: "stk-set-block-sub" }, "Empty — this section draws no chips.")
+        : h(
+            "div",
+            { className: "stk-clist" },
+            names.map((name, i) =>
+              h(
+                "div",
+                { key: name + "-" + i, className: "stk-clist-row" },
+                h("span", { className: "stk-clist-pos" }, String(i + 1)),
+                h("span", { className: "stk-clist-name" }, name),
+                h("button", {
+                  type: "button",
+                  className: "stk-clist-btn",
+                  disabled: i === 0,
+                  "aria-label": "Move " + name + " up",
+                  onClick: () => move(i, -1),
+                }, "↑"),
+                h("button", {
+                  type: "button",
+                  className: "stk-clist-btn",
+                  disabled: i === names.length - 1,
+                  "aria-label": "Move " + name + " down",
+                  onClick: () => move(i, 1),
+                }, "↓"),
+                h("button", {
+                  type: "button",
+                  className: "stk-clist-btn stk-clist-x",
+                  "aria-label": "Remove " + name,
+                  onClick: () => onSet(names.filter((row) => row !== name)),
+                }, "✕")
+              )
+            )
+          ),
+      h(
+        "div",
+        { className: "stk-clist-add" },
+        h("input", {
+          type: "text",
+          value: draft,
+          placeholder: "Add a name",
+          autoComplete: "off",
+          autoCorrect: "off",
+          autoCapitalize: "words",
+          spellCheck: false,
+          enterKeyHint: "done",
+          onChange: (event) => setDraft(event.currentTarget.value),
+          onKeyDown: (event) => {
+            if (event.key !== "Enter") return;
+            event.preventDefault();
+            add();
+          },
+        }),
+        h("button", { type: "button", className: "stk-btn", onClick: add }, "Add")
+      ),
+      defaults &&
+        h(
+          "button",
+          { type: "button", className: "stk-btn stk-clist-reset", onClick: () => onSet(defaults.slice()) },
+          "Reset to the built-in list"
+        )
+    );
+  }
+
+  /* One list of chips, order kept: used for the defaults, where a name that is
+     no longer in the vocabulary is simply never drawn. */
+  function ChipPicker({ names, value, onChange }) {
+    const picked = Array.isArray(value) ? value : [];
+    const swap = (name) => {
+      const at = picked.indexOf(name);
+      onChange(at >= 0 ? picked.filter((row) => row !== name) : picked.concat([name]));
+    };
+    if (!names.length) return h("p", { className: "stk-set-block-sub" }, "The list is empty — add chips under Picker Lists.");
+    return h(
+      "div",
+      { className: "stk-chip-pick" },
+      names.map((name) =>
+        h(
+          "button",
+          {
+            key: name,
+            type: "button",
+            className: "stk-tagpick" + (picked.indexOf(name) >= 0 ? " stk-on" : ""),
+            "aria-pressed": picked.indexOf(name) >= 0,
+            onClick: () => swap(name),
+          },
+          name
+        )
+      )
+    );
+  }
+
+  /* The library's own ethnicity values, offered as chips to add: "sync with
+     Stash" without guessing at a tag name for every person in the library. */
+  function EthnicitySync({ have, onAdd }) {
+    const [rows, setRows] = useState(null);
+    const [busy, setBusy] = useState(false);
+    const scan = () => {
+      setBusy(true);
+      gql(
+        `query StashTokEthnicityValues {
+          findPerformers(filter: { per_page: 500, sort: "scenes_count", direction: DESC }) {
+            performers { ethnicity }
+          }
+        }`
+      )
+        .then((data) => {
+          const people = (data.findPerformers && data.findPerformers.performers) || [];
+          const seen = {};
+          have.forEach((name) => { seen[String(name).trim().toLowerCase()] = true; });
+          const out = [];
+          people.forEach((person) => {
+            const value = String(person.ethnicity || "").trim();
+            if (!value) return;
+            const key = value.toLowerCase();
+            if (seen[key]) return;
+            seen[key] = true;
+            out.push(value);
+          });
+          setRows(out);
+        })
+        .catch(() => setRows([]))
+        .finally(() => setBusy(false));
+    };
+    return h(
+      "div",
+      { className: "stk-clist-sync" },
+      h("button", { type: "button", className: "stk-btn", onClick: scan, disabled: busy }, busy ? "Reading performers…" : "Sync with Stash"),
+      rows &&
+        (rows.length === 0
+          ? h("p", { className: "stk-set-block-sub" }, "Every ethnicity your performers carry is already a chip.")
+          : h(
+              "div",
+              { className: "stk-chip-pick" },
+              rows.map((name) =>
+                h("button", {
+                  key: name,
+                  type: "button",
+                  className: "stk-tagpick stk-addchip",
+                  onClick: () => {
+                    onAdd(name);
+                    setRows(rows.filter((row) => row !== name));
+                  },
+                }, "+ " + name)
+              )
+            ))
+    );
+  }
+
   /* --------------------------------------------------------------- operations */
   const OPS_ACTIONS = [
     { id: "scan", label: "Scan library", hint: "Pick up new folders and files", icon: "search" },
@@ -13560,7 +13831,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
      browser's back gesture, a deep link and the in-app chevron all agree. */
 
   const SETTINGS_GROUPS = [
-    { id: "Preferences", rank: 1, rows: ["feeds", "performer", "genders", "blur", "lock"] },
+    { id: "Preferences", rank: 1, rows: ["feeds", "performer", "genders", "customize", "blur", "lock"] },
     { id: "App Settings", rank: 2, rows: ["server", "appearance", "navigation", "operations", "about"] },
   ];
 
@@ -13572,6 +13843,9 @@ function TagsPage({ onPick, onMarkers, onBack }) {
     "feeds/new-feed/performers": "Performers",
     performer: "Performer Page",
     genders: "Show performers",
+    customize: "Customize StashTok",
+    "customize/lists": "Picker Lists",
+    "customize/defaults": "Defaults",
     appearance: "Appearance",
     navigation: "Navigation",
     server: "This Server",
@@ -14137,7 +14411,13 @@ function TagsPage({ onPick, onMarkers, onBack }) {
     onDeleteFeed = () => {}, onDraftFeed = () => {}, onBack = () => {},
     feedDraft = null, section = "", onSection = () => {},
     pin, onSetPin = () => {}, onClearPin = () => {}, sfw, onToggleSfw = () => {},
-    prefs = {}, setPref = () => {}, onOpenHistory, onOpenOps = () => {}, onRunSetup = () => {} }) {
+    prefs = {}, setPref = () => {}, onSetCustomize = () => {}, onOpenHistory, onOpenOps = () => {}, onRunSetup = () => {} }) {
+    /* the one settings block stored on the server: mirrored here so a tap shows
+       immediately, and re-synced whenever the config comes back */
+    const [customDraft, setCustomDraft] = useState(() => (cfg && cfg.customize) || {});
+    useEffect(() => {
+      if (cfg && cfg.customize) setCustomDraft(cfg.customize);
+    }, [cfg && cfg.customize]);
     const [draft, setDraft] = useState("");
     const [saved, setSaved] = useState(false);
     const [pinEntry, setPinEntry] = useState(false);
@@ -14166,6 +14446,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
       genders: { icon: "user", title: "Show performers" },
       blur: { icon: "image", title: "Blur Content Thumbnails" },
       lock: { icon: "lock", title: "Privacy Lock" },
+      customize: { icon: "tag", title: "Customize StashTok" },
       appearance: { icon: "image", title: "Appearance" },
       navigation: { icon: "menu", title: "Navigation" },
       server: { icon: "gear", title: "This Server" },
@@ -14342,6 +14623,142 @@ function TagsPage({ onPick, onMarkers, onBack }) {
           onDone: () => onSection("feeds"),
         });
       }
+      if (section === "customize" || section === "customize/lists" || section === "customize/defaults") {
+        const custom = customDraft && typeof customDraft === "object" ? customDraft : {};
+        const setCustom = (changes) => {
+          const next = Object.assign({}, custom, changes);
+          setCustomDraft(next);
+          onSetCustomize(next);
+        };
+        const lists = tagLists(custom);
+        const setList = (key, names) => setCustom({ [key]: names });
+        const setMarkerDefaults = (changes) =>
+          setCustom({ markerDefaults: Object.assign({}, custom.markerDefaults || {}, changes) });
+        const setTagDefaults = (changes) =>
+          setCustom({ tagDefaults: Object.assign({}, custom.tagDefaults || {}, changes) });
+        const markerD = custom.markerDefaults || {};
+        const tagD = custom.tagDefaults || {};
+        const pillOptions = (names) => [["", "None"]].concat(names.map((name) => [name, name]));
+
+        if (section === "customize") {
+          return h(React.Fragment, null,
+            h("p", { className: "stk-set-block-sub" },
+              "Every chip the tagging surfaces draw, in the order they draw them, plus what a new marker or tag session starts on. Stored on this Stash server, so a second instance keeps its own."),
+            h("section", { className: "stk-set-block" },
+              h("h4", { className: "stk-set-block-head" }, "Picker lists"),
+              h("p", { className: "stk-set-block-sub" }, "Add, remove and reorder the chips for the marker sheet and the tag sheet."),
+              CUSTOMIZE_LIST_META.map((meta, i) =>
+                h(SettingsChoiceRow, {
+                  key: meta.key,
+                  title: meta.title,
+                  value: (lists[meta.key] || []).length + " chips",
+                  onClick: () => onSection("customize/lists"),
+                  last: i === CUSTOMIZE_LIST_META.length - 1,
+                })
+              )
+            ),
+            h("section", { className: "stk-set-block" },
+              h("h4", { className: "stk-set-block-head" }, "Defaults"),
+              h("p", { className: "stk-set-block-sub" }, "What a new marker and a new tag session open with."),
+              h(SettingsChoiceRow, {
+                title: "Marker & tag defaults",
+                value: (markerD.act ? markerD.act : "no act") + (tagD.ethnicity ? " · " + tagD.ethnicity : ""),
+                onClick: () => onSection("customize/defaults"),
+                last: true,
+              })
+            )
+          );
+        }
+
+        if (section === "customize/lists") {
+          return h(React.Fragment, null,
+            h("p", { className: "stk-set-block-sub" },
+              "The order here is the order on the sheet: the first chip sits top-left, where a thumb lands. Enter adds a name; the arrows move a chip."),
+            CUSTOMIZE_LIST_META.map((meta, i) =>
+              h(React.Fragment, { key: meta.key },
+                h(CustomizeList, {
+                  title: meta.title,
+                  hint: meta.hint,
+                  names: lists[meta.key] || [],
+                  onSet: (names) => setList(meta.key, names),
+                }),
+                meta.key === "ethnicity" &&
+                  h(EthnicitySync, {
+                    have: lists.ethnicity || [],
+                    onAdd: (name) => setList("ethnicity", (lists.ethnicity || []).concat([name])),
+                  })
+              )
+            )
+          );
+        }
+
+        return h(React.Fragment, null,
+          h("p", { className: "stk-set-block-sub" },
+            "Defaults are pre-ticked, not written behind your back: they fill in the sheet, and nothing is saved until you press Create marker or Done."),
+          h("section", { className: "stk-set-block" },
+            h("h4", { className: "stk-set-block-head" }, "New marker"),
+            h("p", { className: "stk-set-block-sub" }, "The act names the marker, so a custom name is fine here."),
+            h("div", { className: "stk-clist-add" },
+              h("input", {
+                type: "text",
+                value: markerD.act || "",
+                placeholder: "e.g. Cowgirl",
+                autoComplete: "off",
+                autoCorrect: "off",
+                spellCheck: false,
+                enterKeyHint: "done",
+                onChange: (event) => setMarkerDefaults({ act: event.currentTarget.value }),
+              })
+            )
+          ),
+          h(PrefRow, { title: "Ethnicity", hint: "Used when the performer has none; her own value always wins", stack: true },
+            h(PrefPills, {
+              value: markerD.ethnicity || "",
+              options: pillOptions(lists.ethnicity || []),
+              onChange: (value) => setMarkerDefaults({ ethnicity: value }),
+            })),
+          h(PrefRow, { title: "Fetish tags", hint: "Ride along on every new marker", stack: true },
+            h(ChipPicker, {
+              names: lists.fetish || [],
+              value: markerD.fetish || [],
+              onChange: (value) => setMarkerDefaults({ fetish: value }),
+            })),
+          h("section", { className: "stk-set-block" },
+            h("h4", { className: "stk-set-block-head" }, "New tag session"),
+            h("p", { className: "stk-set-block-sub" }, "Pre-ticked on the tag sheet. Untick anything that does not fit the clip."),
+            h(PrefRow, { title: "Ethnicity", stack: true },
+              h(PrefPills, {
+                value: tagD.ethnicity || "",
+                options: pillOptions(lists.ethnicity || []),
+                onChange: (value) => setTagDefaults({ ethnicity: value }),
+              })),
+            h(PrefRow, { title: "Content format", stack: true },
+              h(PrefPills, {
+                value: tagD.content || "",
+                options: pillOptions(lists.content || []),
+                onChange: (value) => setTagDefaults({ content: value }),
+              })),
+            h(PrefRow, { title: "Body", stack: true },
+              h(ChipPicker, {
+                names: lists.body || [],
+                value: tagD.body || [],
+                onChange: (value) => setTagDefaults({ body: value }),
+              })),
+            h(PrefRow, { title: "Fetish tags", stack: true },
+              h(ChipPicker, {
+                names: lists.fetish || [],
+                value: tagD.fetish || [],
+                onChange: (value) => setTagDefaults({ fetish: value }),
+              }))
+          ),
+          h("button", {
+            type: "button",
+            className: "stk-btn",
+            onClick: () => setCustom({ markerDefaults: {}, tagDefaults: {} }),
+          }, "Clear defaults")
+        );
+      }
+
       if (section === "performer") {
         return h(React.Fragment, null,
           h(PrefRow, { title: "Default sort", hint: "Used the first time you open a performer", stack: true },
@@ -14370,6 +14787,8 @@ function TagsPage({ onPick, onMarkers, onBack }) {
             h(PrefToggle, { label: "Show path", on: !!prefs.showPath, onChange: (value) => setPref("showPath", value) })),
           h(PrefRow, { title: "Drag-scrub the stage", hint: "Press and sweep sideways across the video to seek. Off by default — a sideways thumb at the end of a swipe was seeking the clip. Tap the caption to open the scrub bar instead." },
             h(PrefToggle, { label: "Drag-scrub", on: prefs.dragScrub === true, onChange: (value) => setPref("dragScrub", value) })),
+          h(PrefRow, { title: "Use scrubber sprites", hint: "Fill the viewer with the frame under the playhead from Stash's generated sprite sheet. Sprites are instant and cost nothing; turning this off makes the clip itself seek on every drag, which is slower on long videos and is the only option for scenes that never had thumbnails generated." },
+            h(PrefToggle, { label: "Scrubber sprites", on: prefs.scrubSprites !== false, onChange: (value) => setPref("scrubSprites", value) })),
           h(PrefRow, { title: "Double-tap edges to seek", hint: "A double tap in the outer stripe of the video jumps 5 seconds back or forward, like an arrow key, and leaves a ring on that half. The middle stripe still steps the portrait crop. Stripe = 200 px, or a third of the width on a phone." },
             h(PrefToggle, { label: "Edge seek", on: prefs.edgeSeek !== false, onChange: (value) => setPref("edgeSeek", value) }))
         );
@@ -15132,6 +15551,30 @@ function TagsPage({ onPick, onMarkers, onBack }) {
       };
     }, []);
 
+    /* The on-screen keyboard shrinks the visual viewport, not `vh`, so a
+       bottom sheet sized in vh keeps its full height and its top slides off the
+       screen — a black panel over everything. Publish the visible height and
+       the keyboard's height as CSS variables; the sheets size to those. */
+    useEffect(() => {
+      const vv = window.visualViewport;
+      if (!vv) return undefined;
+      const apply = () => {
+        const root = document.documentElement;
+        const kb = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+        root.style.setProperty("--stk-vv-h", Math.round(vv.height) + "px");
+        root.style.setProperty("--stk-kb", kb + "px");
+        root.classList.toggle("stk-kb-open", kb > 90);
+      };
+      apply();
+      vv.addEventListener("resize", apply);
+      vv.addEventListener("scroll", apply);
+      return () => {
+        vv.removeEventListener("resize", apply);
+        vv.removeEventListener("scroll", apply);
+        document.documentElement.classList.remove("stk-kb-open");
+      };
+    }, []);
+
     /* tiles fade and rise as they scroll into view: one entrance each, never replayed */
     useEffect(() => {
       if (!("IntersectionObserver" in window)) return;
@@ -15248,6 +15691,27 @@ function TagsPage({ onPick, onMarkers, onBack }) {
         return next;
       });
     }, []);
+
+    /* Customize StashTok is the one settings block that belongs to the library
+       rather than to this browser: the chip vocabulary has to match the tags
+       the instance actually holds, and a second instance wants its own. It is
+       written through configurePlugin and read back by reloading the config. */
+    /* serialised: configurePlugin replaces the whole plugin map, so two writes
+       in flight each merge against a stale read and the later one wins — an
+       arrow tapped twice lost the first move. */
+    const customizeQueue = useRef(Promise.resolve());
+    const setCustomize = useCallback(
+      (next) => {
+        customizeQueue.current = customizeQueue.current
+          .catch(() => undefined)
+          .then(() => writeServerSettings({ customize: next }))
+          .then(() => reloadCfg())
+          .catch((err) => {
+            try { console.warn("StashTok: customize save failed", err); } catch (e) { /* ignore */ }
+          });
+      },
+      [reloadCfg]
+    );
 
     /* the decision waits for this server's config: before it arrives baseCfg is
        the coded default, which looks exactly like a fresh installation.
@@ -16579,6 +17043,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
           cfg,
           prefs,
           setPref,
+          onSetCustomize: setCustomize,
           feeds,
           section: settingsRoute,
           onSection: openSection,

@@ -3280,6 +3280,22 @@ img.stk-scrub-cell {
   display: flex;
   flex-direction: column;
 }
+/* The on-screen keyboard shrinks the *visual* viewport, not `vh`. A vh-sized
+   sheet therefore stays tall, its top slides under the status bar, and what is
+   left on screen is a black panel — that is the "huge black bar". The app tracks
+   visualViewport (--stk-vv-h / --stk-kb) and the sheet becomes as tall as what
+   is actually visible, sitting on top of the keyboard. */
+@supports (height: 100dvh) {
+  .stk-tag-sheet { height: min(78dvh, 620px); max-height: min(82dvh, 620px); }
+}
+html.stk-kb-open .stk-sheet {
+  max-height: calc(var(--stk-vv-h, 60vh) - 10px);
+  bottom: var(--stk-kb, 0px);
+}
+html.stk-kb-open .stk-tag-sheet {
+  height: auto;
+  max-height: calc(var(--stk-vv-h, 60vh) - 10px);
+}
 .stk-tag-search {
   margin: 8px 0 10px;
   padding: 9px 12px;
@@ -3289,14 +3305,31 @@ img.stk-scrub-cell {
   color: #fff;
   font-size: 13px;
 }
+/* Every section is two rows that scroll sideways, so a vocabulary of sixty tags
+   costs the same vertical space as eight. Scanning is worse than a wrapped
+   block; height is what a sheet on a phone cannot afford. */
 .stk-tag-grid {
+  /* one row by default — a column flow with a fixed height reads in order and
+     scrolls sideways like a TV row. `stk-two` doubles the height for the long
+     act lists, which still flick as a single strip (2 columns of chips). */
   display: flex;
+  flex-direction: column;
   flex-wrap: wrap;
+  align-content: flex-start;
+  height: 44px;
   gap: 7px;
-  overflow-y: auto;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
   padding-bottom: 6px;
-  flex: 1 1 auto;
+  flex: 0 0 auto;
 }
+.stk-tag-grid.stk-two { height: calc(44px * 2 + 7px); }
+.stk-tag-grid::-webkit-scrollbar { display: none; }
+.stk-tag-grid > .stk-tagpick { scroll-snap-align: start; white-space: nowrap; }
 
 /* ---- free-text tag field ------------------------------------------------ *
    chips closed with , / Tab sit above the suggestions, which sit above the
@@ -5495,6 +5528,40 @@ body.stk-fullscreen-mode .stash-tok.stk-feed-fullscreen {
 }
 
 .stk-set-block { display: flex; flex-direction: column; margin-bottom: 16px; }
+
+/* ---- Customize StashTok: the ordered chip lists ------------------------- *
+   A row per chip with its position number, so the order is what you read, not
+   something you infer from the layout. */
+.stk-clist { display: flex; flex-direction: column; gap: 4px; }
+.stk-clist-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px; border-radius: 9px;
+  background: rgba(255,255,255,.045);
+  border: 1px solid rgba(255,255,255,.07);
+}
+.stk-clist-pos { min-width: 18px; font-size: 11px; color: rgba(255,255,255,.35); font-variant-numeric: tabular-nums; text-align: right; }
+.stk-clist-name { flex: 1 1 auto; font-size: 13px; color: rgba(255,255,255,.88); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stk-clist-btn {
+  min-width: 30px; height: 30px; padding: 0;
+  border-radius: 8px; border: 1px solid rgba(255,255,255,.12);
+  background: rgba(255,255,255,.05); color: rgba(255,255,255,.8);
+  font-size: 13px; line-height: 1;
+}
+.stk-clist-btn:disabled { opacity: .28; }
+.stk-clist-x { color: #ff7d94; }
+.stk-clist-add { display: flex; gap: 8px; margin: 8px 0 4px; }
+.stk-clist-add input {
+  flex: 1 1 auto; min-width: 0;
+  padding: 9px 12px; border-radius: 10px;
+  border: 1px solid rgba(255,255,255,.14);
+  background: rgba(255,255,255,.06); color: #fff; font-size: 13px;
+}
+.stk-clist-reset { align-self: flex-start; margin-top: 6px; }
+.stk-clist-sync { display: flex; flex-direction: column; gap: 8px; margin: 2px 0 18px; }
+.stk-clist-sync .stk-btn { align-self: flex-start; }
+.stk-chip-pick { display: flex; flex-wrap: wrap; gap: 7px; }
+.stk-chip-pick .stk-tagpick { min-height: 36px; padding: 7px 12px; font-size: 13px; }
+.stk-addchip { border-style: dashed; color: #ff8fa6; }
 .stk-set-block-head {
   font-size: 17px;
   font-weight: 600;
