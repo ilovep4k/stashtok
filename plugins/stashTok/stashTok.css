@@ -6522,7 +6522,10 @@ body.stk-fullscreen-mode .stash-tok.stk-feed-fullscreen {
    Add Marker sheet so the in point can be judged by eye before naming it. */
 .stk-marker-snap {
   display: block;
-  width: min(62%, 230px);
+  /* fit-content, not a fixed width: a vertical clip made the polaroid as tall
+     as the modal. The frame hugs the photo and the photo is capped below. */
+  width: fit-content;
+  max-width: min(62%, 230px);
   margin: 4px auto 18px;
   padding: 7px 7px 26px;
   background: #f7f6f2;
@@ -6533,11 +6536,15 @@ body.stk-fullscreen-mode .stash-tok.stk-feed-fullscreen {
 }
 .stk-marker-snap-img {
   display: block;
-  width: 100%;
+  /* the reference frame, not the feature: a vertical clip is capped so the
+     polaroid never eats the sheet */
+  width: auto;
   height: auto;
+  max-width: min(46vw, 200px);
+  max-height: 150px;
   border-radius: 0;
   background: #111;
-  object-fit: cover;
+  object-fit: contain;
 }
 @media (prefers-reduced-motion: no-preference) {
   .stk-marker-snap { animation: stk-snap-in 240ms ease-out both; }
@@ -6608,3 +6615,9 @@ body.stk-fullscreen-mode .stash-tok.stk-feed-fullscreen {
 /* Reduced motion needs no separate block here: every animation above is gated
    behind prefers-reduced-motion: no-preference, and the two colour transitions
    are not motion. */
+
+/* Excluded Tags page: chips for what is hidden, a search over the whole library */
+.stk-excl-chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 2px 0 6px; }
+.stk-excl-pill { display: inline-flex; align-items: center; gap: 5px; }
+.stk-excl-search { margin: 4px 0 8px; }
+.stk-pick-count { margin-left: auto; padding-right: 10px; font-size: 12px; opacity: 0.55; }

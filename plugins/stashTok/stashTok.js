@@ -951,9 +951,20 @@
     const genderClause = hiddenIds.length
       ? `performers: { value: [${hiddenIds.map((id) => `"${id}"`).join(",")}], modifier: EXCLUDES }`
       : "";
-    if (excl && genderClause) parts.push(`AND: { ${excl}, ${genderClause} }`);
-    else if (excl) parts.push(excl);
-    else if (genderClause) parts.push(`AND: { ${genderClause} }`);
+    /* The tags this device hides (SFW and Social out of the box). A feed that
+       asks for one of them on purpose keeps it — opening the SFW tag must show
+       its scenes, not an empty page — so the asked ids are subtracted first. */
+    const tagSelEarly = effectiveTags(spec, cfg);
+    const askedIds = tagSelEarly.tags.map(String);
+    const hideIds = ((cfg && cfg.excludeTagIds) || [])
+      .map(String)
+      .filter((id) => askedIds.indexOf(id) === -1);
+    const hideClause = hideIds.length
+      ? `tags: { value: [${hideIds.map((id) => `"${id}"`).join(",")}], modifier: EXCLUDES }`
+      : "";
+    const andClauses = [excl, genderClause, hideClause].filter(Boolean);
+    if (andClauses.length === 1) parts.push(andClauses[0]);
+    else if (andClauses.length > 1) parts.push(`AND: { ${andClauses.join(", ")} }`);
     const scope = effectivePerformers(spec, cfg);
     if (type !== "performer" && scope.mode !== "all") {
       const ids = scope.mode === "favorites" ? (FAV_PERFORMER_IDS || []) : (scope.ids || []);
@@ -983,11 +994,10 @@
         `performers_filter: { ethnicity: { value: ${JSON.stringify(spec.performerEthnicity)}, modifier: EQUALS } }`
       );
     }
-    const tagSel = effectiveTags(spec, cfg);
-    if (tagSel.tags.length) {
-      const modifier = tagSel.mode === "AND" ? "INCLUDES_ALL" : "INCLUDES";
+    if (tagSelEarly.tags.length) {
+      const modifier = tagSelEarly.mode === "AND" ? "INCLUDES_ALL" : "INCLUDES";
       parts.push(
-        `tags: { value: [${tagSel.tags.map((id) => `"${id}"`).join(",")}], modifier: ${modifier} }`
+        `tags: { value: [${tagSelEarly.tags.map((id) => `"${id}"`).join(",")}], modifier: ${modifier} }`
       );
     }
     return parts.join(", ");
@@ -2146,6 +2156,32 @@
   /* content that is not for the main feed, hidden everywhere unless turned on */
   const EXCLUDE_TAGS_DEFAULT = ["SFW", "Social"];
   const EXCLUDE_TAG_PRESETS = ["Anal", "Fake Tits", "Gay"];
+
+  /* name → tag id, so the exclusion is live on the very first paint of the next
+     load instead of arriving after the feed's first page has already rendered */
+  const EXCLUDE_CACHE_KEY = "stashTok.excludeIds.v1";
+
+  function readExcludeCache(names) {
+    try {
+      const map = JSON.parse(window.localStorage.getItem(EXCLUDE_CACHE_KEY) || "{}") || {};
+      return names.map((name) => map[name]).filter(Boolean).map(String);
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function writeExcludeCache(found) {
+    try {
+      const map = JSON.parse(window.localStorage.getItem(EXCLUDE_CACHE_KEY) || "{}") || {};
+      Object.keys(found || {}).forEach((name) => {
+        if (found[name]) map[name] = String(found[name]);
+        else delete map[name];
+      });
+      window.localStorage.setItem(EXCLUDE_CACHE_KEY, JSON.stringify(map));
+    } catch (e) {
+      /* ignore */
+    }
+  }
 
   const PREF_DEFAULTS = {
     performerSort: "filesize",
@@ -3711,7 +3747,7 @@ void main() {
       setIndex(0);
       loadPage(true);
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [spec.id, spec.type, refreshKey, cfg.heartRating, cfg.source, refreshTick]);
+    }, [spec.id, spec.type, refreshKey, cfg.heartRating, cfg.source, refreshTick, cfg.hideSig]);
 
     useEffect(() => {
       const stage = stageRef.current;
@@ -13830,8 +13866,152 @@ function TagsPage({ onPick, onMarkers, onBack }) {
      each line is a route (`#/settings/<section>`), not local state, so the
      browser's back gesture, a deep link and the in-app chevron all agree. */
 
+  /* What this device hides. The two defaults are a toggle because they are the
+     point of the page; the presets and the full searchable list are extras that
+     all land in the same prefs.excludeTags array every scene query reads. */
+  function ExcludeTagsPage({ prefs, setPref }) {
+    const defaultsOn = prefs.excludeDefaults !== false;
+    const extras = prefs.excludeTags || [];
+    const [q, setQ] = useState("");
+    const [list, setList] = useState(null);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+      let alive = true;
+      setLoading(true);
+      const timer = window.setTimeout(() => {
+        const term = q.trim();
+        const filter =
+          "{ per_page: 60, sort: \"scenes_count\", direction: DESC" +
+          (term ? ", q: " + JSON.stringify(term) : "") +
+          " }";
+        gql(
+          "query StashTokExcludeTags { findTags(filter: " + filter + ") { tags { id name scene_count } } }"
+        )
+          .then((data) => {
+            if (alive) setList((data.findTags && data.findTags.tags) || []);
+          })
+          .catch(() => {
+            if (alive) setList([]);
+          })
+          .then(() => {
+            if (alive) setLoading(false);
+          });
+      }, 220);
+      return () => {
+        alive = false;
+        window.clearTimeout(timer);
+      };
+    }, [q]);
+
+    const isOn = (name) =>
+      extras.some((tag) => String(tag).toLowerCase() === name.toLowerCase());
+    function toggle(name) {
+      const next = isOn(name)
+        ? extras.filter((tag) => String(tag).toLowerCase() !== name.toLowerCase())
+        : extras.concat([name]);
+      setPref("excludeTags", next);
+    }
+
+    const active = (defaultsOn ? EXCLUDE_TAGS_DEFAULT : []).concat(extras);
+
+    return h(
+      React.Fragment,
+      null,
+      h(
+        "p",
+        { className: "stk-sub" },
+        "Hidden from every feed — For You, your custom feeds, tag pages and performer pages. A feed that asks for one of these tags on purpose still shows it."
+      ),
+      h(SettingsToggleRow, {
+        icon: "image",
+        title: "Hide SFW & Social",
+        on: defaultsOn,
+        onChange: (value) => setPref("excludeDefaults", !!value),
+      }),
+      h("h4", { className: "stk-set-sub-head" }, "Excluding now"),
+      active.length
+        ? h(
+            "div",
+            { className: "stk-excl-chips" },
+            (defaultsOn ? EXCLUDE_TAGS_DEFAULT : []).map((name) =>
+              h("span", { key: "d" + name, className: "stk-tagpick stk-on stk-excl-pill" }, name)
+            ),
+            extras.map((name) =>
+              h(
+                "button",
+                {
+                  key: "x" + name,
+                  type: "button",
+                  className: "stk-tagpick stk-on stk-excl-pill",
+                  onClick: () => toggle(name),
+                },
+                name,
+                h(Icon, { name: "x", size: 12 })
+              )
+            )
+          )
+        : h("p", { className: "stk-sub" }, "Nothing is hidden right now."),
+      h("h4", { className: "stk-set-sub-head" }, "Common exclusions"),
+      h(
+        "div",
+        { className: "stk-excl-chips" },
+        EXCLUDE_TAG_PRESETS.map((name) =>
+          h(
+            "button",
+            {
+              key: name,
+              type: "button",
+              className: "stk-tagpick" + (isOn(name) ? " stk-on" : ""),
+              "aria-pressed": isOn(name),
+              onClick: () => toggle(name),
+            },
+            name
+          )
+        )
+      ),
+      h("h4", { className: "stk-set-sub-head" }, "All tags"),
+      h("div", { className: "stk-search stk-excl-search" },
+        h(Icon, { name: "search", size: 16 }),
+        h("input", {
+          type: "search",
+          value: q,
+          placeholder: "Search tags to exclude",
+          onChange: (event) => setQ(event.target.value),
+        })
+      ),
+      list === null
+        ? h("p", { className: "stk-sub" }, "Loading tags…")
+        : list.length
+        ? h(
+            "div",
+            { className: "stk-pick-list" },
+            list.map((tag) => {
+              const on = isOn(tag.name);
+              return h(
+                "button",
+                {
+                  key: tag.id,
+                  type: "button",
+                  className: "stk-pick-row" + (on ? " stk-on" : ""),
+                  "aria-pressed": on,
+                  onClick: () => toggle(tag.name),
+                },
+                h("span", null, tag.name),
+                h("span", { className: "stk-pick-count" }, tag.scene_count || 0),
+                on ? h(Icon, { name: "check", size: 16 }) : null
+              );
+            })
+          )
+        : h("p", { className: "stk-sub" }, loading ? "Searching…" : "No tag matches that."),
+      h("p", { className: "stk-sub" },
+        "Exclusions are a device preference and apply the next time a feed loads. They do not change any tag in your library."
+      )
+    );
+  }
+
   const SETTINGS_GROUPS = [
-    { id: "Preferences", rank: 1, rows: ["feeds", "performer", "genders", "customize", "blur", "lock"] },
+    { id: "Preferences", rank: 1, rows: ["feeds", "performer", "genders", "exclude", "customize", "blur", "lock"] },
     { id: "App Settings", rank: 2, rows: ["server", "appearance", "navigation", "operations", "about"] },
   ];
 
@@ -13843,6 +14023,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
     "feeds/new-feed/performers": "Performers",
     performer: "Performer Page",
     genders: "Show performers",
+    exclude: "Excluded Tags",
     customize: "Customize StashTok",
     "customize/lists": "Picker Lists",
     "customize/defaults": "Defaults",
@@ -14444,6 +14625,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
       feeds: { icon: "feed", title: "Your Feeds" },
       performer: { icon: "user", title: "Performer Page" },
       genders: { icon: "user", title: "Show performers" },
+      exclude: { icon: "tag", title: "Excluded Tags" },
       blur: { icon: "image", title: "Blur Content Thumbnails" },
       lock: { icon: "lock", title: "Privacy Lock" },
       customize: { icon: "tag", title: "Customize StashTok" },
@@ -14478,7 +14660,16 @@ function TagsPage({ onPick, onMarkers, onBack }) {
           h(SettingsChoiceRow, {
             title: "Performers",
             value: performerScopeLabel(prefs.foryouPerformers),
-            onClick: () => setPicker("performers"), last: true,
+            onClick: () => setPicker("performers"),
+          }),
+          /* what For You hides, spelled out here because this is where the feed
+             is configured: SFW and Social unless this device turned it off */
+          h(SettingsChoiceRow, {
+            title: "Excluded Tags",
+            value: (prefs.excludeDefaults === false ? [] : EXCLUDE_TAGS_DEFAULT)
+              .concat(prefs.excludeTags || [])
+              .join(", ") || "None",
+            onClick: () => onSection("exclude"), last: true,
           })
         ),
 
@@ -14596,6 +14787,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
           }, allOn ? "All genders shown" : "Show every gender again")
         );
       }
+      if (section === "exclude") return h(ExcludeTagsPage, { prefs, setPref });
       if (section === "feeds") return feedsPage();
       if (section === "feeds/performers") {
         return h(PerformerFilterPage, {
@@ -14847,6 +15039,16 @@ function TagsPage({ onPick, onMarkers, onBack }) {
           key: id, icon: meta.icon, title: meta.title,
           value: genderLabel(prefs), onClick: () => onSection("genders"),
           last: id === SETTINGS_GROUPS[0].rows[SETTINGS_GROUPS[0].rows.length - 1],
+        });
+      }
+      if (id === "exclude") {
+        const hidden = (prefs.excludeDefaults === false ? [] : EXCLUDE_TAGS_DEFAULT).concat(prefs.excludeTags || []);
+        const label = hidden.length > 3
+          ? hidden.slice(0, 3).join(", ") + " +" + (hidden.length - 3)
+          : hidden.join(", ");
+        return h(SettingsChoiceRow, {
+          key: id, icon: meta.icon, title: meta.title,
+          value: label || "None", onClick: () => onSection("exclude"),
         });
       }
       if (id === "blur") {
@@ -15749,7 +15951,44 @@ function TagsPage({ onPick, onMarkers, onBack }) {
         return false;
       }
     });
-    const cfg = { ...baseCfg, sfw };
+    /* Tags hidden from every feed. Resolved to ids once per change (and read
+       back from cache on the next load), then carried in cfg so all the scene
+       queries — For You, custom, tag, performer — hide the same things. */
+    const excludeNames = (prefs.excludeDefaults === false ? [] : EXCLUDE_TAGS_DEFAULT).concat(
+      prefs.excludeTags || []
+    );
+    const excludeSig = excludeNames.join("|");
+    const [excludeTagIds, setExcludeTagIds] = useState(() => readExcludeCache(excludeNames));
+    useEffect(() => {
+      let alive = true;
+      const list = Array.from(
+        new Set(excludeNames.map((name) => String(name || "").trim()).filter(Boolean))
+      );
+      if (!list.length) {
+        setExcludeTagIds([]);
+        return undefined;
+      }
+      const cached = readExcludeCache(list);
+      if (cached.length) setExcludeTagIds(cached);
+      resolveTagNames(list)
+        .then((found) => {
+          if (!alive) return;
+          writeExcludeCache(found);
+          setExcludeTagIds(list.map((name) => found[name]).filter(Boolean));
+        })
+        .catch(() => undefined);
+      return () => {
+        alive = false;
+      };
+    }, [excludeSig]);
+    const cfg = { ...baseCfg, sfw, excludeTagIds, hideSig: excludeTagIds.join(",") };
+    /* the QA harness drives the real UI, but a filter string is invisible in the
+       DOM — expose the builder behind ?qa= so a test can assert what a feed asks
+       Stash for (and that the exclusions actually rode along) */
+    if (typeof window !== "undefined" && /[?&]qa=/.test(window.location.search)) {
+      window.__stkFilter = (spec) => sceneFilterBody(spec || { type: "foryou" }, cfg);
+      window.__stkExcludeIds = excludeTagIds;
+    }
     function setSfwMode(next) {
       try {
         if (next) window.localStorage.setItem(SFW_KEY, "1");

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased - a tag row that reads like a TV row, and content the feed leaves out
+
+- **Tag sections are one horizontally scrolling line now**, not a two-row block: `stk-two` doubles the height only for the long act lists (> 16 chips — Positions, Fetish), which still flick as a single strip. Ethnicity and Category stay on one line by design.
+- **Category gained SFW and Social.** They sit beside Solo/Sextape rather than joining the exclusive pair: they describe how a scene was produced, not what is in it, so they are ordinary tags and can be on with either. `CATEGORY_STANDALONE` in the schema, `section.standalone` in `TagSections`.
+- **Every feed now hides SFW and Social by default** — For You, custom feeds, tag pages and performer pages all carry `tags: { modifier: EXCLUDES }` in the AND slot of the scene filter, resolved from tag names once per change (cached name→id in localStorage so the exclusion is live on the first paint of the next load). A feed that asks for one of those tags on purpose keeps it, so opening the SFW tag is not an empty page.
+- **Settings → Excluded Tags** spells out what is hidden: the SFW/Social toggle, the active exclusions as chips, presets (Anal, Fake Tits, Gay) and a searchable list of every tag with scene counts to add more. The For You block in Your Feeds shows the same list, so the default feed says what it leaves out.
+
 ## Unreleased - a tag page that reads like discovery
 
 - **A tag is now six rows, not one grid with a sort switch.** Latest, Shuffle, Top rated, Most watched, Longest, and — the one that actually says something about a tag — **Often with <other tag>**: the tag counted across its scenes, wallpaper excluded (`All Sex`, `HD`, `Amateur`…), then the scenes carrying *both*, opened as an AND feed (`#/tagpair/<id>/<id>`). Superseded the old order chips; every row carries its own **Play** pill on the right of its title, so a row is a feed you can jump into rather than just a strip.
