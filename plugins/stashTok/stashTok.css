@@ -3288,6 +3288,23 @@ img.stk-scrub-cell {
 @supports (height: 100dvh) {
   .stk-tag-sheet { height: min(78dvh, 620px); max-height: min(82dvh, 620px); }
 }
+/* On a phone the tag sheet IS the window: six sections of chips plus the
+   keyboard do not fit in a 620 px drawer, and the rows below the fold are the
+   whole point of opening it. */
+@media (max-width: 760px) {
+  .stk-sheet.stk-tag-sheet {
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+    border-top: none;
+    padding-top: calc(10px + env(safe-area-inset-top));
+  }
+}
+@supports not (height: 100dvh) {
+  @media (max-width: 760px) {
+    .stk-sheet.stk-tag-sheet { height: 100vh; max-height: 100vh; }
+  }
+}
 html.stk-kb-open .stk-sheet {
   max-height: calc(var(--stk-vv-h, 60vh) - 10px);
   bottom: var(--stk-kb, 0px);
@@ -3429,6 +3446,8 @@ html.stk-kb-open .stk-tag-sheet {
 .stk-tag-scroll {
   flex: 1 1 auto;
   min-height: 0;
+  min-width: 0;
+  overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding-bottom: 4px;
@@ -3466,7 +3485,7 @@ html.stk-kb-open .stk-tag-sheet {
   to { opacity: 1; transform: none; }
 }
 
-.stk-tag-section { margin: 0 0 16px; }
+.stk-tag-section { margin: 0 0 16px; min-width: 0; }
 .stk-tag-section h4 {
   margin: 0 0 8px;
   font-size: 11px;
@@ -3475,7 +3494,17 @@ html.stk-kb-open .stk-tag-sheet {
   text-transform: uppercase;
   color: rgba(255,255,255,.5);
 }
-.stk-tag-section .stk-tag-grid { overflow: visible; padding-bottom: 0; flex: 0 0 auto; }
+/* Each section scrubs on its own. `overflow: visible` here let a long section
+   grow the grid past the sheet and the whole sheet panned sideways instead of
+   the one row the finger was on. max-width pins the grid to the sheet so only
+   the strip scrolls. */
+.stk-tag-section .stk-tag-grid {
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 100%;
+  padding-bottom: 0;
+  flex: 0 0 auto;
+}
 .stk-tag-note {
   margin: -2px 0 10px;
   font-size: 11.5px;
