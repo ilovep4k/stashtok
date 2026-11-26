@@ -3292,7 +3292,8 @@ img.stk-scrub-cell {
    keyboard do not fit in a 620 px drawer, and the rows below the fold are the
    whole point of opening it. */
 @media (max-width: 760px) {
-  .stk-sheet.stk-tag-sheet {
+  .stk-sheet.stk-tag-sheet,
+  .stk-sheet.stk-moretags-sheet {
     height: 100dvh;
     max-height: 100dvh;
     border-radius: 0;
@@ -3345,6 +3346,10 @@ html.stk-kb-open .stk-tag-sheet {
   flex: 0 0 auto;
 }
 .stk-tag-grid.stk-two { height: calc(44px * 2 + 7px); }
+/* Once a row reaches its end a further swipe used to chain up to the sheet and
+   pan the whole view. `contain` stops the chain at the row, so the sheet only
+   ever moves vertically. */
+.stk-tag-grid { overscroll-behavior-x: contain; overscroll-behavior-y: contain; }
 .stk-tag-grid::-webkit-scrollbar { display: none; }
 .stk-tag-grid > .stk-tagpick { scroll-snap-align: start; white-space: nowrap; }
 
@@ -3437,6 +3442,8 @@ html.stk-kb-open .stk-tag-sheet {
 .stk-tag-body {
   flex: 1 1 auto;
   min-height: 0;
+  min-width: 0;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
 }
