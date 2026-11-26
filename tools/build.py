@@ -2,7 +2,7 @@
 """Build the StashTok plugin zip and a Community-style index.yml.
 
 Usage:
-    python3 tools/build.py --base-url https://raw.githubusercontent.com/<user>/stash-tok/main/dist
+    python3 tools/build.py --base-url https://raw.githubusercontent.com/ilovep4k/stashtok/main/dist
 
 Writes dist/stashTok.zip and index.yml (with a real sha256), so the repo can be
 added in Stash via Settings -> Plugins -> Available Plugins -> Add Source.
@@ -21,7 +21,7 @@ FILES = ["stashTok.yml", "stashTok.js", "stashTok.css"]
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--base-url", default="https://raw.githubusercontent.com/CHANGEME/stash-tok/main/dist")
+    parser.add_argument("--base-url", default="https://raw.githubusercontent.com/ilovep4k/stashtok/main/dist")
     args = parser.parse_args()
 
     DIST.mkdir(exist_ok=True)

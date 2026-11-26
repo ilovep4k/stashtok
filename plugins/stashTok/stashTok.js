@@ -37,8 +37,8 @@
   }
 
   const PLUGIN_ID = "stashTok";
-  const ROUTE = "/stash-tok";
-  const LEGACY_ROUTE = "/plugin/stashTok";
+  const ROUTE = "/stashtok";
+  const LEGACY_ROUTES = ["/stash-tok", "/plugin/stashTok"];
   const FEEDS_KEY = "stashTok.feeds.v1";
   /* the channel title card is set just before a feed switch remounts FeedView */
   let PENDING_CARD = null;
@@ -1361,8 +1361,8 @@
   /* ---- routing ----------------------------------------------------- */
 
   function baseRoot() {
-    const match = window.location.pathname.match(/^(.*?\/stash-tok)(\/|$)/);
-    return match ? match[1] : "/stash-tok";
+    const match = window.location.pathname.match(/^(.*?\/(?:stashtok|stash-tok))(\/|$)/);
+    return match ? match[1] : ROUTE;
   }
 
   /* ---- links into Stash's own UI ----------------------------------- *
@@ -16904,7 +16904,7 @@ function TagsPage({ onPick, onMarkers, onBack }) {
   /* ------------------------------------------------------------------ */
 
   api.register.route(ROUTE, StashTokApp);
-  api.register.route(LEGACY_ROUTE, StashTokApp);
+  LEGACY_ROUTES.forEach((route) => api.register.route(route, StashTokApp));
 
   api.patch.before("MainNavBar.MenuItems", function (props) {
     const Nav = api.libraries.Bootstrap.Nav;
